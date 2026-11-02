@@ -42,3 +42,4 @@ The M4 MacBook Air (10-core, 16 GB unified memory) is for CPU/MPS correctness ch
 ## Fidelity boundary
 
 The simulator's own versioned reference battles are evidence for covered scenarios only. Our exact deck needs dedicated regression fixtures: Sparky charge/retarget/stun/reset/projectile timing, Giant body-blocking, Zap, Minions air targeting, card cycle, overtime, and simultaneous action fairness. Any unsupported mechanic or missing game-table row blocks large-scale training rather than being silently approximated.
+# cr_rl
