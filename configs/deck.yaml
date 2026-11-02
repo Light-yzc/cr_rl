@@ -1,0 +1,13 @@
+name: giant_sparky_v1
+level: 11
+tower_level: 11
+cards:
+  - Giant
+  - ZapMachine # Sparky's internal card row name in the pinned game tables
+  - MiniPekka
+  - Musketeer
+  - Minions
+  - Knight
+  - Zap
+  - Arrows
+# Costs and vocabulary IDs are resolved from the pinned simulator's tables at startup.

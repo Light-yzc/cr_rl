@@ -1,0 +1,26 @@
+[project]
+name = "cr-rl-lab"
+version = "0.1.0"
+description = "Clash Royale BC, PPO and self-play research scaffold"
+requires-python = ">=3.12,<3.14"
+dependencies = ["numpy>=2.0", "torch>=2.5", "gymnasium>=1.0,<2", "pettingzoo>=1.24,<2", "jpype1>=1.5,<2", "PyYAML>=6.0", "msgpack>=1.0", "pyarrow>=18", "tqdm>=4.66"]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.9", "mypy>=1.13"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

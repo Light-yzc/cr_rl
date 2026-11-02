@@ -1,0 +1,49 @@
+presets:
+  tiny:
+    entity_layers: 1
+    entity_dim: 64
+    entity_heads: 4
+    temporal_layers: 2
+    temporal_dim: 128
+    temporal_heads: 4
+    context_len: 32
+  small:
+    entity_layers: 2
+    entity_dim: 128
+    entity_heads: 4
+    temporal_layers: 4
+    temporal_dim: 256
+    temporal_heads: 8
+    context_len: 64
+  compact:
+    entity_layers: 2
+    entity_dim: 192
+    entity_heads: 6
+    temporal_layers: 8
+    temporal_dim: 384
+    temporal_heads: 6
+    context_len: 128
+  general:
+    entity_layers: 2
+    entity_dim: 192
+    entity_heads: 6
+    temporal_layers: 10
+    temporal_dim: 512
+    temporal_heads: 8
+    context_len: 128
+  large:
+    entity_layers: 2
+    entity_dim: 192
+    entity_heads: 6
+    temporal_layers: 14
+    temporal_dim: 512
+    temporal_heads: 8
+    context_len: 128
+  production:
+    entity_layers: 4
+    entity_dim: 256
+    entity_heads: 8
+    temporal_layers: 16
+    temporal_dim: 768
+    temporal_heads: 12
+    context_len: 128

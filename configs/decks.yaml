@@ -1,0 +1,29 @@
+version: 1
+decks:
+  giant_sparky_v1:
+    - Giant
+    - ZapMachine
+    - MiniPekka
+    - Musketeer
+    - Minions
+    - Knight
+    - Zap
+    - Arrows
+  hog_cycle_v1:
+    - HogRider
+    - Musketeer
+    - Cannon
+    - Fireball
+    - Skeletons
+    - IceSpirits
+    - Log
+    - Knight
+  graveyard_control_v1:
+    - Graveyard
+    - Poison
+    - BabyDragon
+    - Tombstone
+    - Knight
+    - BarbLog
+    - IceWizard
+    - Tornado

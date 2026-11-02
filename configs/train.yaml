@@ -1,0 +1,15 @@
+seed: 20261102
+num_envs: 8
+sim_threads: 4
+rollout_steps: 2048
+ppo_epochs: 2
+learning_rate: 0.00003
+gamma: 0.999
+gae_lambda: 0.95
+clip_coef: 0.15
+value_coef: 0.5
+entropy_coef: 0.003
+max_grad_norm: 0.5
+bc_learning_rate: 0.0001
+device: auto
+save_every_updates: 10

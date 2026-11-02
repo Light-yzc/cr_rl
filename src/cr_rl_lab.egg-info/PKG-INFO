@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: cr-rl-lab
+Version: 0.1.0
+Summary: Clash Royale BC, PPO and self-play research scaffold
+Requires-Python: <3.14,>=3.12
+Requires-Dist: numpy>=2.0
+Requires-Dist: torch>=2.5
+Requires-Dist: gymnasium<2,>=1.0
+Requires-Dist: pettingzoo<2,>=1.24
+Requires-Dist: jpype1<2,>=1.5
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: msgpack>=1.0
+Requires-Dist: pyarrow>=18
+Requires-Dist: tqdm>=4.66

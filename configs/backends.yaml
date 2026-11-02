@@ -1,0 +1,17 @@
+primary:
+  name: crforge
+  repository: https://github.com/voonhous/crforge.git
+  commit: 7ee59b39bf1d41d5c01645f01c47ed8c8d3355d6
+  client_version: "16.635.1"
+  observed_current_client: "16.635.7"
+  data_version: "16.635.3"
+  tick_ms: 50
+  decision_ticks: 5
+  python_package: python
+  java_version: 21
+  asset_source: cdn
+secondary:
+  name: RoyaleGym
+  repository: https://github.com/RoyaleGym/RoyaleGym.git
+  commit: 54c757b3e0773204a166b70ed3d0470487756da1
+  role: parity_comparison_only
