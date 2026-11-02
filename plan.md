@@ -2,6 +2,103 @@
 
 更新日期：2026-11-02。本文是待实施的设计方案，不代表环境、内存读取或训练效果已经验证。
 
+## 0. 接手 agent 必读：当前状态与执行优先级
+
+本节于 2026-11-02 根据当前源码、本地产物和重新执行的测试核对。**本节的状态说明优先于后文早期方案；后文的自博弈比例、模型细节和里程碑是设计背景，不能全部当成已经实现。** 不要从聊天中较早的“没有持续自博弈入口”判断重新开发，当前已有新入口。
+
+### 0.1 用户最新方向与尚未定型的选择
+
+- 用户希望先训练一个多卡组通用模型，再对电车卡组微调；不需要从零预训练独立的 500M 对手。
+- 用户认可可讨论的约 300M 主模型、约 90–120M 蒸馏学生路线，但没有完成性能验证或最终定型。现有代码没有 300M preset。
+- 当前代码/设计记录另推荐 `general` 34M 做首个可持续训练基线。这是验证成本选择，**不能擅自把用户对大模型的目标改成“最终只能34M”**。先在相同评测条件比较，再决定扩容。
+- 历史对手不是越旧越有用。后续需按当前表现和卡组配对筛选；特化模型可作为后期针对弱点的分支，第一阶段不要求每个卡组各训一个。
+- 模型目前采用严格历史窗口重算。可以在权重冻结推理阶段缓存加入时间位置编码前的帧 embedding；普通滚动 KV cache 与当前窗口重算不严格等价，不能直接替换。
+- 训练无视觉；官方客户端读内存、触控执行是后续迁移工作，尚未实现。
+
+### 0.2 当前代码入口和真实进度
+
+| 项目 | 当前状态 | 证据/入口 |
+|---|---|---|
+| 战斗模拟器 | 已接入 crforge，固定 commit `7ee59b39bf1d41d5c01645f01c47ed8c8d3355d6`，数据 `16.635.3`，每决策5×50ms | `configs/backends.yaml`、`src/cr_rl/envs/crforge.py` |
+| 模型 | 两级实体/时间 self-attention，落点 cross-attention；手牌、己方卡组、公开敌牌已有显式 embedding；架构版本2 | `src/cr_rl/models/policy.py` |
+| 新自博弈训练器 | 已有多轮 `--updates`、恢复、冻结对手、随机 learner seat、三卡组、GAE/PPO、reference KL、梯度累积、KL停止 | **`scripts/train_selfplay.py`，新训练统一用此入口** |
+| 旧 PPO | 保留历史 smoke 对照；有部分恢复功能，但仍有旧 reset/device 语义限制 | `scripts/train_ppo.py`，不作为主训练入口 |
+| 对手池 | 已有当前/历史抽样、平滑得分、PFSP、持久化；每update生成快照 | `src/cr_rl/opponents/league.py` |
+| 博弈矩阵 | 已有有限零和矩阵 regret-matching 求解工具和合成测试；没有真实策略交叉评测矩阵 | `solve_zero_sum_meta` 不代表已计算真实游戏 exploitability |
+| 轨迹 | 新训练器写schema v3，两侧原始状态、mask、动作、奖励、learner mask、版本/种子/终止与故障信息 | `src/cr_rl/data/trajectory.py` |
+| 卡组 | 巨人电车、野猪循环、墓园控制，普通形态，具体八张见配置 | `configs/decks.yaml`；第三方引擎支持不代表官方对齐已验收 |
+| 人类数据 | 有近似重建BC数据，非原始内存状态；现存20场、29,351行，其中973条出牌 | `artifacts/human_bc_reconstructed/`、`scripts/import_il_replay.py` |
+| BC结果 | 有tiny旧架构5场数据、1epoch试跑；出牌准确率0%，不能当作专家初始化 | `artifacts/bc_mps_smoke.json`；不能直接resume到新架构2 |
+| 正式学习效果 | 没有长期胜率/泛化曲线，没有通用强模型证据 | 禁止把smoke指标当强度结论 |
+
+当前各 preset 实际参数数目（本次通过meta device实例化统计，无GPU训练）：tiny 786,758；small 4,395,782；compact 16,597,638；general 34,168,454；large 46,777,990；production 119,541,766。旧产物的参数数目不同是因为架构变更，不要混报。
+
+当前新训练器每场只指定一个 learner seat，另一侧使用冻结对手；即使抽到同版本，也只更新learner侧。这是可行的单侧更新自博弈实现，与后文“同版本双方样本都用”的可选方案不同，不要仅为了统一措辞盲目重写。采样时behavior model和opponent model都冻结，双方采样期间没有在线更新；不能声称共享参数本身必然导致梯度抵消。
+
+### 0.3 本次核验与已有训练产物
+
+- 本次执行 `.venv/bin/python -m pytest -q`：**15 passed in 2.44s**。这些测试不是全量模拟器机制验收，也未覆盖全部端到端恢复/缓存/卡组调度。
+- 核查时本机未发现正在执行的 `train_selfplay/train_ppo/train_bc` 进程；这不等于已经查看了所有远端会话。
+- `artifacts/selfplay_terminal_smoke/summary.json`：tiny/MPS，1300步×2环境，2600个learner样本，1次update、41个optimizer steps，2场正常终局、0截断、0故障样本，约113秒。原始NPZ确认有4个非零两侧奖励（±1），不是全零奖励试跑。
+- 上述summary的 `mean_reward=0` 不能说明没有终局奖励，因为胜负/角色均衡时均值可抵消。要看终局数、奖励分布和learner侧指标。
+- `docs/COLAB_VALIDATION.md` 记录L4上的tiny PPO及约119M短历史前向验证；不是完整128步历史训练性能，也不是当前架构2已在V100验收。此记录的旧参数统计应保留为历史证据。
+- `.cache/`、`.venv/`、`artifacts/` 为本机依赖/忽略产物；换机器不会随源码自动获得。记录显示有Hugging Face来源，但原始Parquet下载版本/哈希未形成充分的可复现链。
+- 工作区当前文件均尚未纳入首次git提交（`git status --short`显示untracked），交接要显式打包源码和所需artifact，不要以为远端repo已有这些文件。
+
+### 0.4 计划与当前实现的差异，接手后先处理
+
+1. **训练入口/文档统一**：README、自博弈设计记录和本节为当前状态；`docs/LOCAL_VALIDATION.md` 中“没有BC”等为过时结论。`configs/train.yaml` 并未成为新训练器全部参数的统一来源，实际默认值以 `train_selfplay.py --help` 为准。
+2. **模型规模冲突**：现有34M默认、119M基线与拟议300M分别列为“当前默认/可用preset/待验证扩容”，不要把任何一个当作已证明最优。新增300M后重新统计参数，不能复用旧计算结果。
+3. **匹配规则冲突**：代码实际默认35%当前、50%历史PFSP、15%历史均匀，后文50/30/20是早期提案。代码 `forgotten` 桶只是均匀历史抽样，未检测真正遗忘；`sample_league` 没有使用 `probabilities()` 的10% uniform floor，不能混淆两套方法。
+4. **池增长与统计**：现实现每update加入一个快照，无最多8个/25万步门槛/淘汰策略；入选多个历史模型会分别复制到GPU，没有1–2模型缓存上限。得分按版本汇总，未按己方卡组×敌方卡组分组、未随learner更新衰减。需要限制显存和历史池膨胀，修正过期匹配统计。
+5. **卡组调度**：目前卡组配对在update开始分配，`reset_env`沿用卡组和对手，既没有逐局重新抽，也没有完整均衡有序配对/版本兼容卡组表；不应声称已覆盖所有配对。
+6. **采样边界**：目前固定步长rollout并bootstrap，不是后文建议的完整对局批次。短update会丢弃尚未结束对局，且下轮重建环境。应保留固定窗口的正确性或实现完整对局采样/跨update连续环境，避免短rollout永远看不到终局。
+7. **checkpoint语义**：架构2拒绝旧checkpoint；训练恢复还不是模拟器逐tick精确续跑。单独设计 `--init-from`（仅权重）与 `--resume`（训练状态），验证后端/schema/deck版本；避免绝对历史路径导致换机器无法恢复。
+8. **奖励和目标检查**：终局±1/0是基线，先证明能学。确认value target/advantage无梯度、旧新log-prob一致、故障整局过滤、时间截断bootstrap与trace分离。有限矩阵上的meta求解结果不能当作对未知策略的真实exploitability。
+9. **优化尚未做**：帧embedding缓存、时间KV cache、蒸馏、完整cross-play/eval runner、特化对手worker、Q critic/VRPO均未落地。高级算法列为研究候选；先补基本评测与学习闭环。
+10. **V100路径**：新训练器仅在支持BF16的CUDA设备启用该autocast；V100未自动获得FP16+GradScaler训练路径，需要专项验证。环境Java查找在无JAVA_HOME且非Homebrew时调用macOS `java_home`，Linux部署须显式设JAVA_HOME或补跨平台发现。
+
+### 0.5 建议交给下个 agent 的实施顺序与验收
+
+**P0：先接稳现有管线，不重写模型/环境。**
+
+- 阅读顺序：本节 → README → `docs/SELFPLAY_RESEARCH_AND_DESIGN.md` → trainer/model/league/trajectory →现有测试。研究记录中的外部论文及2026算法主张需要核对原始来源后再采用，本次交接不背书所有研究条目。
+- 为新训练器加端到端回归：至少2个连续update、保存恢复、合法动作、有限loss、旧新log-prob一致、终止/截断/故障分流、历史窗口不跨局、仅learner侧进PPO。使用tiny，独立输出目录，避免覆盖现有产物。
+- 跑到至少若干正常终局，验证非零奖励进入learner loss；保存命令、seed、产物、代码/规则/架构版本。单次终局smoke仍不算学会。
+- checkpoint可恢复测试不要求进程中断后模拟器完全一致，但必须明确重置了哪些状态；若宣称精确恢复则需保存验证环境状态。
+
+**P1：固定评测与可管理的多卡组对手池。**
+
+- 实现冻结策略评测入口，按卡组配对、换边、固定seed报告胜负平/置信区间/故障率。训练调度验证集与最终保留测试分开。
+- 先保留现有35/50/15为可配基线，不同时改多种抽样规则；加池上限/近期+长期保留、卡组兼容元数据、可移植相对路径、CPU/GPU权重缓存。
+- 每局可重新抽卡组与对手，记录实际配对覆盖；matchmaking统计按卡组配对并控制过期。稳定碾压的对手降频，仍能暴露弱点的历史/特化对手保留。
+- 按相同环境决策步和墙钟预算，对tiny/small/general做可复现学习对比，先获得持续进步与遗忘检查证据。
+
+**P2：性能优化与大模型规格。**
+
+- 将frame encoder、temporal trunk、action heads拆成可复用函数；权重冻结采样时只算新增帧，缓存 `[B,T,entity_dim]` 的帧表示，当前实体token单独供落点头用。
+- 缓存结果须与完整重算在相同精度下数值一致；跨局清空，更新权重后重建。训练反传重算原始观测，不用detached缓存切断主干梯度。时间Transformer暂不改成滚动KV。
+- GPU benchmark：B=1/8/32，T=8/32/128，真实单位分布和200槽位上界；测预热后P50/P95延迟、完整采样/训练步吞吐、峰值显存。测试完整backward/optimizer，不能只测权重实例化。
+- 添加约300M候选并与119M/general对照，必要时activation checkpointing、FP16 GradScaler；目标V100单局4Hz，模型P95≤100ms、端到端≤200ms是目标而非已测性能。
+- 约90–120M学生蒸馏是后续选项：保留合法联合动作分布监督、学生访问状态的教师补标、闭环胜率验证，不承诺无损。
+
+**P3：专项保真与电车微调/部署。**
+
+- 大规模花费前完成Sparky充能/重置/目标切换/碰撞等场景与三卡组机制检查；真实规则偏差要先修环境。
+- 通用能力有固定评测证据后，再分出电车specialist；按评测需要增加少量其他卡组专精分支，无需每套各训一个。
+- 客户端只读状态原型与schema对齐可并行推进；shadow mode后再执行动作，记录状态/动作延迟和成功确认。
+
+### 0.6 可直接执行的本地检查命令
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python -m cr_rl.cli doctor
+.venv/bin/python scripts/train_selfplay.py --help
+.venv/bin/python scripts/train_selfplay.py --model tiny --envs 2 --steps 64 --epochs 1 --batch-size 4 --grad-accumulation 2 --updates 2 --device auto --out artifacts/handoff_regression
+```
+
+最后一条是接手后的短回归建议，本次审查未运行；64步通常不会到终局。终局验证可参考已有1300步产物，需额外运行足够长，并确认终局而非仅达到固定步数。服务器先配置Java21/JAVA_HOME、Python依赖和固定引擎/数据路径，不假设能直接复用本机`.venv`。长训练需显式选择GPU设备/预算和持久化输出。
+
 ## 1. 已确认的目标与技术决策
 
 - 训练：使用可以无画面运行、加速、重置、并行的战斗模拟器收集 trajectory。
