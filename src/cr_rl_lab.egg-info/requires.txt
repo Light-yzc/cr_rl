@@ -1,9 +1,0 @@
-numpy>=2.0
-torch>=2.5
-gymnasium<2,>=1.0
-pettingzoo<2,>=1.24
-jpype1<2,>=1.5
-PyYAML>=6.0
-msgpack>=1.0
-pyarrow>=18
-tqdm>=4.66

@@ -181,7 +181,10 @@ class TrajectoryBuffer:
             complete if previous_complete is None else previous_complete and complete
         )
         if self.metadata["provenance_complete"]:
-            self.metadata["trajectory_schema_version"] = 3
+            self.metadata["trajectory_schema_version"] = max(
+                self.metadata["trajectory_schema_version"],
+                4 if np.any(np.asarray(learner_mask).sum(-1) == 2) else 3,
+            )
         else:
             self.metadata["trajectory_schema_version"] = 1
         for name, value in zip(self.rows, values.values(), strict=True):
@@ -253,8 +256,13 @@ class TrajectoryBuffer:
         ):
             raise ValueError("winner is known only for a completed terminal match")
         learner_count = np.asarray(values["learner_mask"]).sum(axis=-1)
-        if not np.all(learner_count == 1):
-            raise ValueError("self-play v3 requires exactly one learner seat per match")
+        if not np.all((learner_count == 1) | (learner_count == 2)):
+            raise ValueError("self-play requires one or two on-policy learner seats per match")
+        both = learner_count == 2
+        for name in ("policy_ids", "policy_versions"):
+            versions = np.asarray(values[name])
+            if np.any(both & (versions[:, 0] != versions[:, 1])):
+                raise ValueError("Two learner seats require identical behavior policy versions")
         if np.any(np.asarray(values["valid"]) > 1) or np.any(
             np.asarray(values["action_consumed"]) > 1
         ):

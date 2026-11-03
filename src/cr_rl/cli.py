@@ -160,7 +160,7 @@ def main() -> int:
     model_parser = sub.add_parser("model-check")
     model_parser.add_argument(
         "--size",
-        choices=("tiny", "small", "compact", "general", "large", "production"),
+        choices=("tiny", "small", "compact", "general", "large", "production", "general_300m"),
         default="tiny",
     )
     collect_parser = sub.add_parser("collect")

@@ -7,4 +7,4 @@
 5. **M4 PPO:** begin against scripted opponents; terminal win/loss reward first, then compare potential-based tower-HP shaping. Store old log-prob/value and recompute with exact same history window.
 6. **M5 self-play:** opponent pool with latest, historical and scripted agents; maintain a fixed held-out evaluation pool and cross-play matrix.
 
-The simulator's own `label_replays` and reference fixtures are useful starting points. Human BC is optional for getting the first PPO pipeline running. Never train PPO on arbitrary stale human trajectories as if they were on-policy rollouts.
+The simulator's own `label_replays` and reference fixtures are useful starting points. Random-initialized PPO is allowed only for pipeline acceptance; the current user-required formal workflow is human BC, validation, then weights-only initialization of self-play PPO. See `BC_TO_PPO.md` for the implemented data-quality gates and compatibility checks. Never train PPO on arbitrary stale human trajectories as if they were on-policy rollouts. Items above also describe planned comparisons; scripted-opponent curricula and a full cross-play matrix are not yet implemented.

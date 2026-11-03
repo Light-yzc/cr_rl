@@ -6,9 +6,10 @@ import numpy as np
 class CrForgeObservationAdapter:
     """Split the pinned crforge v4 flat seat buffer into model-ready frame tensors."""
 
-    def __init__(self, schema, vocabulary_size: int = 1466):
+    def __init__(self, schema, vocabulary_size: int = 1466, entity_bucket: int = 0):
         self.schema = schema
         self.vocabulary_size = vocabulary_size
+        self.entity_bucket = entity_bucket
 
     @staticmethod
     def _scale(values: np.ndarray, divisor: float) -> np.ndarray:
@@ -19,14 +20,25 @@ class CrForgeObservationAdapter:
         if observations.shape[-1] != expected:
             raise ValueError(f"Expected {expected} ints per seat, got {observations.shape[-1]}")
         header = observations[..., : self.schema.header_ints].astype(np.float32, copy=True)
-        entities = (
-            observations[..., self.schema.header_ints :]
-            .reshape(*observations.shape[:-1], self.schema.max_entities, self.schema.entity_ints)
-            .astype(np.float32, copy=True)
-        )
         count_index = self.schema.header["entity_count"][0]
         counts = np.clip(observations[..., count_index], 0, self.schema.max_entities)
-        entity_mask = np.arange(self.schema.max_entities) < counts[..., None]
+        limit = self.schema.max_entities
+        if self.entity_bucket:
+            occupied = max(1, int(counts.max()))
+            limit = min(
+                limit,
+                ((occupied + self.entity_bucket - 1) // self.entity_bucket) * self.entity_bucket,
+            )
+        entities = (
+            observations[..., self.schema.header_ints :]
+            .reshape(
+                *observations.shape[:-1],
+                self.schema.max_entities,
+                self.schema.entity_ints,
+            )[..., :limit, :]
+            .astype(np.float32, copy=True)
+        )
+        entity_mask = np.arange(limit) < counts[..., None]
         entity_mask[..., 0] |= counts == 0
 
         # Unknown (-1) remains distinct. Field names come from the pinned simulator schema.

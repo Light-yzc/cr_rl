@@ -1,0 +1,259 @@
+{
+  "retrieved_date": "2026-11-03",
+  "source": "https://royaleapi.com/decks/popular",
+  "selection": "Normal Battle, 1 day, rating; exact forms preserved; compatibility requires simulator test",
+  "decks": [
+    {
+      "id": "royale_20261103_01",
+      "url": "https://royaleapi.com/decks/stats/barbarian-barrel,berserker,cannon-cart,electro-wizard-hero,elite-barbarians-ev1,furnace,golem,zap-ev1",
+      "card_keys": [
+        "barbarian-barrel",
+        "berserker",
+        "cannon-cart",
+        "electro-wizard-hero",
+        "elite-barbarians-ev1",
+        "furnace",
+        "golem",
+        "zap-ev1"
+      ]
+    },
+    {
+      "id": "royale_20261103_02",
+      "url": "https://royaleapi.com/decks/stats/barbarian-barrel,cannon-cart,fireball,goblin-gang,ice-wizard-hero,mortar-ev1,rascals,skeleton-barrel-ev1",
+      "card_keys": [
+        "barbarian-barrel",
+        "cannon-cart",
+        "fireball",
+        "goblin-gang",
+        "ice-wizard-hero",
+        "mortar-ev1",
+        "rascals",
+        "skeleton-barrel-ev1"
+      ]
+    },
+    {
+      "id": "royale_20261103_03",
+      "url": "https://royaleapi.com/decks/stats/arrows,bomber,elite-barbarians-ev1,golem,mini-pekka-hero,night-witch,phoenix,zap-ev1",
+      "card_keys": [
+        "arrows",
+        "bomber",
+        "elite-barbarians-ev1",
+        "golem",
+        "mini-pekka-hero",
+        "night-witch",
+        "phoenix",
+        "zap-ev1"
+      ]
+    },
+    {
+      "id": "royale_20261103_04",
+      "url": "https://royaleapi.com/decks/stats/electro-wizard,elite-barbarians-ev1,giant-hero,heal-spirit,mini-pekka,rage,sparky,zap-ev1",
+      "card_keys": [
+        "electro-wizard",
+        "elite-barbarians-ev1",
+        "giant-hero",
+        "heal-spirit",
+        "mini-pekka",
+        "rage",
+        "sparky",
+        "zap-ev1"
+      ]
+    },
+    {
+      "id": "royale_20261103_05",
+      "url": "https://royaleapi.com/decks/stats/cannon,dart-goblin,goblin-barrel-ev1,ice-spirit,princess,skeleton-army-ev1,valkyrie-hero,wall-breakers",
+      "card_keys": [
+        "cannon",
+        "dart-goblin",
+        "goblin-barrel-ev1",
+        "ice-spirit",
+        "princess",
+        "skeleton-army-ev1",
+        "valkyrie-hero",
+        "wall-breakers"
+      ]
+    },
+    {
+      "id": "royale_20261103_06",
+      "url": "https://royaleapi.com/decks/stats/dart-goblin,goblin-barrel-ev1,ice-spirit,inferno-tower,knight-hero,princess,skeleton-army-ev1,the-log",
+      "card_keys": [
+        "dart-goblin",
+        "goblin-barrel-ev1",
+        "ice-spirit",
+        "inferno-tower",
+        "knight-hero",
+        "princess",
+        "skeleton-army-ev1",
+        "the-log"
+      ]
+    },
+    {
+      "id": "royale_20261103_07",
+      "url": "https://royaleapi.com/decks/stats/arrows,bandit,battle-ram-ev1,electro-wizard-hero,furnace,giant-skeleton,heal-spirit,lumberjack-ev1",
+      "card_keys": [
+        "arrows",
+        "bandit",
+        "battle-ram-ev1",
+        "electro-wizard-hero",
+        "furnace",
+        "giant-skeleton",
+        "heal-spirit",
+        "lumberjack-ev1"
+      ]
+    },
+    {
+      "id": "royale_20261103_08",
+      "url": "https://royaleapi.com/decks/stats/barbarian-barrel,furnace-ev1,goblin-hut,graveyard,ice-wizard-hero,knight-ev1,poison,skeletons",
+      "card_keys": [
+        "barbarian-barrel",
+        "furnace-ev1",
+        "goblin-hut",
+        "graveyard",
+        "ice-wizard-hero",
+        "knight-ev1",
+        "poison",
+        "skeletons"
+      ]
+    },
+    {
+      "id": "royale_20261103_09",
+      "url": "https://royaleapi.com/decks/stats/barbarian-barrel,furnace-ev1,goblin-hut,graveyard,ice-wizard-hero,knight,poison,skeletons-ev1",
+      "card_keys": [
+        "barbarian-barrel",
+        "furnace-ev1",
+        "goblin-hut",
+        "graveyard",
+        "ice-wizard-hero",
+        "knight",
+        "poison",
+        "skeletons-ev1"
+      ]
+    },
+    {
+      "id": "royale_20261103_10",
+      "url": "https://royaleapi.com/decks/stats/barbarian-barrel,bats-ev1,cannon-ev1,ice-wizard-hero,knight,lightning,minion-giant,skeletons",
+      "card_keys": [
+        "barbarian-barrel",
+        "bats-ev1",
+        "cannon-ev1",
+        "ice-wizard-hero",
+        "knight",
+        "lightning",
+        "minion-giant",
+        "skeletons"
+      ]
+    },
+    {
+      "id": "royale_20261103_11",
+      "url": "https://royaleapi.com/decks/stats/archers-ev1,electro-spirit,fireball,knight-hero,skeletons,tesla-ev1,the-log,x-bow",
+      "card_keys": [
+        "archers-ev1",
+        "electro-spirit",
+        "fireball",
+        "knight-hero",
+        "skeletons",
+        "tesla-ev1",
+        "the-log",
+        "x-bow"
+      ]
+    },
+    {
+      "id": "royale_20261103_12",
+      "url": "https://royaleapi.com/decks/stats/archer-queen,cannon-ev1,earthquake,ice-spirit,royal-delivery,royal-hogs-ev1,skeletons,the-log",
+      "card_keys": [
+        "archer-queen",
+        "cannon-ev1",
+        "earthquake",
+        "ice-spirit",
+        "royal-delivery",
+        "royal-hogs-ev1",
+        "skeletons",
+        "the-log"
+      ]
+    },
+    {
+      "id": "royale_20261103_13",
+      "url": "https://royaleapi.com/decks/stats/cannon-ev1,fireball,hog-rider,ice-golem,ice-spirit,musketeer-hero,skeletons-ev1,the-log",
+      "card_keys": [
+        "cannon-ev1",
+        "fireball",
+        "hog-rider",
+        "ice-golem",
+        "ice-spirit",
+        "musketeer-hero",
+        "skeletons-ev1",
+        "the-log"
+      ]
+    },
+    {
+      "id": "royale_20261103_14",
+      "url": "https://royaleapi.com/decks/stats/arrows,bowler-hero,giant,giant-snowball-ev1,graveyard,guards,witch-ev1,zappies",
+      "card_keys": [
+        "arrows",
+        "bowler-hero",
+        "giant",
+        "giant-snowball-ev1",
+        "graveyard",
+        "guards",
+        "witch-ev1",
+        "zappies"
+      ]
+    },
+    {
+      "id": "royale_20261103_15",
+      "url": "https://royaleapi.com/decks/stats/arrows,bandit,battle-ram-ev1,electro-wizard-hero,furnace,giant-skeleton,heal-spirit,royal-ghost-ev1",
+      "card_keys": [
+        "arrows",
+        "bandit",
+        "battle-ram-ev1",
+        "electro-wizard-hero",
+        "furnace",
+        "giant-skeleton",
+        "heal-spirit",
+        "royal-ghost-ev1"
+      ]
+    },
+    {
+      "id": "royale_20261103_16",
+      "url": "https://royaleapi.com/decks/stats/archers-ev1,barbarian-barrel,electro-spirit,goblin-hut,ice-wizard-hero,knight,lightning,royal-hogs-ev1",
+      "card_keys": [
+        "archers-ev1",
+        "barbarian-barrel",
+        "electro-spirit",
+        "goblin-hut",
+        "ice-wizard-hero",
+        "knight",
+        "lightning",
+        "royal-hogs-ev1"
+      ]
+    },
+    {
+      "id": "royale_20261103_17",
+      "url": "https://royaleapi.com/decks/stats/baby-dragon-ev1,barbarian-barrel,bowler-hero,electro-giant-ev1,electro-wizard,goblin-hut,lightning,tornado",
+      "card_keys": [
+        "baby-dragon-ev1",
+        "barbarian-barrel",
+        "bowler-hero",
+        "electro-giant-ev1",
+        "electro-wizard",
+        "goblin-hut",
+        "lightning",
+        "tornado"
+      ]
+    },
+    {
+      "id": "royale_20261103_18",
+      "url": "https://royaleapi.com/decks/stats/barbarian-barrel,cannon-cart,fireball,goblin-gang,goblinstein,minion-horde-ev1,mortar-ev1,mother-witch",
+      "card_keys": [
+        "barbarian-barrel",
+        "cannon-cart",
+        "fireball",
+        "goblin-gang",
+        "goblinstein",
+        "minion-horde-ev1",
+        "mortar-ev1",
+        "mother-witch"
+      ]
+    }
+  ]
+}

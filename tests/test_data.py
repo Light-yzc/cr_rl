@@ -105,11 +105,47 @@ def test_observation_adapter_normalizes_units_and_keeps_empty_frame_safe():
     raw[0, 224 + 4] = 9000
     raw[0, 224 + 5] = 1000
     header, entities, mask = CrForgeObservationAdapter(schema, 1000)(raw)
-    assert header[0, 1] == 0.5
-    assert header[0, 2] == 0.1
-    assert header[0, 3] == 0.5
-    assert entities[0, 0, 3] == 0.1
-    assert entities[0, 0, 4] == 0.5
-    assert entities[0, 0, 5] == 0.1
+    np.testing.assert_allclose(header[0, 1:4], [0.5, 0.1, 0.5], rtol=1e-6)
+    np.testing.assert_allclose(entities[0, 0, 3:6], [0.1, 0.5, 0.1], rtol=1e-6)
     assert mask[0, 0]
     assert mask[1, 0]  # dummy key prevents all-masked attention on padding frames
+
+
+def test_trimmed_entity_padding_preserves_policy_outputs():
+    import torch
+
+    from cr_rl.models import ActorCritic, ModelConfig
+
+    cfg = ModelConfig(
+        entity_dim=16,
+        entity_heads=2,
+        temporal_dim=32,
+        temporal_heads=2,
+        temporal_layers=1,
+        context_len=3,
+        max_entities=64,
+        vocab_size=128,
+    )
+    schema = SimpleNamespace(
+        seat_ints=224 + 64 * 34,
+        header_ints=224,
+        entity_ints=34,
+        max_entities=64,
+        header={"entity_count": (0,)},
+        header_fields=["entity_count"],
+        entity_fields=["kind"],
+    )
+    raw = np.zeros((2, 3, schema.seat_ints), dtype=np.int32)
+    raw[0, :, 0] = 9
+    raw[1, :, 0] = 25
+    raw[..., 224:] = np.random.default_rng(7).integers(0, 10, raw[..., 224:].shape)
+    full = CrForgeObservationAdapter(schema, 128)(raw)
+    trim = CrForgeObservationAdapter(schema, 128, entity_bucket=16)(raw)
+    assert trim[1].shape[-2] == 32
+    np.testing.assert_array_equal(trim[1], full[1][..., :32, :])
+    model = ActorCritic(cfg).eval()
+    with torch.no_grad():
+        expected, value = model(*(torch.as_tensor(v) for v in full))
+        actual, trimmed_value = model(*(torch.as_tensor(v) for v in trim))
+    torch.testing.assert_close(actual, expected, rtol=3e-5, atol=3e-5)
+    torch.testing.assert_close(trimmed_value, value, rtol=3e-5, atol=3e-5)

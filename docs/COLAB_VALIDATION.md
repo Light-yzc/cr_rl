@@ -1,5 +1,7 @@
 # Colab GPU validation
 
+Historical architecture-v1 PPO/forward smoke record. For the current architecture-v2 Linux self-play acceptance, commands and measured results, see [LINUX_TRAINING.md](LINUX_TRAINING.md). The current launcher runs multi-update self-play and checkpoint-resume validation instead of the legacy PPO/production-forward test described below.
+
 Date: 2026-11-02. Runtime: Google Colab L4, CUDA enabled, approximately 22 GiB VRAM.
 
 ## Verified

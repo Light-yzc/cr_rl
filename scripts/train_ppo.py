@@ -24,13 +24,27 @@ def train(args) -> None:
     if device == "auto":
         device = "mps" if torch.backends.mps.is_available() else "cpu"
     cfg = ModelConfig.preset(args.model)
+    checkpoint = (
+        torch.load(args.resume, map_location=device, weights_only=False)
+        if args.resume is not None
+        else None
+    )
+    if checkpoint is not None:
+        saved_cfg = ModelConfig(**checkpoint["config"])
+        cfg = ModelConfig(
+            **{
+                **cfg.__dict__,
+                "tile_query_residual": saved_cfg.tile_query_residual,
+                "tile_head_fp32": saved_cfg.tile_head_fp32,
+                "spatial_fourier": saved_cfg.spatial_fourier,
+            }
+        )
     model = ActorCritic(cfg).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     update_number = 0
     resume_state = None
     if args.resume is not None:
-        checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
-        if checkpoint.get("config") != cfg.__dict__:
+        if ModelConfig(**checkpoint["config"]) != cfg:
             raise ValueError("Resume checkpoint model config does not match --model")
         model.load_state_dict(checkpoint["model"])
         if "optimizer" in checkpoint:
@@ -266,7 +280,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        choices=("tiny", "small", "compact", "general", "large", "production"),
+        choices=("tiny", "small", "compact", "general", "large", "production", "general_300m"),
         default="tiny",
     )
     parser.add_argument("--envs", type=int, default=2)

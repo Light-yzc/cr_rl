@@ -3,6 +3,18 @@ from __future__ import annotations
 import torch
 
 
+def stop_for_kl(optimizer: torch.optim.Optimizer, approx_kl: float, target_kl: float) -> bool:
+    """Reject an over-limit microbatch and discard any pending accumulated gradients.
+
+    Call before backward/step: applying one last update after detecting drift defeats
+    the early-stop guard. Previously completed optimizer steps are retained.
+    """
+    if approx_kl <= target_kl:
+        return False
+    optimizer.zero_grad(set_to_none=True)
+    return True
+
+
 def ppo_loss(
     new_log_prob: torch.Tensor,
     old_log_prob: torch.Tensor,

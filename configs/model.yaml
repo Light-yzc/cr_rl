@@ -47,3 +47,11 @@ presets:
     temporal_dim: 768
     temporal_heads: 12
     context_len: 128
+  general_300m:
+    entity_layers: 4
+    entity_dim: 256
+    entity_heads: 8
+    temporal_layers: 24
+    temporal_dim: 1024
+    temporal_heads: 16
+    context_len: 128

@@ -5,6 +5,28 @@ from cr_rl.training.bc import behaviour_cloning_loss, hierarchical_bc_loss
 from cr_rl.training.ppo import ppo_loss
 
 
+def test_kl_stop_discards_pending_update_without_changing_weights_or_optimizer_state():
+    from cr_rl.training.ppo import stop_for_kl
+
+    weight = torch.nn.Parameter(torch.tensor([1.0]))
+    optimizer = torch.optim.AdamW([weight], lr=0.1)
+    # Retain a completed update, then simulate pending gradient accumulation.
+    weight.square().sum().backward()
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+    before = weight.detach().clone()
+    step_before = optimizer.state[weight]["step"].clone()
+    weight.square().sum().backward()
+    assert not stop_for_kl(optimizer, 0.01, 0.02)
+    assert weight.grad is not None
+    assert stop_for_kl(optimizer, 0.14, 0.02)
+    assert weight.grad is None
+    # Even an accidental subsequent step must have no effect.
+    optimizer.step()
+    assert torch.equal(weight, before)
+    assert torch.equal(optimizer.state[weight]["step"], step_before)
+
+
 def test_gae_terminal_masks_bootstrap():
     rewards = torch.tensor([[1.0], [0.0]])
     values = torch.zeros_like(rewards)
@@ -15,6 +37,31 @@ def test_gae_terminal_masks_bootstrap():
     assert adv[0, 0].item() == 1.0
     assert returns[0, 0].item() == 1.0
     assert adv[1, 0].item() == 2.0
+
+
+def test_gae_freezes_old_values_and_return_targets_before_value_updates():
+    rewards = torch.tensor([[0.0], [1.0]])
+    old_values = torch.tensor([[0.2], [0.4]], requires_grad=True)
+    next_values = torch.tensor([[0.4], [0.0]], requires_grad=True)
+    terminal = torch.tensor([[0], [1]])
+    advantage, returns = compute_gae(
+        rewards,
+        old_values,
+        terminal,
+        next_values[-1],
+        gamma=0.9,
+        gae_lambda=1.0,
+        next_values=next_values,
+    )
+    torch.testing.assert_close(returns[:, 0], torch.tensor([0.9, 1.0]))
+    torch.testing.assert_close(advantage[:, 0], torch.tensor([0.7, 0.6]))
+    assert not advantage.requires_grad and not returns.requires_grad
+    saved_advantage, saved_returns = advantage.clone(), returns.clone()
+    with torch.no_grad():
+        old_values.add_(100)
+        next_values.add_(100)
+    torch.testing.assert_close(advantage, saved_advantage)
+    torch.testing.assert_close(returns, saved_returns)
 
 
 def test_gae_truncation_bootstraps_but_stops_trace_at_episode_boundary():

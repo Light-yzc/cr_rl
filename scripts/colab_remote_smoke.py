@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
+import traceback
 from pathlib import Path
 
 ROOT = Path("/content/cr-rl-lab")
 ARCHIVE = Path("/content/cr-rl-lab-src.tar.gz")
-COMMIT = "7ee59b39bf1d41d5c01645f01c47ed8c8d3355d6"
 
 
 def run(command: list[str], cwd: Path | None = None) -> None:
@@ -48,88 +48,49 @@ def main() -> None:
     os.environ["PATH"] = f"{java_home}/bin:" + os.environ["PATH"]
     run(["java", "-version"])
 
-    vendor = ROOT / ".cache/vendor/crforge"
-    vendor.parent.mkdir(parents=True, exist_ok=True)
-    if not (vendor / ".git").exists():
-        run(["git", "clone", "https://github.com/voonhous/crforge.git", str(vendor)])
-    run(["git", "fetch", "--depth", "1", "origin", COMMIT], cwd=vendor)
-    run(["git", "checkout", "--detach", COMMIT], cwd=vendor)
-    run(
-        [
-            "bash",
-            "-lc",
-            "./gradlew :env:installDist :tables:dataVersionTables "
-            "-Pcrforge.assetSource=cdn -Pcrforge.dataVersion=16.635.3",
-        ],
-        cwd=vendor,
-    )
+    run([sys.executable, "-m", "pip", "install", "--quiet", "-e", str(ROOT), "pytest", "ruff"])
+    run([sys.executable, "scripts/setup_simulator.py"], cwd=ROOT)
+    if os.environ.get("CRRL_SETUP_ONLY") == "1":
+        return
 
-    run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--quiet",
-            "gymnasium>=1.0,<2",
-            "pettingzoo>=1.24,<2",
-            "jpype1>=1.5,<2",
-            "PyYAML>=6",
-            "msgpack>=1",
-            "pyarrow>=18",
-            "tqdm>=4.66",
-        ]
-    )
-    run([sys.executable, "-m", "pip", "install", "--no-deps", "-e", str(ROOT)])
-    run([sys.executable, "-m", "pip", "install", "--no-deps", "-e", str(vendor / "python")])
-
-    env = os.environ.copy()
-    env["JAVA_HOME"] = java_home
-    env["PATH"] = os.environ["PATH"]
-    print("=== Simulator doctor ===", flush=True)
-    run([sys.executable, "-m", "cr_rl.cli", "doctor"], cwd=ROOT)
-    print("=== General self-play PPO GPU smoke ===", flush=True)
-    shutil.rmtree(ROOT / "artifacts/colab_selfplay_smoke", ignore_errors=True)
-    run(
-        [
-            sys.executable,
-            "scripts/train_selfplay.py",
-            "--model",
-            "general",
-            "--envs",
-            "2",
-            "--steps",
-            "32",
-            "--epochs",
-            "1",
-            "--batch-size",
-            "2",
-            "--grad-accumulation",
-            "2",
-            "--device",
-            "cuda",
-            "--out",
-            "artifacts/colab_selfplay_smoke",
-        ],
-        cwd=ROOT,
-    )
-    production_check = (
-        "import torch; from cr_rl.models import ActorCritic, ModelConfig; "
-        "c=ModelConfig.preset('production'); m=ActorCritic(c).cuda().eval(); "
-        "h=torch.zeros(1,8,c.header_dim,device='cuda'); "
-        "e=torch.zeros(1,8,c.max_entities,c.entity_feature_dim,device='cuda'); "
-        "mask=torch.zeros(1,8,c.max_entities,dtype=torch.bool,device='cuda'); mask[:,:,0]=True; "
-        "logits,value=m(h,e,mask); "
-        "print('production_params',m.parameter_count(),'shapes',tuple(logits.shape), "
-        "tuple(value.shape), "
-        "'peak_gb',round(torch.cuda.max_memory_allocated()/2**30,3))"
-    )
-    run([sys.executable, "-c", production_check], cwd=ROOT)
-    result_archive = Path("/content/colab_smoke_results.tar.gz")
-    with tarfile.open(result_archive, "w:gz") as archive:
-        archive.add(ROOT / "artifacts/colab_selfplay_smoke", arcname="colab_selfplay_smoke")
-    print("=== Colab smoke complete ===", flush=True)
+    print("=== Linux self-play acceptance ===", flush=True)
+    try:
+        run([sys.executable, "scripts/validate_training.py", "--device", "cuda"], cwd=ROOT)
+    finally:
+        result_archive = Path("/content/colab_smoke_results.tar.gz")
+        results = ROOT / "artifacts/linux_validation"
+        if results.exists():
+            with tarfile.open(result_archive, "w:gz") as archive:
+                archive.add(results, arcname="linux_validation")
+            run([sys.executable, "scripts/colab_split_results.py"], cwd=ROOT)
+    print("=== Linux training validation complete ===", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    if os.environ.get("CRRL_BACKGROUND_WORKER") == "1":
+        status = {"success": False}
+        try:
+            main()
+            status["success"] = True
+        except Exception:
+            status["error"] = traceback.format_exc()
+            traceback.print_exc()
+        finally:
+            Path("/content/crrl_job_status.json").write_text(json.dumps(status))
+    else:
+        # A detached worker lets the CLI poll completion even when the notebook's
+        # execute reply is lost. In particular, CLI exit status alone is insufficient.
+        ROOT.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(ARCHIVE, "r:gz") as source:
+            source.extractall(ROOT, filter="data")
+        Path("/content/crrl_job_status.json").unlink(missing_ok=True)
+        with Path("/content/crrl_job.log").open("w") as log:
+            process = subprocess.Popen(
+                [sys.executable, str(ROOT / "scripts/colab_remote_smoke.py")],
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                env={**os.environ, "CRRL_BACKGROUND_WORKER": "1"},
+                start_new_session=True,
+            )
+        print(f"Linux validation worker started: {process.pid}", flush=True)

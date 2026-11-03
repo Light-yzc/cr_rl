@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 
+@torch.no_grad()
 def compute_gae(
     rewards: torch.Tensor,
     values: torch.Tensor,

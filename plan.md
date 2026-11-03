@@ -1,4 +1,36 @@
-# 皇室战争 RL 第一版实施计划
+# 皇室战争 RL 实施计划（v2 版本）
+
+> **2026-11-04 吞吐修复已实测**：Stage 2 曾长时间停留在初始化验证的整分片解压，并非持续做梯度更新。已实现精确验证历史缓存，113项Linux测试及真实模型输出对照通过；从已校验step2616接续后已训练到2704，Drive的step2688 checkpoint已独立SHA核验，W&B服务端确认收到新步数。两组完整验证指标切换前后完全一致，连续快速验证约5.44秒。此处仅证明更新、日志和备份路径恢复，模型强度及PPO交接仍未通过。详见 [验证I/O修复](docs/VALIDATION_IO_REPAIR_20261104.md)。
+
+> **最新执行核验（主代理单独推进）**：已接入全周期优先数据、完成自然校准、五档20局调参和32局正式换边评估。对 early237 为8–8，对 conditional896 为11–5，尚未通过 PPO 交接；BC 已继续训练。新冻结集仍含旧 fallback，cmd 不是成功出牌，184秒不能直接称为加时。最新证据和后续条件以 [全周期BC校准执行记录](docs/CYCLE_BC_CALIBRATION_20261103.md) 为准，覆盖下方旧交接中的相应假设。
+
+> **阶段推进**：Stage 1 已在 step2616 完成全覆盖训练并校验 Drive epoch checkpoint；Stage 2 已启动，去重后9,463个监督身份。新阶段的覆盖审计、自然时机校准和新配对闭环评估已排队；新增流程通过108项Linux测试。第一阶段自然验证综合指标基本持平，不能把阶段完成当作模型强度已改善。
+
+
+
+> **v2 版本升级说明（2026-11-03 架构、数据与 RL 奖励塑形全面修订）**：
+> 基于 Colab L4 上的多轮 119M BC 与 PPO 实测日志诊断，第一版（v1）暴露出四个核心瓶颈：(1) **落点头（Tile Head）停滞**（无残差与缺乏 2D 网格坐标先验，导致 `position_loss` 卡在 5.44、`play_tile_accuracy` 仅 0.42%）；(2) **BC 过采样先验偏移与开环重放漂移**（50/50 采样使 `wait_accuracy` 降至 58.8%，且 `broad` 模式下失步回放的后半段产生错位监督噪声）；(3) **PPO 纯终局奖励视野过短**（$\gamma=0.999, \lambda=0.95$ 在 4Hz 下有效 GAE 视野仅 ~4.9 秒，无法为 3~5 分钟对局的中早期下牌分配信用）；(4) **PPO 微批次 KL 误触发早停与对局腰斩**（`microbatch=4` 单批噪声即触发 KL 早停丢弃 98% 样本，且每轮重启子进程切断未完对局）。
+> **v2 计划核心改动（全部修好后执行 v2 从零全新重训）**：
+> 1. **奖励函数 v2（零和塔血/破塔潜势塑形 + 满费溢出惩罚）**：在终局 $\pm 1.0$ 基础上，引入基于 `crforge` 实时观测的公主塔血量差（$\pm 0.15$）、国王塔血量差（$\pm 0.20$）、皇冠破塔里程碑（$\pm 0.15$）与 10 费满溢等待惩罚（$-0.001$/step），并将 GAE 视野拉长至 $\gamma=0.9995, \lambda=0.98$（约 12.2 秒）。
+> 2. **模型架构 v2（直接从零重训，不背负 v1 历史包袱）**：
+>    - **Static + Dynamic Query 实体注意力池化**：将 `EntityFrameEncoder` 的单帧实体池化升级为基于当前帧全局上下文 $c_t$（圣水、手牌、卡组、塔血等）条件生成的动态多查询注意力池化 $Q_t = Q_{\text{static}} + \operatorname{MLP}(c_t)$（默认 `4 Static + Dynamic Queries`），彻底解决人海单位稀释单体关键威胁的问题，并支持 `Masked Mean` / `1 Static` / `4 Static` / `4 Static+Dynamic` 四档消融对比；
+>    - **Tile Head v2**：启用 Query 残差 + FP32 精度 + 2D 网格坐标编码 + 2D 高斯软标签；
+>    - **离散实体表征**：为场上实体离散 ID（`row`、`kind`、`state`、`buff`）补充可学习 Embedding 并展开 `flags` 位掩码；
+>    - **独立 Critic**：PPO 默认启用独立 Transformer Critic。
+> 3. **BC 数据与先验校准 v2**：对开环失步回放实施前缀截断（Prefix Cutoff）与跨分片去重；加入技能（Ability）分层采样；在 BC→PPO 迁移与评估时进行 WAIT/PLAY 先验 Logit 偏置校准（修正 $\Delta \text{logit} \approx +3.79$）。
+> 4. **PPO 训练器与自博弈 v2**：KL 早停改为按完整梯度累积步（有效 batch $\ge 64$）判定；跨 update 保持模拟器环境常驻不断局；`current vs current` 双座同策略样本复用；对手池按步数与胜率门控入池并采用 EMA + 卡组配对条件化统计。
+>
+> **最新交接执行计划（2026-11-03 晚间：修复 Conditional BC Step 896 退化并推进至 v2 PPO）**：
+> 在完成条件化 BC 损失（`--bc-objective conditional --no-card-prior-correction`）与动作邻域静默排除（`--wait-margin-before 4 --wait-margin-after 2`）后，Step 896 在 12 局配对评估中彻底消除了满费发呆（`full_elixir_wait_legal_seconds = 0.0s`），但对阵 Step 444 打出 `3-3`、对阵 Early Step 237 打出 `2-4`（详见 `docs/BC_TIMING_REPAIR_20261103.md`）。经审计定位出三大根因与对应交接任务：
+> 1. **切换主训练数据源至带开局牌序反推的全周期分片 `bc_cycle_20261103`（解决前 30s 截断过拟合）**：Stage 1–3 所用的 `bc_omission2_20261103_r2` 未开启 `--infer-opening-cycle`，因初始发牌顺序不匹配导致截断对局中位时长仅 29.0s–31.75s（场均仅 `7.57` 次有效出牌），训练越久越过拟合开局前 30s 节奏。新上线的 `src/cr_rl/data/opening_cycle.py`（`bc_cycle_20261103`）已将场均有效出牌提升至 **`37.35` 次/局**（恢复完整 0–180s 单倍/双倍/加时赛覆盖）。接手 Agent 需在 Stage 3 完成后停止旧的无牌序反推构建器，将 `bc_cycle_20261103` 作为第一优先级数据源接入 `scripts/run_all_bc.py`（通过 `freeze_datasets(..., deduplicate=True)` 自动用全周期轨迹替换同名短前缀轨迹）。
+> 2. **校准闭环推理与 PPO 初始化的 `wait_logit_bias`（解决 1:1 平衡采样导致的“有费秒甩/乱交牌”）**：训练期 1:1 平衡采样（$p_{\text{train}} \approx 0.50$）而真实环境出牌率仅 $p_{\text{nat}} \approx 0.029$，在 `wait_logit_bias = 0.0` 下训练到 Step 896–915 时，自然验证集单帧出牌率飙升至 `42%–50%`（`wait_accuracy = 43.1%`，每秒误出牌 `1.93` 次），实战 184s 狂甩 **45 张牌**（每 4.08s 一张，一有 2–3 费就秒下，攒不出高费核心牌）。接手 Agent 需基于自然分布验证集校准 `wait_logit_bias`（网格搜索 `+1.0, +1.5, +2.0, +2.5, +3.0`），将单局成功出牌数控制在人类正常的 **`18–28` 次/局** 且保持满费等待 `~0.0s`。
+> 3. **扩充多卡组换边评估规模并交接 v2 PPO**：当前 3 组卡组中前两组（Pair 0/1）100% 由卡组克制决定（8 局全部由固定卡组获胜，必出 `2-2`），胜负仅由第 3 组 184s 加时赛决定。需扩充至 **8–10 组留出卡组配对（16–20 局换边）**，在全周期数据 + 校准 `wait_logit_bias` 验收通过后，导出 Actor 正式启动 **v2 PPO 自博弈（独立 Critic + 零和塔血/皇冠/满费溢出塑形 + $\gamma=0.9995, \lambda=0.98$）**。
+
+> 当前进度（2026-11-03）：119M 已在 Colab Linux/L4 完成多卡组人类 BC → 验证选优 → PPO 三轮 → 留出换边评估 → Drive 实际 GPU 恢复续训，并正在执行全量分片构建与 Tile Head 修复 A/B 对照（`119m_tile_fix_trial_20261103`）。人类近似重建 40 场、65,814 条合法监督行；BC 4 个采样轮次/512 个优化步，修正后的选卡准确率 30.4%→41.5%（扩大至 1,297 场后选卡准确率达 44.6%）；PPO 9,216 learner 样本、10 场终局、12 个优化步。卡组去重后 38 个训练形态配置（36 种八张卡组合）与 10 个留出组合；本次短 PPO 实际 learner 覆盖 12 种组合。固定种子/换边的 6 场对冻结 BC 评估为 5 胜 1 负，仅是小样本。26 项测试和真实 119M Drive 恢复 GPU 优化通过，W&B 服务端指标/文件已核验。BC v2 的 WAIT 比较指标有误，已复测为 bc_v3，保留历史错误记录。详见 `docs/BC_PPO_RUN_20261103.md`、`docs/TILE_HEAD_DIAGNOSIS_20261103.md`；机器证据 `artifacts/bc_multideck_20261103/final_verification.json`。此前随机初始化的 `119m_20261103_pilot01` 仅作为历史 RL 流程测试。
+
+> 2026-11-03 模型规模更新：已有 `production` 119,541,766 参数和新增 `general_300m` 309,233,670 参数。两者已在 L4、完整 128 帧真实轨迹窗口、三份模型驻留条件下通过 BF16 前向/反向/AdamW 容量测试；微批量 4 的峰值 allocated 显存分别为 6.75 / 10.98 GiB，优化吞吐为 9.98 / 8.25 样本每秒。该结果不包含在线模拟器采样，也不代表胜率。建议先建立 119M 正式学习基线，再用 309M 做等样本及等时间预算对照；不改变通用大模型和后续蒸馏的最终目标。详见 `docs/MODEL_CAPACITY_20261103.md`。
+
+> 2026-11-02 Linux/CUDA 后续验收：当前主入口仍为 `scripts/train_selfplay.py`，已新增 `scripts/bootstrap_linux.sh`、跨平台 `scripts/colab_launch.py` 和真实模拟器验收 `scripts/validate_training.py`。全新 Colab L4 会话已通过 16 项测试、tiny 连续两轮长采样（共 5200 learner 样本、4 场正常终局及非零奖励）、移动目录后的第 3 轮恢复，以及 general 34,168,454 参数模型的两轮完整 128 帧历史优化（每轮 33 次 optimizer step，峰值约 1.27 GiB）。修复了 Linux Java 发现、BF16 转 NumPy、CUDA RNG 恢复和对手池绝对路径问题。详见 `docs/LINUX_TRAINING.md`，机器可读证据位于 `artifacts/linux_final/linux_validation/validation.json`。下文旧 MPS / 架构 1 / 未验证 GPU 的描述保留作历史背景；当前仍没有长期胜率提升证据，general 短测没有终局，精确模拟器状态恢复与长期池治理仍待实现。
 
 更新日期：2026-11-02。本文是待实施的设计方案，不代表环境、内存读取或训练效果已经验证。
 
@@ -9,7 +41,7 @@
 ### 0.1 用户最新方向与尚未定型的选择
 
 - 用户希望先训练一个多卡组通用模型，再对电车卡组微调；不需要从零预训练独立的 500M 对手。
-- 用户认可可讨论的约 300M 主模型、约 90–120M 蒸馏学生路线，但没有完成性能验证或最终定型。现有代码没有 300M preset。
+- 用户认可可讨论的约 300M 主模型、约 90–120M 蒸馏学生路线，但没有完成策略强度验证或最终定型。现有代码已有 `general_300m` preset 和 L4 容量测试，尚无其长期胜率结果。
 - 当前代码/设计记录另推荐 `general` 34M 做首个可持续训练基线。这是验证成本选择，**不能擅自把用户对大模型的目标改成“最终只能34M”**。先在相同评测条件比较，再决定扩容。
 - 历史对手不是越旧越有用。后续需按当前表现和卡组配对筛选；特化模型可作为后期针对弱点的分支，第一阶段不要求每个卡组各训一个。
 - 模型目前采用严格历史窗口重算。可以在权重冻结推理阶段缓存加入时间位置编码前的帧 embedding；普通滚动 KV cache 与当前窗口重算不严格等价，不能直接替换。
@@ -223,37 +255,61 @@ position ∈ deployment_grid
 - 请求中保存期望 card_id，执行前确认槽位仍对应该卡；过期请求取消并记日志。
 - 用手牌轮转、圣水变化和部署事件确认执行，避免重复点击。队列长度和超时上限明确。
 
-## 6. 模型架构基线：约 120M 的两级 Transformer
+## 6. 模型架构基线（v2）：约 120M 的两级 Transformer + 独立 Critic
 
-不用将所有历史单位展平成一条巨大 token 序列。每一帧先理解战场实体，再将压缩后的时间 token 送入时序网络；当前位置头保留当前帧实体特征，避免只靠一个压缩向量定位。
+不用将所有历史单位展平成一条巨大 token 序列。每一帧先理解战场实体，再将压缩后的时间 token 送入时序网络；当前位置头保留当前帧实体特征，避免只靠一个压缩向量定位。在 v2 阶段，PPO 训练默认采用**独立 Transformer Critic**（Actor 与 Critic 各自拥有独立的 Entity/Temporal Transformer，完全消除价值梯度对 BC 预热策略表示的干扰）。
 
 ```text
 单位 / 塔 / 手牌 / 全局特征
-        ↓ 类型 embedding + 数值投影
+        ↓ 离散实体 ID/状态 Embedding + flags 位拆解 + 2D 连续坐标编码
 4 层 Entity Transformer，d=256
-        ├→ 当前实体特征 → 位置解码器
-        ↓ attention pooling + 全局/上一动作融合
+        ├→ 当前实体特征 → 位置解码器（Cross-Attention + Query 残差 + FP32）
+        ↓ attention pooling + 全局/卡组/上一动作融合
 每个时间步 1 个 token，投影到 768 维
         ↓
 16 层 Causal Temporal Transformer，d=768
-        ├→ 卡槽头：WAIT + 4 个槽位
-        ├→ 条件位置头：所选卡 + 当前实体 + 历史表示
-        └→ Value head：V(history)
+        ├→ 卡槽头：WAIT + 4 个槽位 + 2 种英雄技能
+        └→ 条件位置头：2D 网格坐标编码 + 所选卡 + 时序 hidden + 实体 Cross-Attention 残差
+
+独立 Critic（PPO 训练期使用，部署期剥离）：
+相同观测历史 → 独立 4 层 Entity + 16 层 Temporal Transformer → Value head V(history)
 ```
 
-### 6.1 具体规格
+### 6.1 具体规格（v2 升级项）
 
-| 模块 | 第一版配置 |
+| 模块 | v2 配置与升级要点 |
 |---|---|
-| 实体编码器 | 4 层、hidden 256、8 heads、FFN 1024、非因果帧内 attention |
-| 时序编码器 | 16 层、hidden 768、12 heads、head dim 64、FFN 3072 |
+| 实体输入表征 | **v2 升级**：将实体 `row`（兵种/投射物离散表 ID）、`kind`、`state`、`buff` 接入可学习 `nn.Embedding`，将 `flags`（`uint16`）拆解为 16 维 0/1 位特征，禁止将离散类别 ID 直接除以常数当连续标量输入线性层；Header 中的 `next_card`、`pending_card`、`enemy_play_card` 共享 `card_embedding` |
+| 实体编码器与动态池化 | 4 层、hidden 256、8 heads、FFN 1024、非因果帧内 attention；帧池化升级为 **Static + Dynamic Query Attention Pooling**（$Q_t = Q_{\text{static}} + \operatorname{MLP}(c_t)$，默认 $K=4$ 个查询 token），详见 §6.1.1 |
+| 时序编码器 | 16 层、hidden 768、12 heads、head dim 64、FFN 3072；己方卡组与敌方已公开卡牌池化嵌入在进入时序层前融合，使时序注意力具备卡组条件感知 |
 | 时序约束 | 严格 causal，Pre-LayerNorm，GELU，dropout 初始 0 |
-| 位置/时间 | 时序位置编码 + 实际 dt/游戏时间特征；实体输入连续坐标编码 |
-| 历史 | 初始 128 个时间步，4 Hz 下约 32 秒；长局信息通过已公开牌表和历史摘要补充 |
-| 选牌头 | 时序 hidden 与当前四个手牌 embedding 的条件打分，加 WAIT logit |
-| 位置头 | 网格 query 融合卡牌和时序 hidden，对当前实体做小型 cross-attention 后打分 |
-| 价值头 | 与策略共享 trunk，独立两层 MLP 输出标量 |
-| 参数初始化 | 随机初始化；policy 输出采用小尺度初始化，避免初始概率极端 |
+| 位置/时间 | 时序位置编码 + 实际 dt/游戏时间特征；实体坐标与 $18 \times 32$ 网格使用对齐的归一化 $(x, y) \in [0, 1]^2$ 2D 坐标编码 |
+| 历史 | 初始 128 个时间步，4 Hz 下约 32 秒；Rollout 推理期支持缓存单帧 `EntityFrameEncoder` 输出，每步仅编码最新 1 帧 |
+| 选牌头 | 时序 hidden 与当前四个手牌 embedding 的条件打分，加 WAIT logit 与 2 个技能槽位；支持先验偏置校准（Logit Adjustment） |
+| 位置头（Tile Head v2） | **v2 核心修复**：(1) 开启 `tile_query_residual=True`，保留 `queries + attn_out` 残差通路；(2) 开启 `tile_head_fp32=True`，在 FP32 下执行落点交叉注意力与打分；(3) 为 $18 \times 32 = 576$ 格注入显式 2D 网格坐标编码，打破各格独立随机向量的空间盲区 |
+| 价值网络（Critic v2） | **独立 Transformer Critic**（`training_architecture_version=3`）：与 Actor 同构（production 下 Actor 119.25M + Critic 118.06M），可从 BC 编码器权重热启动；部署时仅导出 Actor |
+| 参数初始化与重训策略 | **v2 全新重训（Clean-Slate Retraining）**：所有 v2 表征、池化、落点头与数据清洗修复就绪后，直接从零开始训练 v2 BC 与 PPO，不再迁就受漂移数据污染的旧 v1 权重 |
+
+#### 6.1.1 单帧实体池化升级：Static + Dynamic Query Attention Pooling
+
+在《皇室战争》中，Entity Transformer 的自注意力负责**理解场上实体之间发生了什么交互**，而随后的帧池化（Frame Pooling）负责**根据当前局势决定重点从实体集合中提取哪些信息送入时序网络**。
+
+1. **为什么替换 `Masked Mean` 与纯 `Static Query`？**
+   - `Masked Mean` 对场上所有单位赋予相同的 $1/N$ 权重，当场上有骷髅海/亡灵大军等 15~20 个小单位时，单体高威胁单位（如野猪骑士、皮卡超人、电磁炮）的特征会被稀释十余倍。
+   - 纯 `Static Query`（$Q = Q_{\text{static}}$）虽然能根据不同帧的实体 $K_t, V_t$ 动态产生不同的注意力权重 $A_t = \operatorname{softmax}(Q K_t^\top / \sqrt{d_k})$，但它在所有局势下都在问同一个固定的问题（“场上有哪些显眼实体？”），无法根据当前**己方手牌、圣水余量、塔血危急程度**主动切换关注重点（例如：防守野猪冲塔时急需定位迫在眉睫的威胁，而敌方石头人沉底、己方满费时则需要评估防线空档与反攻换路资源）。
+
+2. **v2 混合动态查询设计（`Static + Dynamic Queries`）**：
+   - 将当前帧的全局上下文 $c_t$（由当前帧 `header` 特征——含当前圣水、手牌费用、双方 6 座塔实时血量、皇冠数、比赛阶段——与手牌/卡组嵌入组合而成）通过轻量级 MLP 生成动态偏移量，叠加在 $K$ 个可学习静态基础查询上：
+     $$Q_t = Q_{\text{static}} + \operatorname{MLP}(c_t) \in \mathbb{R}^{(B \cdot T) \times K \times d_{\text{entity}}}$$
+     $$H_t = \operatorname{MultiHeadCrossAttention}(Q_t, X_t, X_t, \text{key\_padding\_mask}=\neg \text{entity\_mask}_t)$$
+     $$\text{pooled}_t = \operatorname{Linear}\big(\operatorname{Flatten}(H_t)\big) + \operatorname{MaskedMean}(X_t)$$
+   - **并行性与推理缓存保证**：由于 $c_t$ 仅依赖第 $t$ 帧自身的全局上下文（不依赖第 $t-1$ 帧因果时序 Transformer 的输出），全部 $T=128$ 帧在训练期依然可以 **100% 并行通过 `EntityFrameEncoder`**，且在 Rollout 推理期完全支持单帧增量缓存。
+   - **战术多头分工（默认 $K=4$）**：4 个动态 Query 可自然分工提取不同维度的战场摘要（如左路攻防态势、右路攻防态势、己方前排推进状态、高价值法术/后排目标），并通过展平投影直接映射至时序主干维度。
+   - **四阶段科学消融阶梯（Ablation Ladder）**：通过配置项 `entity_pool_mode` 与 `entity_pool_queries` 支持依次对比：
+     1. `Masked Mean`（Baseline）
+     2. `1 Static Query`（$K=1, Q_t = Q_{\text{static}}$）
+     3. `4 Static Queries`（$K=4, Q_t = Q_{\text{static}}$）
+     4. `4 Static + Dynamic Queries`（$K=4, Q_t = Q_{\text{static}} + \operatorname{MLP}(c_t)$，v2 正式默认方案）
 
 标准 attention + 4 倍 FFN 的 Transformer block 主权重约为 12d²。时序部分约 16×12×768² = 113.25M；实体部分约 4×12×256² = 3.15M；加 embedding、投影、pooling 和输出头，目标约 118–125M。此为估算，实施时脚本统计实际 trainable parameters，不把估算写成实测。
 
@@ -267,66 +323,91 @@ position ∈ deployment_grid
 - 保存原始结构化历史及边界；优化时使用当前权重重新编码，不能把采样阶段旧权重得到的 embedding/KV cache 当成固定训练输入。
 - 正确性基线：每个目标动作使用最多 128 步的同一段原始观测窗口，重新前向，计算该动作概率。训练与采样使用相同窗口定义。
 - 优化时可以把目标窗口批量化、使用重叠窗口和有效 loss mask，但必须先验证与基线概率一致。不要假设简单滚动 KV cache 与每次重算截断窗口完全等价。
-- rollout 阶段权重冻结；更新结束后清理/重建缓存。跨 episode 清空记忆，不能串局。
+- rollout 阶段权重冻结；可在采样环中缓存 `EntityFrameEncoder` 的单帧输出向量，但更新结束后必须清理/重建缓存。跨 episode 清空记忆，不能串局。
 - 如以后采用带 burn-in 的近似记忆训练，要明确它引入的近似，并监控更新前新旧 log-prob 差异。
 
-## 7. 数据来源与预热
+## 7. 数据来源与预热（v2）
 
-### 7.1 人类数据的定位
+### 7.1 人类数据的定位与开环失步截断（Prefix Cutoff）
 
 没有人类示范也能启动：先完成随机合法策略与小模型自博弈 PPO；简单脚本/短场景作为奖励稀疏时的辅助课程。通用阶段优先获取质量可靠的多卡组示范，专精阶段才集中使用目标电车卡组示范。不要只筛电车回放后称为通用 BC 数据集。
 
 可审查数据：
 
 - [IL_Replay](https://huggingface.co/datasets/VanguardX101/IL_Replay)：数据卡称 252,238 场回放、17,836,160 条动作；数据量并不意味着所选电车卡组或当前版本有足够覆盖。
+- `cochon_full_1100` 等本地清洗回放源。
 - [KataCR Replay Dataset](https://github.com/wty-yy/Clash-Royale-Replay-Dataset)：用于研究轨迹处理流程；不假设其速猪等数据能直接替代电车专家示范。
 - 自己用目标卡组进行对局，同步记录内存状态、操作请求和执行事件。其优势是接口对齐，不保证示范水平是专家。
 
-事件回放必须由兼容引擎重建状态。先抽查规则版本、卡牌等级、初始手牌、出牌时刻和落点；重放后验证关键事件、塔血/终局结果。明显重建失败的对局不进入 BC。
+**v2 数据质量与防漂移准则**：
+1. **开环失步前缀截断（Prefix Cutoff）**：由于 `import_il_replay.py` 在固定 11 级 `crforge` 中开环重放人类动作，一旦某个动作因等级/机制差异未能执行（`omitted_commands`），后续模拟器战场状态将与人类当时的真实画面发生蝴蝶效应分叉。**v2 严禁无条件使用低覆盖率整局回放的全部后续帧**：当累计 `omitted_commands` 超过阈值（如 $>1$ 次）或发生关键卡牌漏放时，仅保留失步分叉**之前**的前缀有效帧进入 BC 监督，截断丢弃分叉后的错位状态-动作对。
+2. **跨数据源去重**：合并多个分片目录（如 `reconstructed_bc_expanded` 与 `broad_bc`）时，必须按源回放唯一标识（或双方卡组+动作序列哈希）去重，严禁同一局回放重复进入训练集或跨训练/验证集泄漏。
 
-先审计 100 场、再做 1,000 场的小实验，确认数据价值后再扩大。这是批次规划，不是“达到该场数必定学会”的承诺。
-
-### 7.2 BC 训练
+### 7.2 BC 训练与先验校准（v2）
 
 - 输入动作之前的观测历史；对齐决策时刻与生效时刻，防止看到出兵结果再预测动作。
-- 目标：选牌交叉熵 + 仅出牌时的位置交叉熵。
-- 保留 WAIT；按出牌/等待分层采样，并记录采样比例。需要时校正权重，避免训练出的节奏与真实时间分布不同。
+- **目标损失函数（v2）**：
+  - 选牌损失：动作类型交叉熵（WAIT + 4 手牌槽位 + 2 技能）。
+  - 落点损失（Tile Loss v2）：仅在实际出牌帧计算；除精确落点交叉熵外，支持对合法格内的目标落点 $(x^*, y^*)$ 施加 $\sigma \approx 1.0$ 格的 **2D 高斯软标签平滑（2D Gaussian Label Smoothing）**，使相邻 1~2 格获得平滑梯度，直接加速 `play_tile_mean_l1_distance` 和 `play_tile_within_2` 收敛；同时允许为 Tile Head 配置更高的专属学习率（如主干 `3e-5`、落点头 `3e-4`）。
+- **过采样先验偏移校准（Logit Prior Calibration）**：
+  - 自然回放中出牌帧占比仅约 $p_{\text{nat}} \approx 2.2\%$，训练期采用 50% 出牌 / 50% WAIT 平衡采样（$p_{\text{train}} = 0.5$）会产生约 $\Delta \text{logit} = \ln\frac{p_{\text{train}}}{1-p_{\text{train}}} - \ln\frac{p_{\text{nat}}}{1-p_{\text{nat}}} \approx +3.79$ 的出牌偏置，导致模型在等待帧出现高达 41% 的误出牌率。
+  - **v2 校准方案**：训练期保持 50% 出牌过采样以保障 Card/Tile Head 梯度密度，同时支持：(a) 将英雄技能（`action >= 2305`）单独分层采样（如固定占比 2%~5%），消除 `ability_accuracy = 0.0`；(b) 在训练 CE loss 中引入先验偏置修正，或在导出至评估/PPO 初始化时对 `WAIT` logit 补偿先验偏移 $\Delta \text{logit}$，使闭环对局的出牌节奏贴合真实人类圣水管理。
 - 将固定时间槽内的人类动作映射为确定规则；若 250ms 内存在多个动作，记录冲突率，必要时提高动作频率，不任意丢掉后续动作。
-- 按完整对局划分训练/验证/测试；尽可能按玩家和时间再隔离。来自同一回放双方的轨迹必须在同一 split。
-- 指标：选牌、位置距离、WAIT 精确率/召回率，以及实际闭环对局胜率。验证 loss 下降不等于策略变强。
-- 可以使用轻量辅助预测（下一步塔血变化、事件），但先建立纯 BC 基线，避免多个目标同时调参。
+- 按完整对局划分训练/验证/测试；来自同一回放双方的轨迹必须在同一 split。
+- **验证集协议**：同时报告平衡抽样指标（`bc_v3/balanced_wait_play_accuracy`、`play_slot_accuracy`、`play_tile_accuracy`、`play_tile_mean_l1_distance`、`play_tile_within_2`）与自然分布下的每秒误出牌率（False Play Rate）及闭环胜率。
 
-## 8. RL：PPO + 对手池
+## 8. RL：PPO + 零和稠密奖励塑形 + 独立 Critic + 对手池（v2）
 
-### 8.1 初始参数（待实测调整）
+### 8.1 核心超参数（v2 修订版）
 
-| 项目 | 起点 |
+| 项目 | v2 推荐配置与修订原因 |
 |---|---|
-| 算法 | PPO clipped actor-critic + GAE |
-| 采样 | 同步或有明确 policy version 边界的批量采样 |
-| rollout 总量 | 每轮约 16k–64k 有效决策步，依吞吐和显存调整 |
-| PPO epochs | 2–4，KL 过大提前停止 |
+| 算法 | PPO clipped actor + **独立 Transformer Critic**（`--critic-mode independent`）+ GAE |
+| 采样与环境生命周期 | **跨 update 保持模拟器环境常驻**（单一常驻进程连续执行 `--updates N`，禁止每个 update 重启子进程销毁正在进行的比赛） |
+| rollout 总量与有效批大小 | 每轮至少收集完整对局；优化时增大梯度累积（如 `microbatch=4~8, grad_accumulation=16~32`，**有效 batch size $\ge 64$**），保证每个优化步包含足够多的出牌帧 |
+| PPO epochs 与 KL 早停 | Actor 1–2 epochs，Critic 2–4 epochs；**KL 早停必须在完整 Accumulation Step（有效 batch $\ge 64$）或滑动窗口均值上判定**，严禁因单个 4-sample microbatch 的瞬时噪声提前终止整个 rollout 的学习 |
 | clip epsilon | 0.1–0.2 |
-| RL learning rate | 1e-5–5e-5 起扫；BC 可从 1e-4 附近试验 |
-| gamma | 固定 0.25s 步长下先试 0.999；按实际时间调整 |
-| GAE lambda | 0.95 起点，与更长优势传播设置对照 |
-| value coefficient | 0.5 起点 |
+| RL learning rate | Actor `1e-5–3e-5`，独立 Critic `5e-5–1e-4` |
+| **gamma（v2 拉长）** | 固定 0.25s（4 Hz）步长下由 `0.999` 升级为 **`0.9995`**（单步衰减半衰期更长，适配 3~5 分钟对局） |
+| **GAE lambda（v2 拉长）** | 由 `0.95` 升级为 **`0.98`**；与 $\gamma=0.9995$ 组合后，**有效 GAE 视野从 $19.6$ 步（4.9 秒）扩展至 $48.8$ 步（12.2 秒）**，完整覆盖“沉底 → 过桥 → 交战 → 打塔掉血”的战术周期 |
+| Critic 预热（Warmup） | 正式更新 Actor 前，先冻结 Actor 运行至少 2 轮 rollout / 4 场完整对局预热独立 Critic |
 | entropy coefficient | 0.001–0.01 起扫，分别记录选牌/位置熵 |
 | max grad norm | 0.5–1.0 |
 | rollout 前向 | eval 模式、冻结采样权重 |
 
-上述不是已验证最优参数。用固定步长和持续多分钟的对局时，不能机械照搬 gamma=0.99；需要检查有效折扣时间尺度和长程价值学习。变步长时可用 gamma(dt)=gamma_ref^(dt/0.25)。GAE 截断会影响信用分配，需要与价值误差一起评估。
+终局 terminated 不 bootstrap；采样批次截断但比赛未结束则以最终未 reset 观测 bootstrap（且跨 update 保持该局继续进行）。客户端断线/采集故障单独标记，不自动当负局或正常终局。
 
-终局 terminated 不 bootstrap；采样批次截断但比赛未结束则 bootstrap。客户端断线/采集故障单独标记，不自动当负局或正常终局。
+### 8.2 奖励函数设计（v2：终局主导 + 零和塔血/破塔潜势塑形 + 满费溢出惩罚）
 
-### 8.2 奖励
+针对 v1 纯终局奖励在 720~1200 步长局中信用分配过于稀疏的问题，v2 直接利用 `crforge` 观测 Header 中的实时塔血（`own_left_hp`, `own_right_hp`, `own_king_hp`, `enemy_left_hp`, `enemy_right_hp`, `enemy_king_hp` 及其 `*_max_hp`）、皇冠数（`crowns`, `crowns_enemy`）和圣水（`elixir`），构建**严格零和、无刷分漏洞的四项合成奖励**：
 
-- 主奖励：胜 +1、负 -1、平 0。
-- 辅助项优先采用小权重 potential shaping：r_shape = beta × (gamma × Phi(next) − Phi(now))。
-- Phi 可以使用双方归一化塔血差；terminal 的 potential 设为 0，避免终局残留项改变优化目标。
-- 先与只使用终局奖励的基线比较，再决定是否保留辅助项。
-- 不按出牌次数、花掉圣水、产生单位直接发正奖励。
-- 非法动作主要通过 mask 消除；部署失败单独诊断，不能用大量惩罚掩盖适配器问题。
+$$r_t = r_t^{\text{terminal}} + r_t^{\text{hp\_delta}} + r_t^{\text{crown\_delta}} + r_t^{\text{overflow}}$$
+
+1. **终局胜负主导项 $r_t^{\text{terminal}}$**：
+   - 非终局步为 $0$；终局步：**胜 $+1.0$、平 $0.0$、负 $-1.0$**。
+   - 保持终局胜负占整局累计回报的最大比重，确保“赢得比赛”始终是唯一终极目标。
+
+2. **零和塔血比例变化项 $r_t^{\text{hp\_delta}}$（高频攻防反馈）**：
+   - 定义状态 $s_t$ 下的归一化塔血潜势函数 $\Phi_{\text{hp}}(s_t)$：
+     $$\Phi_{\text{hp}}(s_t) = w_{\text{princess}} \left( \frac{\text{own\_L}_t}{\text{max\_L}} + \frac{\text{own\_R}_t}{\text{max\_R}} - \frac{\text{enemy\_L}_t}{\text{max\_L}} - \frac{\text{enemy\_R}_t}{\text{max\_R}} \right) + w_{\text{king}} \left( \frac{\text{own\_K}_t}{\text{max\_K}} - \frac{\text{enemy\_K}_t}{\text{max\_K}} \right)$$
+   - 每步奖励取相邻帧潜势差（或折扣潜势差）：
+     $$r_t^{\text{hp\_delta}} = \Phi_{\text{hp}}(s_t) - \Phi_{\text{hp}}(s_{t-1})$$
+   - **默认权重**：公主塔满血权重 $w_{\text{princess}} = 0.15$（打空敌方一座公主塔累计 $+0.15$，己方掉一塔累计 $-0.15$）；国王塔满血权重 $w_{\text{king}} = 0.20$。
+   - **核心性质**：(a) **零和对称**，天然支持推进卡组“卖小血换大血/换费反打”，不会诱导消极死守；(b) **裂项求和受限（Telescoping Sum）**，整局累计严格有界（不超过 $\pm 0.50$），绝不会刷分盖过终局胜负。
+
+3. **破塔（皇冠）里程碑项 $r_t^{\text{crown\_delta}}$**：
+   - 破塔不仅获得皇冠，还会扩大己方部署禁区、显著改变战场态势，因此单独奖励破塔突变：
+     $$r_t^{\text{crown\_delta}} = w_{\text{crown}} \cdot \big[ (\text{crowns}_t - \text{crowns}_{t-1}) - (\text{crowns\_enemy}_t - \text{crowns\_enemy}_{t-1}) \big]$$
+   - **默认权重**：$w_{\text{crown}} = 0.15$（每拿一冠瞬间 $+0.15$，每丢一冠瞬间 $-0.15$）。结合血量项，推掉一座满血公主塔共获得 $0.15 + 0.15 = +0.30$ 的稠密奖励。
+
+4. **满费溢出微惩罚 $r_t^{\text{overflow}}$（防止满费挂机）**：
+   - 当己方圣水接近满格（`elixir >= 99000`，即 $\ge 9.9$ 费）且当前动作仍选择 `WAIT`（`action == 0`）时：
+     $$r_t^{\text{overflow}} = -0.001 \quad (\text{约合满费发呆每秒扣 } -0.004)$$
+   - 既允许在 7~9 费时耐心攒费沉底，又杜绝满 10 费后不作为的退化策略。
+
+5. **后期退火机制（Shaping Annealing，可选）**：
+   - 训练前中期（如前 200~500 updates）保持 $100\%$ 塑形权重以快速建立攻防交换意识与 Critic 估值；后期可按余弦或线性退火将 $r_t^{\text{hp\_delta}} + r_t^{\text{crown\_delta}}$ 权重逐步衰减至 $30\% \sim 50\%$，进一步向纯终局胜率对齐。
+   - 依旧禁止按“单纯出牌次数、花掉圣水、产生单位数量”直接发正奖励。
 
 ### 8.3 自博弈修订方案：一个 learner，多卡组，冻结历史版本
 
@@ -547,6 +628,20 @@ artifacts/             # 报告、配置快照、checkpoint 索引
 - 新增 `src/cr_rl/opponents/league.py`：PFSP 对手采样、结果统计和 regret matching。新增三套通用卡组配置，启动时从固定 game tables 校验卡牌行。
 - 本地 tiny self-play smoke：2 env × 16 decisions、32 learner transitions，MPS update 成功；尚未跑到终局，因此不是胜率或策略进步证据。
 - 测试：Ruff 全仓通过；Pytest 12/12 通过；trajectory、truncation GAE、PFSP 和 RPS regret matching 均有单测。
+
+### 14.3 v2 架构、数据与奖励塑形升级清单（2026-11-03，修好后直接启动 v2 全新重训）
+
+- [x] 诊断 119M BC 落点头（Tile Head）梯度消失与退化根因，实现 `tile_query_residual=True`、`tile_head_fp32=True` 及独立 Tile Head 学习率（`--tile-learning-rate 3e-4`），启动 `119m_tile_fix_trial_20261103` A/B 验证。
+- [x] 实现独立 Transformer Critic（`--critic-mode independent`，`training_architecture_version=3`）与完整对局 Monte Carlo 预热机制，消除价值回归梯度对 BC 预热 Actor 的破坏。
+- [x] **Static + Dynamic Query 实体注意力池化**：在 `EntityFrameEncoder` 中实现 $Q_t = Q_{\text{static}} + \operatorname{MLP}(c_t)$（默认 $K=4$ 个动态查询 token，支持 `Masked Mean` / `1 Static` / `4 Static` / `4 Static+Dynamic` 四档消融配置），并将双方卡组池化特征前置注入每帧上下文。
+- [x] **Tile Head 2D 空间归纳偏置与软标签**：为 $18 \times 32 = 576$ 个 `tile_queries` 注入归一化 $(x, y) \in [0, 1]^2$ 2D 网格坐标编码，并在 `bc_batch.py` 中支持合法格 $\sigma=1.0$ 的 2D 高斯平滑软标签监督。
+- [x] **实体离散特征 Embedding 化**：将场上实体 `row`（兵种表 ID）、`kind`、`state`、`buff` 改为 `nn.Embedding` 查表，将 `flags` 拆解为 16 维二值 bit 特征，并为 `next_card` / `enemy_play_card` 共享 `card_embedding`。
+- [x] **BC 数据防漂移与先验校准**：对 `broad` 模式开环重放实施失步前缀截断（Prefix Cutoff）与跨分片回放去重；对英雄技能（`action >= 2305`）单独分层采样；校准 50/50 过采样引起的 WAIT/PLAY Logit 先验偏移（$\Delta \text{logit} \approx +3.79$）。
+- [x] **奖励函数 v2 落地**：在 `train_selfplay.py` 采样循环中接入基于 `crforge` Header 的零和塔血潜势差（$w_{\text{princess}}=0.15, w_{\text{king}}=0.20$）、皇冠破塔差（$w_{\text{crown}}=0.15$）与满费溢出等待微惩罚（$-0.001$/step），同步将 GAE 参数更新为 $\gamma=0.9995, \lambda=0.98$（有效视野 ~12.2s）。
+- [x] **PPO 训练器稳定性与吞吐修复**：将 KL 早停改为按完整梯度累积步（有效 batch $\ge 64$）判定，解决 4-sample microbatch 噪声引起的 4 步早停；跨 update 保持模拟器进程常驻不断局；支持 `current vs current` 双座样本入库与 Rollout 单帧实体特征缓存。
+- [ ] **启动 v2 Clean-Slate 全新重训**：停掉 Colab 上受旧架构/旧数据影响的 v1 任务，基于清洗去重后的 BC 分片与完整 v2 模型从头训练 v2 BC $\to$ v2 独立 Critic 预热 $\to$ v2 稠密奖励自博弈 PPO。
+
+Implementation and acceptance evidence: `docs/V2_IMPLEMENTATION_20261103.md`. Checks above cover engineering validation, not policy strength. Fresh BC is running; formal critic warmup and PPO remain pending BC evaluation. Conditional BC timing/data repairs and the 12-game multi-deck follow-up are recorded in `docs/BC_TIMING_REPAIR_20261103.md`; full-elixir stalling was absent in that cohort, but improved policy strength is not established. The subsequent source-consistent opening-cycle reconstruction and step-1408 continuation are documented in `docs/BC_OPENING_CYCLE_REPAIR_20261103.md`; full BC and formal critic/PPO training remain pending.
 
 ## 15. 资料与证据边界
 

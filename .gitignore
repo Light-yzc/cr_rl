@@ -5,5 +5,11 @@ artifacts/**
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+*.egg-info/
+wandb/
+.env
+.env.*
+!.env.example
+.netrc
 *.py[cod]
 .DS_Store

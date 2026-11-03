@@ -1,0 +1,224 @@
+version: 2
+decks:
+  human_popular_02:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - Log
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - Skeletons
+  human_popular_05:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - BarbLog
+  - Skeletons
+  human_popular_08:
+  - AngryBarbarians
+  - Giant
+  - Zap
+  - ElectroWizard
+  - ZapMachine
+  - Heal
+  - Rage
+  - DarkPrince
+  human_popular_09:
+  - ElectroDragon
+  - Berserker
+  - AngryBarbarians
+  - Golem
+  - SkeletonDragons
+  - Tornado
+  - BarbLog
+  - Elixir Collector
+  human_popular_10:
+  - AngryBarbarians
+  - GoldenKnight
+  - FirespiritHut
+  - ThreeMusketeers
+  - IceGolemite
+  - Zap
+  - Heal
+  - Elixir Collector
+  human_popular_23:
+  - Zap
+  - Giant
+  - Bowler
+  - DarkWitch
+  - GoblinGang
+  - InfernoTower
+  - Miner
+  - Fireball
+  human_popular_30:
+  - Snowball
+  - Balloon
+  - Musketeer
+  - BombTower
+  - Skeletons
+  - IceGolemite
+  - BarbLog
+  - Miner
+  royale_20261103_01:
+  - BarbLog
+  - Berserker
+  - MovingCannon
+  - ElectroWizard
+  - AngryBarbarians
+  - FirespiritHut
+  - Golem
+  - Zap
+  royale_20261103_06:
+  - BlowdartGoblin
+  - GoblinBarrel
+  - IceSpirits
+  - InfernoTower
+  - Knight
+  - Princess
+  - SkeletonArmy
+  - Log
+  royale_20261103_07:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - RageBarbarian
+slots:
+  human_popular_02:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_05:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_08:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_09:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_10:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_23:
+  - 1
+  - 2
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_30:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_01:
+  - 0
+  - 0
+  - 0
+  - 2
+  - 1
+  - 0
+  - 0
+  - 1
+  royale_20261103_06:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 1
+  - 0
+  royale_20261103_07:
+  - 0
+  - 0
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 1
+provenance:
+  human_popular_02:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 321
+  human_popular_05:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 188
+  human_popular_08:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 171
+  human_popular_09:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 169
+  human_popular_10:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 163
+  human_popular_23:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 124
+  human_popular_30:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 105
+  royale_20261103_01:
+    source: https://royaleapi.com/decks/stats/barbarian-barrel,berserker,cannon-cart,electro-wizard-hero,elite-barbarians-ev1,furnace,golem,zap-ev1
+    retrieved_date: '2026-11-03'
+  royale_20261103_06:
+    source: https://royaleapi.com/decks/stats/dart-goblin,goblin-barrel-ev1,ice-spirit,inferno-tower,knight-hero,princess,skeleton-army-ev1,the-log
+    retrieved_date: '2026-11-03'
+  royale_20261103_07:
+    source: https://royaleapi.com/decks/stats/arrows,bandit,battle-ram-ev1,electro-wizard-hero,furnace,giant-skeleton,heal-spirit,lumberjack-ev1
+    retrieved_date: '2026-11-03'
+compatibility: reset and 120 legal-action decisions passed; not exhaustive mechanics
+  QA
+split: eval
