@@ -1,16 +1,16 @@
 # Agent 交接 TODO
 
-更新时间：2026-11-04 18:06，Asia/Shanghai。工作目录 `/Users/Regenin/Code/rl_training`。
+更新时间：2026-11-04 20:40，Asia/Shanghai（补测完成后交接）。工作目录 `/Users/Regenin/Code/rl_training`。
 
-**接手结论：训练已跑通且行为改善，但通用强度提升尚未证实。六轮PPO已完整备份；128局新种子复测在120局后中断，优先补齐最后8局。不要从头重训或重复已有120局。**
+**接手结论：128局复测已经补齐并独立复算：76胜52负（59.375%），按卡组配对聚类95%区间53.125%–65.625%，符号检验p=.01953125，通过这次固定复测的提升判据。模型仍为六轮PPO generation6，支持相对BC起点改善，不代表全卡组/官方客户端达标。下一步是CUDA数值对照和持续学习曲线，不要重跑这128局。**
 
 ## 1. 当前真实状态
 
-- HEAD：`16f1604`。当前大量源码/文档修改和新增文件均未提交，`git status --short` 可见；务必保留，不能reset/clean。`artifacts/`、`.cache/`、权重与私有日志被Git忽略，换机器只复制Git代码会丢失本地证据。
-- 实时 `colab sessions` 仅有 **`drive-reader-cpu`**，标准CPU，endpoint `m-s-euw4b6-34lot7qz7dd2s`；Drive已挂载 `/content/drive`。没有活动GPU。
+- 当前HEAD：`f2079e9`（update todos，前序基线`16f1604`）。此前大部分改动已纳入该提交；当前仍有`plan.md`、`todo.md`、恢复控制器修改和新增恢复测试未提交，以实时`git status --short`为准；务必保留，不能reset/clean。`artifacts/`、`.cache/`、权重与私有日志被Git忽略，换机器只复制Git代码会丢失本地证据。
+- 实时 `colab sessions` 仅有 **`drive-reader-cpu`**，标准CPU，endpoint `m-s-euw4b6-34lot7qz7dd2s`；Drive已挂载 `/content/drive`。无活动GPU；补测GPU已完成、备份并按配置释放。
 - `ppo-seed-eval-l4` 已不在线。Drive旧status仍写running，这不是活进程证明；服务器assignment消失已确认。最后一批缺失，退出原因未确定，不得写成正常完成/已自动释放。
 - 本地CPU连接观察器日志最后是 `watch_failed: TransportError`。观察器已退出不等于CPU VM消失；本轮服务器确认CPU仍在线。需恢复观察器时只附着现有session/kernel，不能自动新建。
-- 用户要保留便宜CPU作长期读盘入口；Colab不能保证永久在线。用户希望单台GPU，CPU读盘会话可并存。当前交接任务不新开GPU。
+- 用户要保留便宜CPU作长期读盘入口；Colab不能保证永久在线。用户希望单台GPU，CPU读盘会话可并存。补测GPU `ppo-eval-finish-l4` 已完成且释放。用户准备换设备，本轮结束后不再自动开GPU。
 - 用户多次强调先把模型弄好，官方安卓客户端实测延后；不要把客户端安装/登录当成当前前置步骤。
 
 ## 2. 已完成与结论
@@ -49,9 +49,9 @@
 - 新旧初始log-prob最大差约.0155，CUDA BF16全覆盖一致性未验证。
 - 使用真正Actor5与rollout6两个非WAIT完整128帧样本，CPU FP32缓存/完整概率最大差约7e-8，训练/推理模式也约8e-8；两例相同lane/seat，覆盖有限，不能代替CUDA BF16检查。
 - 模拟器三卡组100完整随机合法局：0故障/截断/非法，3局逐位重放；61项上游专项机制测试通过。未证明官方客户端保真、完整Sparky电击重置/碰撞/目标切换对齐。
-- 最近全量本地测试：**178 passed**；本轮仅文档交接未重复跑全套。远端复测源码包对应177项，新增连接异常测试在之后加入。
+- 最近全量本地测试：**184 passed**；补测L4同样184项通过。原首次复测源码包对应177项。
 
-## 3. 当前最优先：补齐128局复测
+## 3. 128局复测已完成（保留原恢复记录供审计）
 
 ### 已冻结协议
 
@@ -64,7 +64,7 @@
 - pairing_seed20261103，每chunk4配对=8局，共16chunk=128局。
 - 重复seed必须按deck pair聚类统计，不能把四个seed当四套独立卡组；完整固定批次结束再结论，不根据中途胜率追加到显著。
 
-### 已有120局
+### 中断时已有120局（历史，已补齐）
 
 本轮18:06通过CPU重新读取：120局累计71胜49负、无无效局；只是未完成批次的描述性统计，不能替代128局聚类区间和正式提升结论。
 
@@ -77,17 +77,26 @@ Drive：`MyDrive/cr_rl/runs/121m_ppo_seed_replication_20261104/`。
 - **只缺 `seed_5000000/pairs_028` 的8局**。截至最近读取，无`summary.json`、无`completed.json`，每个已存chunk都有execution_audit，120局native parity通过。
 - 保留原120局，补局必须使用原来评估源码和协议，不改变batch大小、seed、权重或WAIT bias。评估采样不是batch-size invariant。
 
-### 接手执行步骤
+### 原恢复执行步骤（已完成；不要重复启动）
 
-- [ ] 先 `colab sessions`、通过CPU挂载重新列Drive，确认缺失仍仅最后8局。不要用旧running status证明活进程。
-- [ ] 写恢复入口：验证每个已存chunk的权重/代码/deck SHA、seed/seat/pair与协议、evaluation SHA对execution audit、完整原生回放数；只跳过完整合格chunk，不删除/覆盖已有结果。
-- [ ] 当前 `scripts/colab_seed_replication.py` **不能直接恢复**：out存在即拒绝，目录创建也不允许已存在；必须先实现仅补缺失chunk的恢复逻辑，保留原协议。不要直接重跑16块。
+- [x] 先 `colab sessions`、通过CPU挂载重新列Drive，确认缺失仍仅最后8局。不要用旧running status证明活进程。
+- [x] 写恢复入口：验证每个已存chunk的权重/代码/deck SHA、seed/seat/pair与协议、evaluation SHA对execution audit、完整原生回放数；只跳过完整合格chunk，不删除/覆盖已有结果。
+- [x] `scripts/colab_seed_replication.py --resume` 已实现：严格核对注册协议，已有chunk通过seed/seat/权重/代码SHA、evaluation-to-audit SHA、每个原生回放SHA校验后跳过；部分残留回放拒绝覆盖。新权重不变，评估/聚合源码SHA与原运行相同。184项本地测试通过。
 - [ ] 评估原源码归档在原PPO目录 `replication_source.tar.gz`，268120bytes，SHA `7dd9a553f28cf1a308bb2b3910764c00c078b205ccbc61e6a7a390cc530562b1`；receipt同目录。先核对归档，再恢复到新GPU。
 - [ ] 更省授权的方案：用已挂载CPU准备最后8局所需的权重/源码/表格小包，传到唯一新L4；GPU结束后结果传回CPU再写Drive。仅当传输已实际验证且保持权限边界时采用。否则给用户真实的新VM挂载OAuth链接。不能复用别的VM凭据服务地址或把未挂载当成已授权。
 - [ ] 若新GPU需Drive授权，`colab drivemount --session NAME`务必`tty:true`，等待用户完成后才向PTY发换行。非PTY会提前提交400；确认已挂载再启动。
-- [ ] 补局后使用 `summarize_repeated_evaluations(protocol,names,evaluations)` 聚合全部16块，独立复算并校验SHA，再发布summary/completed。原128局若仍未齐，不能生成正式提升结论。
-- [ ] 汇总胜负、deck-pair聚类区间、符号检验、各卡组、成功出牌与满费等待；满足预注册规则才写“本固定复测显示提升”，不外推高手或官方客户端。
-- [ ] 更新本todo、plan、README和结果文档，备份完整回放/代码/报告后释放唯一GPU，CPU保留。
+- [x] 补局后使用 `summarize_repeated_evaluations(protocol,names,evaluations)` 聚合全部16块，独立复算并校验SHA，再发布summary/completed。原128局若仍未齐，不能生成正式提升结论。
+- [x] 汇总胜负、deck-pair聚类区间、符号检验、各卡组、成功出牌与满费等待；满足预注册规则才写“本固定复测显示提升”，不外推高手或官方客户端。
+- [x] 更新本todo、plan、README和结果文档，备份完整回放/代码/报告后释放唯一GPU，CPU保留。
+
+### 完成证据与迁移包
+
+- 128局=76胜52负0平，最后8局5胜3负；16块均有完整原生审计及回放，CPU独立读回，本地聚合器逐字段复算一致。
+- 完成summary SHA：`e5a36ce149f68a0262afbbc968bcfee584705402e17145b1575d7c455eec9109`；Drive原复测目录有`summary.json`、`completed.json`。
+- 本地证据 `artifacts/ppo_seed_replication_20261104/final_readback.json`；解释见 `docs/PPO_REPLICATION_RESULTS_20261104.md`。
+- 新设备包：`MyDrive/cr_rl/handoffs/20261104/cr_rl_handoff_20261104.tar.gz`，相邻`archive_receipt.json`记录SHA。先核对SHA、解压、读`RESTORE.md`，克隆包内`repository.bundle`后运行overlay脚本恢复未提交文件。包内manifest逐文件校验，已实测clone+overlay可还原。
+- 包不含模型、BC原始数据、venv和凭据；模型/优化器仍在原PPO Drive目录。新设备需正常登录Colab，不能复制OAuth文件。
+- 旧“只缺8局”的描述均为中断历史，不是当前待办。
 
 ## 4. 后续计划（仍未完成，按结果推进）
 
@@ -153,4 +162,4 @@ cd /Users/Regenin/Code/rl_training
 colab sessions
 ```
 
-本次交接只写状态与TODO，不改训练算法、不丢弃权重、不宣称完成整个长期目标。接手优先完成第3节，再按第4节推进。
+本次交接只写状态与TODO，不改训练算法、不丢弃权重、不宣称完成整个长期目标。第3节已完成；接手先验证迁移包和Drive完成标记，再按第4节推进。

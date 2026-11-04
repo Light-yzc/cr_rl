@@ -4,6 +4,14 @@ An experiment-first, shared multi-deck Clash Royale agent: human replay BC -> PP
 
 ## Verified training status — 2026-11-04
 
+The completed 128-game fresh-seed replication scored **76–52 (59.4%)** against
+the exact BC initialization, with a deck-pair cluster interval of 53.1–65.6%
+and one-sided paired sign-test p=0.0195. This supports improvement on the fixed
+evaluation cohort, with overlapping-deck/generalization limits. See
+[final replication results](docs/PPO_REPLICATION_RESULTS_20261104.md) and
+[device handoff TODO](todo.md). Both GPU evaluation runtimes are released; the
+CPU Drive reader remains available subject to Colab lifetime limits.
+
 The two BC repair/comparison arms reached step5096. Their fixed quick cohort
 shows mixed results: slot accuracy 33.6% → 38.2%, placement L1 11.8 → 11.1,
 but placement within two cells 20.0% → 18.2%. The user requested exploratory

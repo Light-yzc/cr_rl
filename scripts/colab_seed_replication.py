@@ -1,5 +1,6 @@
 """Run the preregistered frozen-policy seed replication on an existing mounted VM."""
 
+import argparse
 import json
 import os
 import subprocess
@@ -13,24 +14,72 @@ from cr_rl.evaluation.repeated import summarize_repeated_evaluations
 from cr_rl.training.persistence import atomic_json, copy_verified, file_sha256
 
 
+def verify_saved_chunk(directory, protocol, names, block, start):
+    """Accept only complete registered games backed by the exact native replays."""
+    report = directory / "evaluation.json"
+    audit_path = directory / "execution_audit.json"
+    if not report.exists() or not audit_path.exists():
+        raise ValueError("Incomplete saved chunk; preserve it for recovery")
+    result = json.loads(report.read_text())
+    if any(
+        result.get(key) != protocol["evaluation_code_sha256"]
+        for key in ("evaluation_code_sha256", "evaluation_code_file_sha256_at_end")
+    ):
+        raise ValueError("Saved evaluation code hash differs")
+    subset = dict(protocol, pair_start=start, pair_count=protocol["chunk_pairs"], blocks=[block])
+    summarize_repeated_evaluations(subset, names, [result])
+    audit = json.loads(audit_path.read_text())
+    if audit["evaluation_sha256"] != file_sha256(report) or len(audit["games"]) != result["games"]:
+        raise ValueError("Saved native audit does not match evaluation")
+    for index, (game, match) in enumerate(zip(audit["games"], result["matchups"], strict=True)):
+        if not game["native_outcome_parity"] or any(
+            game[key] != match[key] for key in ("pair", "learner_seat", "reward")
+        ):
+            raise ValueError("Saved native outcome or identity differs")
+        if game["replay_sha256"] != file_sha256(directory / f"match_{index:03d}.json"):
+            raise ValueError("Saved native replay checksum differs")
+    return result
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     original = Path("/content/drive/MyDrive/cr_rl/runs/121m_ppo_pilot_20261104")
     destination = original.parent / "121m_ppo_seed_replication_20261104"
     out = root / "artifacts/121m_ppo_seed_replication_20261104"
     if not original.is_dir() or not os.environ.get("TBE_RUNTIME_ADDR"):
         raise RuntimeError("Use the existing Colab kernel after mounting Drive")
-    if out.exists():
+    if out.exists() and not args.resume:
         raise RuntimeError("Replication already exists; inspect its worker before restarting")
-    out.mkdir(parents=True)
+    out.mkdir(parents=True, exist_ok=args.resume)
     protocol = json.loads((original / "followup_protocol.json").read_text())
     protocol["evaluation_code_sha256"] = file_sha256(root / "scripts/evaluate_policy.py")
     protocol["aggregator_sha256"] = file_sha256(root / "src/cr_rl/evaluation/repeated.py")
     if file_sha256(root / protocol["deck_pool"]) != protocol["deck_pool_sha256"]:
         raise ValueError("Deck pool changed since registration")
+    if args.resume:
+        registered = json.loads((destination / "protocol.json").read_text())
+        if registered != protocol:
+            raise ValueError("Resume code, weights or registered protocol changed")
+        from cr_rl.training.runtime_supervision import process_alive
+
+        if (out / "status.json").exists():
+            local = json.loads((out / "status.json").read_text())
+            if process_alive(local.get("pid")) or process_alive(local.get("child_pid")):
+                raise RuntimeError("Existing replication worker alive; refusing duplicate")
     atomic_json(out / "protocol.json", protocol)
     copy_verified(out / "protocol.json", destination / "protocol.json")
-    copy_verified(Path(__file__), destination / "source/colab_seed_replication.py")
+    copy_verified(
+        Path(__file__),
+        destination
+        / (
+            "source/colab_seed_replication_resume.py"
+            if args.resume
+            else "source/colab_seed_replication.py"
+        ),
+    )
     began = time.monotonic()
     child = None
 
@@ -94,6 +143,18 @@ def main():
                 protocol["chunk_pairs"],
             ):
                 directory = out / f"seed_{block['simulator_seed_base']}" / f"pairs_{start:03d}"
+                saved = destination / directory.relative_to(out)
+                if args.resume and (saved / "evaluation.json").exists():
+                    result = verify_saved_chunk(saved, protocol, names, block, start)
+                    evaluations.append(result)
+                    status(
+                        "verified_saved_chunk", finished_chunks=len(evaluations), total_chunks=16
+                    )
+                    continue
+                if args.resume and saved.exists() and any(saved.glob("match_*.json")):
+                    raise ValueError(
+                        "Saved chunk contains partial replays; inspect before rerunning"
+                    )
                 directory.mkdir(parents=True)
                 command = [
                     sys.executable,
