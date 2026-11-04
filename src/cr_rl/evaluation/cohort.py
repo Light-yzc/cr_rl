@@ -33,3 +33,23 @@ def heldout_pairings(names, count, start=0, seed=20261103):
     if start + count > len(pairs):
         raise ValueError(f"Requested cohort exceeds {len(pairs)} unique held-out deck pairs")
     return [(i, *pairs[i]) for i in range(start, start + count)]
+
+
+def paired_match_specs(
+    names, count, start=0, *, simulator_seed_base=1000000, pairing_seed=20261103
+):
+    """Repeat a fixed deck cohort with fresh simulator seeds, preserving seat swaps.
+
+    The simulator uses positive signed 32-bit seeds. Policy sampling has its own
+    independent seed in the evaluator; neither seed is inferred from outcomes.
+    """
+    pairs = heldout_pairings(names, count, start, seed=pairing_seed)
+    if not isinstance(simulator_seed_base, int) or not 0 < simulator_seed_base <= 2**31 - 1:
+        raise ValueError("Simulator seed base must be a positive signed 32-bit integer")
+    if simulator_seed_base + pairs[-1][0] > 2**31 - 1:
+        raise ValueError("Simulator seed range exceeds signed 32-bit integers")
+    return [
+        dict(pair=pair, seed=simulator_seed_base + pair, learner_seat=seat, deck0=a, deck1=b)
+        for pair, a, b in pairs
+        for seat in (0, 1)
+    ]

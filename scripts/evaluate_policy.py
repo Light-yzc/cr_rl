@@ -16,7 +16,7 @@ from train_selfplay import _forward, _policy_inputs, _windows
 
 from cr_rl.data.observations import CrForgeObservationAdapter
 from cr_rl.envs.crforge import CrForgeVector
-from cr_rl.evaluation.cohort import heldout_pairings
+from cr_rl.evaluation.cohort import paired_match_specs
 from cr_rl.models import ActorCritic, ActorPolicy, ModelConfig
 from cr_rl.training.inference import FrozenInference
 from cr_rl.training.persistence import atomic_json, file_sha256
@@ -50,11 +50,15 @@ def main():
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--pair-start", type=int, default=0)
     parser.add_argument("--sampling-seed", type=int, default=20261103)
+    parser.add_argument("--simulator-seed-base", type=int, default=1000000)
+    parser.add_argument("--pairing-seed", type=int, default=20261103)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--frame-cache", action="store_true")
     parser.add_argument("--wait-logit-bias", type=float, default=0.0)
     parser.add_argument("--opponent-wait-logit-bias", type=float, default=0.0)
     args = parser.parse_args()
+    if (args.out / "evaluation.json").exists() or list(args.out.glob("match_*.json")):
+        parser.error("Use a fresh evaluation directory to preserve frozen evidence")
     torch.manual_seed(args.sampling_seed + args.pair_start)
     model, cfg = load_policy(args.policy, args.device, args.wait_logit_bias)
     opponent, other_cfg = load_policy(args.opponent, args.device, args.opponent_wait_logit_bias)
@@ -67,22 +71,23 @@ def main():
     names = list(league["decks"])
     if len(names) < 2:
         raise ValueError("Need multiple held-out decks")
-    pairs = heldout_pairings(names, args.pairs, args.pair_start)
+    matchups = paired_match_specs(
+        names,
+        args.pairs,
+        args.pair_start,
+        simulator_seed_base=args.simulator_seed_base,
+        pairing_seed=args.pairing_seed,
+    )
     count = args.pairs * 2
     seeds, deck0, deck1, forms0, forms1, learner_seats = [], [], [], [], [], []
-    matchups = []
-    for pair, a, b in pairs:
-        # Same physical decks and simulator seed; swap policy ownership between seats.
-        for seat in (0, 1):
-            seeds.append(1000000 + pair)
-            learner_seats.append(seat)
-            deck0.append(league["decks"][a])
-            deck1.append(league["decks"][b])
-            forms0.append(league.get("slots", {}).get(a, [0] * 8))
-            forms1.append(league.get("slots", {}).get(b, [0] * 8))
-            matchups.append(
-                {"pair": pair, "seed": seeds[-1], "learner_seat": seat, "deck0": a, "deck1": b}
-            )
+    for match in matchups:
+        a, b = match["deck0"], match["deck1"]
+        seeds.append(match["seed"])
+        learner_seats.append(match["learner_seat"])
+        deck0.append(league["decks"][a])
+        deck1.append(league["decks"][b])
+        forms0.append(league.get("slots", {}).get(a, [0] * 8))
+        forms1.append(league.get("slots", {}).get(b, [0] * 8))
     args.out.mkdir(parents=True, exist_ok=True)
     active = np.ones(count, dtype=bool)
     started = time.perf_counter()
@@ -209,7 +214,9 @@ def main():
         "policy_optimizer_steps": model.checkpoint_optimizer_steps,
         "opponent_wait_logit_bias": args.opponent_wait_logit_bias,
         "protocol": "fixed physical decks/seeds, paired policy-seat swap, stochastic sampling",
-        "deck_selection": "unique pairs from seeded held-out pool (seed 20261103)",
+        "deck_selection": f"unique pairs from seeded held-out pool (seed {args.pairing_seed})",
+        "pairing_seed": args.pairing_seed,
+        "simulator_seed_base": args.simulator_seed_base,
         "pair_start": args.pair_start,
         "pair_count": args.pairs,
         "sampling_seed": args.sampling_seed + args.pair_start,

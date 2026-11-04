@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -130,6 +131,8 @@ def prepare_validation_arrays(
     root,
     dataset_sha256,
     progress=None,
+    persistent_root=None,
+    persistence_event=None,
 ):
     """Freeze exact history row membership; original labels and validation draws are unchanged."""
     rows = np.unique(np.asarray(rows, dtype=np.int64))
@@ -146,23 +149,53 @@ def prepare_validation_arrays(
     root.mkdir(parents=True, exist_ok=True)
     manifest = root / "complete.json"
     fields = [("observations", obs, histories), ("masks", masks, rows)]
+    cache = getattr(obs.arrays[0], "cache", None)
+    reserve = getattr(cache, "minimum_free_bytes", 16 * 1024**3 if cache else 0)
+    required = (
+        sum(
+            len(selected) * int(np.prod(array.shape[1:])) * array.dtype.itemsize
+            for _, array, selected in fields
+        )
+        + 1024**2
+    )
+    restored = False
+    if persistent_root is not None and not manifest.exists():
+        from cr_rl.data.persistent_cache import restore_validation_cache
+
+        try:
+            result = restore_validation_cache(
+                persistent_root,
+                root,
+                signature=signature,
+                dataset_sha256=dataset_sha256,
+                context=context,
+                maximum_bytes=required,
+                reserve_bytes=reserve,
+            )
+            restored = result is not None
+            if restored and persistence_event:
+                persistence_event(result)
+        except (OSError, ValueError, KeyError) as error:
+            # A derived cache is optional. Reconstruct from the original shards
+            # after a failed remote copy; never accept unverified data.
+            manifest.unlink(missing_ok=True)
+            if persistence_event:
+                persistence_event(
+                    {
+                        "event": "restore_failed_rebuilding",
+                        "error": str(error),
+                        "signature": signature,
+                    }
+                )
     if manifest.exists():
         record = json.loads(manifest.read_text())
         if record["signature"] != signature:
             raise ValueError("Compact validation identity mismatch")
         for name, _, _ in fields:
-            if file_sha256(root / f"{name}.npy") != record["sha256"][name]:
+            if not restored and file_sha256(root / f"{name}.npy") != record["sha256"][name]:
                 raise ValueError("Compact validation checksum mismatch")
     else:
-        required = (
-            sum(
-                len(selected) * int(np.prod(array.shape[1:])) * array.dtype.itemsize
-                for _, array, selected in fields
-            )
-            + 1024**2
-        )
-        cache = getattr(obs.arrays[0], "cache", None)
-        reserve = getattr(cache, "minimum_free_bytes", 16 * 1024**3 if cache else 0)
+        build_began = time.monotonic()
         if shutil.disk_usage(root).free < required + reserve and callable(
             getattr(cache, "_evict", None)
         ):
@@ -192,8 +225,30 @@ def prepare_validation_arrays(
                 validation_rows=len(rows),
                 history_rows=len(histories),
                 sha256=hashes,
+                build_seconds=time.monotonic() - build_began,
             ),
         )
+    if persistent_root is not None and not restored:
+        from cr_rl.data.persistent_cache import publish_validation_cache
+
+        try:
+            result = publish_validation_cache(root, persistent_root, reserve_bytes=reserve)
+            if persistence_event:
+                persistence_event(result)
+        except (OSError, ValueError, KeyError) as error:
+            if persistence_event:
+                persistence_event(
+                    {
+                        "event": "publish_failed_using_local",
+                        "error": str(error),
+                        "signature": signature,
+                    }
+                )
+    for name, array, selected in fields:
+        loaded = np.load(root / f"{name}.npy", mmap_mode="r", allow_pickle=False)
+        if loaded.shape != (len(selected), *array.shape[1:]) or loaded.dtype != array.dtype:
+            raise ValueError("Compact validation array layout mismatch")
+        loaded._mmap.close()
     return tuple(
         SelectedRows(selected, np.load(root / f"{name}.npy", mmap_mode="r"), array.shape)
         for name, array, selected in fields

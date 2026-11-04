@@ -44,6 +44,8 @@ def hierarchical_bc_loss(
     card_class_weights: torch.Tensor | None = None,
     tile_label_sigma: float = 0.0,
     conditional_card_loss: bool = False,
+    timing_prior: float | None = None,
+    sampled_action_prior: float | None = None,
 ):
     """Separate card/WAIT supervision from the conditional tile decision.
 
@@ -84,6 +86,22 @@ def hierarchical_bc_loss(
         timing_act = torch.where(is_act, timing_loss, 0.0).sum() / is_act.sum().clamp_min(1)
         present = (is_wait.any().float() + is_act.any().float()).clamp_min(1)
         timing = (timing_wait + timing_act) / present
+        if timing_prior is not None:
+            if not (
+                0 < timing_prior < 1
+                and sampled_action_prior is not None
+                and 0 < sampled_action_prior < 1
+            ):
+                raise ValueError("Natural timing requires target and sampled priors in (0, 1)")
+            # Importance weighting changes ONLY timing. Conditional card/tile
+            # gradients retain their action-rich sampling density. The sampled
+            # prior is measured over the epoch, not estimated per microbatch.
+            weights = torch.where(
+                is_act,
+                timing_prior / sampled_action_prior,
+                (1 - timing_prior) / (1 - sampled_action_prior),
+            )
+            timing = (timing_loss * weights).mean()
         slot_loss = conditional_loss.sum() / is_act.sum().clamp_min(1)
         card_objective = timing + slot_loss
     elif card_class_weights is not None:

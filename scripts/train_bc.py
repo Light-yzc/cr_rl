@@ -24,6 +24,7 @@ from cr_rl.training.bc_optimizer import (
     optimizer_parameter_names,
 )
 from cr_rl.training.persistence import atomic_json, copy_verified, file_sha256
+from cr_rl.training.readout_upgrade import load_upgraded_readouts
 
 
 def bc_tracking_options(path, resume):
@@ -93,6 +94,15 @@ def main() -> None:
         help="Explicitly migrate BC weights to query residual + FP32 placement",
     )
     parser.add_argument("--tile-learning-rate", type=float)
+    parser.add_argument("--upgrade-readouts", action="store_true")
+    parser.add_argument("--shard-mix-window", type=int, default=None)
+    parser.add_argument("--timing-objective", choices=("balanced", "natural"), default=None)
+    parser.add_argument(
+        "--max-updates",
+        type=int,
+        default=0,
+        help="Bound new optimizer updates; save resumable mid-epoch state",
+    )
     parser.add_argument("--upgrade-spatial", action="store_true")
     parser.add_argument("--stable-split", action="store_true")
     parser.add_argument("--split-registry", type=Path)
@@ -115,9 +125,17 @@ def main() -> None:
     parser.add_argument("--validation-samples", type=int, default=1024)
     parser.add_argument("--resume", type=Path)
     parser.add_argument(
+        "--evaluate-only", action="store_true", help="Evaluate current weights without updates"
+    )
+    parser.add_argument(
         "--init-from-bc", type=Path, help="Weights-only initialization for a new, expanded dataset"
     )
     parser.add_argument("--cache-dir", type=Path)
+    parser.add_argument(
+        "--persistent-validation-cache",
+        type=Path,
+        help="Optional zstd archive store; restore to local SSD before use",
+    )
     parser.add_argument("--backup-dir", type=Path)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb-name")
@@ -145,6 +163,8 @@ def main() -> None:
     dataset_path = args.dataset
     if args.resume and args.init_from_bc:
         parser.error("Use either --resume or --init-from-bc")
+    if args.evaluate_only and not (args.resume or args.init_from_bc):
+        parser.error("--evaluate-only requires an existing checkpoint")
     if args.carry_optimizer and not args.init_from_bc:
         parser.error("--carry-optimizer requires --init-from-bc")
     if args.upgrade_tile_head and not args.init_from_bc:
@@ -153,6 +173,10 @@ def main() -> None:
         parser.error("--upgrade-spatial requires --init-from-bc")
     if args.tile_learning_rate is not None and args.tile_learning_rate <= 0:
         parser.error("tile learning rate must be positive")
+    if args.upgrade_readouts and not args.init_from_bc:
+        parser.error("--upgrade-readouts requires --init-from-bc; use a new output run")
+    if args.max_updates < 0 or (args.shard_mix_window is not None and args.shard_mix_window < 1):
+        parser.error("Invalid update bound or shard mix window")
     if (dataset_path / "dataset.manifest.json").is_file():
         dataset_path = dataset_path / "dataset.manifest.json"
     if dataset_path.name == "dataset.manifest.json":
@@ -315,6 +339,7 @@ def main() -> None:
     reference = args.resume or args.init_from_bc
     if reference:
         source_state = torch.load(reference, map_location="cpu", weights_only=False, mmap=True)
+    loaded_checkpoint_step = source_state.get("optimizer_steps") if source_state else None
     source_config = ModelConfig(**source_state["config"]) if source_state else cfg
     if args.v2 and args.init_from_bc:
         parser.error("Start v2 from scratch; later v2 dataset stages inherit without --v2")
@@ -332,6 +357,8 @@ def main() -> None:
         ("ability_fraction", 0.1 if v2 else 0.0),
         ("tile_label_sigma", 1.0 if v2 else 0.0),
         ("card_prior_correction", v2),
+        ("shard_mix_window", 1),
+        ("timing_objective", "balanced"),
     ):
         if getattr(args, name) is None:
             setattr(args, name, previous_settings.get(name, default))
@@ -339,6 +366,10 @@ def main() -> None:
         parser.error("Invalid ability fraction or tile label sigma")
     if args.bc_objective == "conditional" and args.card_prior_correction:
         parser.error("Conditional BC uses balanced timing; pass --no-card-prior-correction")
+    if args.timing_objective == "natural" and args.bc_objective != "conditional":
+        parser.error("Natural timing weighting requires the conditional objective")
+    if args.upgrade_readouts and (not v2 or source_config.readout_version != 1):
+        parser.error("Readout upgrade requires an existing representation-v2/readout-v1 checkpoint")
     if args.tile_learning_rate is None and source_state:
         args.tile_learning_rate = source_state.get("training_settings", {}).get(
             "tile_learning_rate"
@@ -354,6 +385,7 @@ def main() -> None:
             "tile_query_residual": args.upgrade_tile_head or source_config.tile_query_residual,
             "tile_head_fp32": args.upgrade_tile_head or source_config.tile_head_fp32,
             "spatial_fourier": args.upgrade_spatial or source_config.spatial_fourier,
+            "readout_version": 2 if args.upgrade_readouts else source_config.readout_version,
         }
     )
     device = args.device
@@ -382,9 +414,19 @@ def main() -> None:
                 expected_config[name] = getattr(source_config, name)
         if args.upgrade_spatial:
             expected_config["spatial_fourier"] = source_config.spatial_fourier
+        if args.upgrade_readouts:
+            expected_config["readout_version"] = source_config.readout_version
         if state.get("stage") != "bc" or source_config.__dict__ != expected_config:
             raise ValueError("BC initialization stage/model configuration mismatch")
-        model.load_state_dict(state["model"], strict=True)
+        if args.upgrade_readouts:
+            print(
+                json.dumps(
+                    {"phase": "readout_migration", **load_upgraded_readouts(model, state["model"])}
+                ),
+                flush=True,
+            )
+        else:
+            model.load_state_dict(state["model"], strict=True)
         parent_bc_sha256 = file_sha256(args.init_from_bc)
         if args.carry_optimizer:
             initial_optimizer_state = state["optimizer"]
@@ -398,7 +440,13 @@ def main() -> None:
         fused=args.fused_optimizer and device.startswith("cuda"),
     )
     if initial_optimizer_state is not None:
-        carry_bc_optimizer(model, optimizer, initial_optimizer_state, initial_optimizer_names)
+        carry_bc_optimizer(
+            model,
+            optimizer,
+            initial_optimizer_state,
+            initial_optimizer_names,
+            allow_new=args.upgrade_readouts,
+        )
         del initial_optimizer_state
     dataset_hash = file_sha256(dataset_path)
     data_report = {
@@ -421,6 +469,9 @@ def main() -> None:
         "fused_optimizer": args.fused_optimizer,
         "epoch_mode": "all_plays" if args.all_plays else "sampled",
         "stream_cache_gib": args.stream_cache_gib,
+        "persistent_validation_cache": (
+            str(args.persistent_validation_cache) if args.persistent_validation_cache else None
+        ),
         "checkpoint_every_steps": args.checkpoint_every_steps,
         "validation_every_steps": args.validation_every_steps,
         "stable_split": args.stable_split,
@@ -438,6 +489,10 @@ def main() -> None:
         "ability_fraction": args.ability_fraction,
         "card_prior_correction": args.card_prior_correction,
         "bc_objective": args.bc_objective,
+        "readout_version": cfg.readout_version,
+        "shard_mix_window": args.shard_mix_window,
+        "timing_objective": args.timing_objective,
+        "natural_action_prior": float((actions[train_rows] != 0).mean()),
         "wait_margin_before": args.wait_margin_before,
         "wait_margin_after": args.wait_margin_after,
         "training_wait_pool": len(train_waits),
@@ -485,6 +540,8 @@ def main() -> None:
                 ("bc_objective", "joint"),
                 ("wait_margin_before", 0),
                 ("wait_margin_after", 0),
+                ("shard_mix_window", 1),
+                ("timing_objective", "balanced"),
             ):
                 if settings.get(name, default) != getattr(args, name):
                     raise ValueError(f"Mid-epoch resume cannot change {name}")
@@ -558,6 +615,16 @@ def main() -> None:
             args.context,
             args.out.parent / ".validation_cache",
             dataset_hash,
+            persistent_root=args.persistent_validation_cache,
+            persistence_event=lambda event: print(
+                json.dumps(
+                    {
+                        "phase": "bc_persistent_cache",
+                        **event,
+                    }
+                ),
+                flush=True,
+            ),
             progress=lambda field, done, total: print(
                 json.dumps(
                     {
@@ -723,7 +790,9 @@ def main() -> None:
 
     started = time.perf_counter()
     baseline_path = args.out.with_suffix(".baseline.json")
-    if args.resume and resume_baseline is not None:
+    if args.evaluate_only:
+        baseline = {}
+    elif args.resume and resume_baseline is not None:
         baseline = resume_baseline
     elif args.resume and baseline_path.exists():
         baseline = json.loads(baseline_path.read_text())
@@ -735,7 +804,9 @@ def main() -> None:
     natural_baseline = {}
     if len(natural_rows):
         natural_path = args.out.with_suffix(".natural_baseline.json")
-        if args.resume and resume_natural_baseline is not None:
+        if args.evaluate_only:
+            natural_baseline = {}
+        elif args.resume and resume_natural_baseline is not None:
             natural_baseline = resume_natural_baseline
         elif args.resume and natural_path.exists():
             natural_baseline = json.loads(natural_path.read_text())
@@ -878,6 +949,27 @@ def main() -> None:
                 },
             )
 
+    if args.evaluate_only:
+        report = {
+            "phase": "bc_evaluation_only",
+            "optimizer_steps": loaded_checkpoint_step,
+            "checkpoint_sha256": file_sha256(reference) if reference else None,
+            "dataset_sha256": dataset_hash,
+            "validation": evaluate(val_rows),
+            "natural_validation": evaluate(natural_rows) if len(natural_rows) else {},
+            "seconds": time.perf_counter() - started,
+            "optimizer_updates": 0,
+        }
+        path = args.out.with_suffix(".evaluation.json")
+        atomic_json(path, report)
+        if args.backup_dir:
+            copy_verified(path, args.backup_dir / path.name)
+        print(json.dumps(report), flush=True)
+        if tracking:
+            tracking.finish()
+        return
+
+    run_start_step = optimizer_steps
     for epoch in range(start_epoch, args.epochs):
         if resume_progress:
             selected = resume_progress["selected"]
@@ -898,6 +990,7 @@ def main() -> None:
                 offsets=obs.offsets if args.stream_cache_gib and hasattr(obs, "offsets") else None,
                 ability_rows=train_rows[actions[train_rows] >= 2305],
                 ability_fraction=args.ability_fraction,
+                shard_mix_window=args.shard_mix_window,
             )
             first_sample = 0
             epoch_losses, card_losses, position_losses = [], [], []
@@ -912,6 +1005,7 @@ def main() -> None:
             else None
         )
         optimizer.zero_grad(set_to_none=True)
+        sampled_action_prior = float((actions[selected] != 0).mean())
         group_loss = group_card = group_position = 0.0
         group_timing = group_slot = 0.0
         print(
@@ -957,6 +1051,12 @@ def main() -> None:
                     card_class_weights=prior_weights,
                     tile_label_sigma=args.tile_label_sigma,
                     conditional_card_loss=args.bc_objective == "conditional",
+                    timing_prior=(
+                        data_report["natural_action_prior"]
+                        if args.timing_objective == "natural"
+                        else None
+                    ),
+                    sampled_action_prior=sampled_action_prior,
                 )
             if not torch.isfinite(loss):
                 raise FloatingPointError("Nonfinite BC loss")
@@ -991,6 +1091,16 @@ def main() -> None:
                                 "samples_in_epoch": min(start + args.batch_size, len(selected)),
                                 "loss": loss_value,
                                 "optimizer_batch_loss": group_loss / accumulated,
+                                "timing_loss": group_timing / accumulated,
+                                "conditional_slot_loss": group_slot / accumulated,
+                                "position_loss": group_position / accumulated,
+                                "grad_norm": float(norm.cpu()),
+                                "learning_rates": [g["lr"] for g in optimizer.param_groups],
+                                "tile_spatial_gate": (
+                                    float(model.tile_spatial_gate.detach().tanh().cpu())
+                                    if cfg.readout_version == 2
+                                    else None
+                                ),
                                 "elapsed_seconds": time.perf_counter() - started,
                             }
                         ),
@@ -1037,6 +1147,35 @@ def main() -> None:
                         "position_losses": position_losses,
                     },
                 )
+            if (
+                updated
+                and args.max_updates
+                and optimizer_steps - run_start_step >= args.max_updates
+                and start + args.batch_size < len(selected)
+            ):
+                save_checkpoint(
+                    epoch,
+                    {
+                        "selected": selected,
+                        "next_sample": start + args.batch_size,
+                        "epoch_losses": epoch_losses,
+                        "card_losses": card_losses,
+                        "position_losses": position_losses,
+                    },
+                )
+                print(
+                    json.dumps(
+                        {
+                            "phase": "bounded_trial_completed",
+                            "optimizer_steps": optimizer_steps,
+                            "new_updates": optimizer_steps - run_start_step,
+                        }
+                    ),
+                    flush=True,
+                )
+                if tracking:
+                    tracking.finish()
+                return
         report = {
             "epoch": epoch + 1,
             "action_labels_seen": int((actions[selected] != 0).sum()),
@@ -1069,6 +1208,8 @@ def main() -> None:
                     },
                 }
             )
+        if args.max_updates and optimizer_steps - run_start_step >= args.max_updates:
+            break
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     if tracking:

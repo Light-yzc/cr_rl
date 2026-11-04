@@ -25,9 +25,10 @@ from cr_rl.opponents import OpponentEntry, OpponentPool
 from cr_rl.opponents.admission import SnapshotAdmission
 from cr_rl.training.advantages import compute_gae
 from cr_rl.training.episode_trace import EpisodeTrace, on_policy_seats
-from cr_rl.training.inference import FrozenInference, history_tensors
+from cr_rl.training.inference import FrozenInference
 from cr_rl.training.initialization import initialize_from_bc
 from cr_rl.training.persistence import atomic_json, copy_verified, publish_update
+from cr_rl.training.prepared_history import PreparedHistoryBatches
 from cr_rl.training.rewards import RewardConfig, shaped_rewards
 from cr_rl.training.separate import optimize_separate
 
@@ -600,22 +601,21 @@ class PersistentSelfplay:
             old_logp = np.zeros(len(refs), dtype=np.float32)
             actions = np.zeros(len(refs), dtype=np.int64)
 
-        def make_batch(indices):
-            windows, time_masks, legal = [], [], []
-            for index in indices:
-                trace, position, seat = refs[int(index)]
-                window, time_mask = trace.window(position, seat, self.cfg.context_len)
-                windows.append(window)
-                time_masks.append(time_mask)
-                legal.append(trace.masks[position][seat])
-            return history_tensors(
-                np.stack(windows), np.stack(time_masks), np.stack(legal), self.adapter, self.device
-            )
+        preparation_started = time.perf_counter()
+        make_batch = (
+            PreparedHistoryBatches(refs, self.cfg.context_len, self.adapter, self.device)
+            if refs
+            else None
+        )
+        preparation_metadata = make_batch.metadata if make_batch else {"bytes": 0, "samples": 0}
+        self.emit(phase="inputs_prepared", **preparation_metadata)
+        preparation_seconds = time.perf_counter() - preparation_started
 
         behavior = copy.deepcopy(self.actor).eval() if actor_enabled else self.actor
         if actor_enabled:
             for parameter in behavior.parameters():
                 parameter.requires_grad_(False)
+        optimization_started = time.perf_counter()
         result = optimize_separate(
             self.actor,
             self.critic,
@@ -643,6 +643,9 @@ class PersistentSelfplay:
             actor_enabled=actor_enabled,
             emit=self.emit,
         )
+        result["metrics"]["input_preparation_seconds"] = preparation_seconds
+        result["metrics"]["optimization_seconds"] = time.perf_counter() - optimization_started
+        result["metrics"]["prepared_input_gib"] = preparation_metadata["bytes"] / 2**30
         if not actor_enabled and result["critic_steps"]:
             self.warmup["rounds"] += 1
             self.warmup["games"] += len(completed)

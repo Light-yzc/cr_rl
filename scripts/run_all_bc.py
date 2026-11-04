@@ -50,6 +50,9 @@ def main():
     parser.add_argument("--final-epochs", type=int, default=1)
     parser.add_argument("--carry-initial-optimizer", action="store_true")
     parser.add_argument("--stream-cache-gib", type=float, default=8.0)
+    parser.add_argument("--persistent-validation-cache", type=Path)
+    parser.add_argument("--shard-mix-window", type=int, default=1)
+    parser.add_argument("--timing-objective", choices=("balanced", "natural"), default="balanced")
     args = parser.parse_args()
     if args.final_epochs < 1:
         parser.error("--final-epochs must be positive")
@@ -243,6 +246,12 @@ def main():
                 ):
                     command[command.index(flag) + 1] = value
                 command += [
+                    "--tile-learning-rate",
+                    "3e-4",
+                    "--shard-mix-window",
+                    str(args.shard_mix_window),
+                    "--timing-objective",
+                    args.timing_objective,
                     "--bc-objective",
                     "conditional",
                     "--wait-margin-before",
@@ -258,6 +267,8 @@ def main():
                 ]
             if args.split_registry:
                 command += ["--split-registry", str(args.split_registry)]
+            if args.persistent_validation_cache:
+                command += ["--persistent-validation-cache", str(args.persistent_validation_cache)]
             if (stage / "bc.pt").exists():
                 command += ["--resume", str(stage / "bc.pt")]
             else:

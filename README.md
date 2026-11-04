@@ -4,16 +4,25 @@ An experiment-first, shared multi-deck Clash Royale agent: human replay BC -> PP
 
 ## Verified training status — 2026-11-04
 
-The active model is the 121M architecture-v2 multi-deck BC policy on Colab Linux/L4.
-Stage 1 completed at optimizer step 2616; Stage 2 is training on a frozen dataset
-with 134,377 training card-play labels. Full-period replay reconstruction remains
-in progress. This is not yet a completed RL training run.
+The two BC repair/comparison arms reached step5096. Their fixed quick cohort
+shows mixed results: slot accuracy 33.6% → 38.2%, placement L1 11.8 → 11.1,
+but placement within two cells 20.0% → 18.2%. The user requested exploratory
+PPO before the remaining BC promotion evaluation; the formal promotion gate
+has not passed and has not been weakened.
 
-See the [latest progress and recovery notes](docs/TRAINING_PROGRESS_20261104.md)
-and the [validation I/O repair](docs/VALIDATION_IO_REPAIR_20261104.md).
-The repair passed 113 tests and real-model output comparisons. Training updates,
-W&B uploads and a new Drive checkpoint have been independently verified.
-PPO promotion still requires the paired multi-deck strength and timing gates.
+The bounded six-update PPO pilot is complete and Drive generation6 is published:
+29,132 learner samples, 54 Actor steps, 26 complete games, no faulted samples.
+Fixed paired-seat evaluation against the exact BC initialization is complete:
+19–13 on 32 held-out games (59.4%; paired 95% interval 43.8–75.0%), plus
+5–1 on six trained-deck games. Full-elixir waiting fell from 22.5 to 5.2 seconds
+per held-out game, but the predeclared strength-improvement rule did not pass.
+See the [verified final results](docs/PPO_RESULTS_20261104.md). Read the
+[plan acceptance matrix](docs/PLAN_STATUS_20261104.md),
+[PPO pilot](docs/PPO_PILOT_20261104.md), and
+[measured L4 efficiency changes](docs/PPO_EFFICIENCY_20261104.md).
+The repaired model has 122.62M parameters, with the existing entity/temporal
+backbone and upgraded readouts. Official-client parity, longer learning curves,
+300M learning comparisons and deployment remain incomplete.
 
 Datasets, model weights, credentials, private logs and local replay artifacts are
 excluded from Git. Historical `artifacts/...` references identify local or Drive
@@ -69,12 +78,12 @@ Start PPO after BC and acceptance (the generated league file contains multiple c
 ```bash
 uv run python scripts/train_selfplay.py --model production --device cuda \
   --init-from-bc artifacts/bc.pt --decks artifacts/league_train.yaml \
-  --envs 2 --steps 1536 --epochs 2 --batch-size 1 --grad-accumulation 8 \
+  --envs 2 --steps 1536 --epochs 2 --batch-size 8 --grad-accumulation 8 \
   --updates 100 --out artifacts/general_run
 # Continue from the same run directory:
 uv run python scripts/train_selfplay.py --model production --device cuda \
   --decks artifacts/league_train.yaml \
-  --envs 2 --steps 1536 --epochs 2 --batch-size 1 --grad-accumulation 8 \
+  --envs 2 --steps 1536 --epochs 2 --batch-size 8 --grad-accumulation 8 \
   --updates 100 --out artifacts/general_run --resume artifacts/general_run/ppo_latest.pt
 ```
 

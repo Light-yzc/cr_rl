@@ -7,7 +7,7 @@ import torch
 
 def is_placement_parameter(name):
     return name in {"tile_queries", "slot_embedding"} or name.startswith(
-        ("tile_context.", "tile_cross_attention.", "tile_actor.")
+        ("tile_context.", "tile_cross_attention.", "tile_actor.", "tile_spatial_", "tile_film.")
     )
 
 
@@ -32,7 +32,7 @@ def optimizer_parameter_names(model, optimizer):
     return [[names[id(p)] for p in group["params"]] for group in optimizer.param_groups]
 
 
-def carry_bc_optimizer(model, optimizer, saved, saved_names=None):
+def carry_bc_optimizer(model, optimizer, saved, saved_names=None, allow_new=False):
     if saved_names is None:
         if len(saved["param_groups"]) != 1:
             raise ValueError(
@@ -51,7 +51,8 @@ def carry_bc_optimizer(model, optimizer, saved, saved_names=None):
             groups_by_name[name] = group
     target = optimizer.state_dict()
     target_names = optimizer_parameter_names(model, optimizer)
-    if set(by_name) != {name for names in target_names for name in names}:
+    target_set = {name for names in target_names for name in names}
+    if set(by_name) != target_set and not (allow_new and set(by_name) < target_set):
         raise ValueError("Optimizer migration cannot change the model parameter set")
     target["state"] = {}
     for group, names in zip(target["param_groups"], target_names, strict=True):
@@ -64,12 +65,16 @@ def carry_bc_optimizer(model, optimizer, saved, saved_names=None):
             "capturable",
             "differentiable",
         ):
-            values = [groups_by_name[name][key] for name in names if key in groups_by_name[name]]
+            values = [
+                groups_by_name[name][key]
+                for name in names
+                if name in groups_by_name and key in groups_by_name[name]
+            ]
             if values:
                 if any(value != values[0] for value in values):
                     raise ValueError(f"Cannot merge optimizer groups with different {key}")
                 group[key] = values[0]
         for index, name in zip(group["params"], names, strict=True):
-            if by_name[name] is not None:
+            if by_name.get(name) is not None:
                 target["state"][index] = by_name[name]
     optimizer.load_state_dict(target)

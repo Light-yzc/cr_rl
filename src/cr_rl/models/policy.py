@@ -37,12 +37,17 @@ class ModelConfig:
     entity_pooling: str = "mean"
     entity_fields: tuple[str, ...] = ()
     header_fields: tuple[str, ...] = ()
+    readout_version: int = 1
 
     def __post_init__(self):
         object.__setattr__(self, "entity_fields", tuple(self.entity_fields))
         object.__setattr__(self, "header_fields", tuple(self.header_fields))
         if self.representation_version not in (1, 2):
             raise ValueError("Unsupported representation version")
+        if self.readout_version not in (1, 2):
+            raise ValueError("Unsupported readout version")
+        if self.readout_version == 2 and self.representation_version != 2:
+            raise ValueError("Readout upgrade requires representation v2")
         if self.entity_pooling not in ("mean", "static1", "static4", "dynamic4"):
             raise ValueError("Unknown entity pooling ablation")
         if self.representation_version == 2:
@@ -76,6 +81,7 @@ class ModelConfig:
                     "tile_query_residual",
                     "tile_head_fp32",
                     "spatial_fourier",
+                    "readout_version",
                 )
             },
         )
@@ -111,6 +117,12 @@ class EntityFrameEncoder(nn.Module):
             nn.Linear(cfg.entity_dim, cfg.entity_dim),
         )
         self.norm = nn.LayerNorm(cfg.entity_dim)
+        if cfg.readout_version == 2:
+            self.spatial_projection = nn.Linear(cfg.entity_dim, cfg.entity_dim, bias=False)
+            # Preserve the pretrained spatial contribution at migration; its
+            # scale and mixing can now adapt rather than being hard-coded.
+            with torch.no_grad():
+                self.spatial_projection.weight.copy_(0.02 * torch.eye(cfg.entity_dim))
         if cfg.representation_version == 2:
             self.category_fields = ("row", "kind", "state", "buff_0", "buff_1", "buff_2")
             self.category_scales = (cfg.vocab_size, 8, 16, 100, 100, 100)
@@ -166,7 +178,12 @@ class EntityFrameEncoder(nn.Module):
         if self.cfg.spatial_fourier:
             if entities.shape[-1] < 6:
                 raise ValueError("Spatial encoding requires pinned entity x/y fields 4 and 5")
-            x = x + 0.02 * spatial_features(entities[..., 4:6], self.cfg.entity_dim).to(x.dtype)
+            spatial = spatial_features(entities[..., 4:6], self.cfg.entity_dim).to(x.dtype)
+            x = x + (
+                self.spatial_projection(spatial)
+                if self.cfg.readout_version == 2
+                else 0.02 * spatial
+            )
         x = self.encoder(x, src_key_padding_mask=~entity_mask.bool())
         header_state = self.header(header)
         if card_context is not None:
@@ -227,12 +244,45 @@ class HistoryEncoder(nn.Module):
             self.early_card_context = nn.Linear(
                 len(self.card_groups) * cfg.entity_dim, cfg.entity_dim, bias=False
             )
+            if cfg.readout_version == 2:
+                self.ordered_card_context = nn.ModuleDict()
+                for name, indices in zip(
+                    (
+                        "hand_card",
+                        "next_card",
+                        "deck",
+                        "enemy_seen",
+                        "pending_card",
+                        "ability_champion",
+                        "enemy_play_card",
+                    ),
+                    self.card_groups,
+                    strict=True,
+                ):
+                    if name in {"hand_card", "pending_card", "ability_champion", "enemy_play_card"}:
+                        projection = nn.Linear(
+                            len(indices) * cfg.entity_dim, cfg.entity_dim, bias=False
+                        )
+                        nn.init.zeros_(projection.weight)
+                        self.ordered_card_context[name] = projection
 
     def encode_frames(self, header, entities, entity_mask):
         card_context = None
         if self.cfg.representation_version == 2:
             summaries = []
-            for indices in self.card_groups:
+            for name, indices in zip(
+                (
+                    "hand_card",
+                    "next_card",
+                    "deck",
+                    "enemy_seen",
+                    "pending_card",
+                    "ability_champion",
+                    "enemy_play_card",
+                ),
+                self.card_groups,
+                strict=True,
+            ):
                 raw = header[..., list(indices)].float()
                 ids = (raw * self.cfg.vocab_size).round().long() + 1
                 valid = (raw >= 0) & (ids <= self.cfg.vocab_size)
@@ -240,6 +290,9 @@ class HistoryEncoder(nn.Module):
                 embedded = self.card_embedding(ids)
                 pooled = (embedded * valid.unsqueeze(-1)).sum(-2)
                 pooled = pooled / valid.sum(-1, keepdim=True).clamp_min(1)
+                if self.cfg.readout_version == 2 and name in self.ordered_card_context:
+                    ordered = (embedded * valid.unsqueeze(-1)).flatten(-2)
+                    pooled = pooled + self.ordered_card_context[name](ordered)
                 summaries.append(pooled)
             card_context = self.early_card_context(torch.cat(summaries, dim=-1))
             header = header.clone()
@@ -345,6 +398,16 @@ class ActorCritic(HistoryEncoder):
             nn.GELU(),
             nn.Linear(cfg.entity_dim // 2, 1),
         )
+        if cfg.readout_version == 2:
+            self.tile_spatial_projection = nn.Linear(cfg.entity_dim, cfg.entity_dim, bias=False)
+            nn.init.eye_(self.tile_spatial_projection.weight)
+            self.tile_spatial_norm = nn.LayerNorm(cfg.entity_dim)
+            self.tile_film = nn.Linear(cfg.entity_dim, 2 * cfg.entity_dim)
+            nn.init.zeros_(self.tile_film.weight)
+            nn.init.zeros_(self.tile_film.bias)
+            # Start with the exact old decoder, then learn how much normalized
+            # spatial readout to use. This is an explicit migrated experiment.
+            self.tile_spatial_gate = nn.Parameter(torch.zeros(()))
         self.critic = nn.Sequential(
             nn.Linear(cfg.temporal_dim, cfg.temporal_dim // 2),
             nn.GELU(),
@@ -422,6 +485,16 @@ class ActorCritic(HistoryEncoder):
         )
         if self.cfg.spatial_fourier:
             queries = queries + 0.02 * self.tile_grid_features[None, None].to(queries.dtype)
+        if self.cfg.readout_version == 2:
+            spatial = self.tile_queries + 0.02 * self.tile_grid_features[None, None]
+            normalized = self.tile_spatial_norm(
+                self.tile_queries
+                + self.tile_spatial_projection(self.tile_grid_features)[None, None]
+            )
+            conditioning = card_features + self.tile_context(context)[:, None]
+            gamma, beta = self.tile_film(conditioning).chunk(2, dim=-1)
+            modulated = normalized * (1 + gamma[:, :, None]) + beta[:, :, None]
+            queries = queries + self.tile_spatial_gate.tanh() * (modulated - spatial)
         queries = queries.reshape(batch, 4 * 576, -1)
         tile_features, _ = self.tile_cross_attention(
             queries,

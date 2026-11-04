@@ -12,7 +12,10 @@ def epoch_rows(
     offsets=None,
     ability_rows=None,
     ability_fraction=0.0,
+    shard_mix_window=1,
 ):
+    if shard_mix_window < 1:
+        raise ValueError("shard_mix_window must be positive")
     if not 0 <= ability_fraction < 1:
         raise ValueError("ability fraction is conditional on non-WAIT draws and must be in [0,1)")
     abilities = np.asarray(ability_rows if ability_rows is not None else [], dtype=np.int64)
@@ -50,7 +53,10 @@ def epoch_rows(
         order = rng.permutation(len(offsets) - 1)
         ranks = np.empty(len(order), dtype=np.int64)
         ranks[order] = np.arange(len(order))
-        selected = selected[np.argsort(ranks[shards], kind="stable")]
+        # Randomize within a bounded working set, rather than fitting one shard
+        # at a time. Window=1 preserves the historical ordering for old resumes.
+        windows = ranks[shards] // shard_mix_window
+        selected = selected[np.argsort(windows, kind="stable")]
     return selected
 
 
