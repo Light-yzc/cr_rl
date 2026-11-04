@@ -93,6 +93,10 @@ def optimize_separate(
     target_kl,
     max_grad_norm,
     actor_enabled=True,
+    cache_reference=False,
+    defer_scalar_metrics=False,
+    actor_batch_size=None,
+    critic_batch_size=None,
     emit=lambda **event: None,
 ):
     """Critic fits independently, even when actor is frozen or fails its KL guard.
@@ -101,6 +105,15 @@ def optimize_separate(
     Targets/log probabilities are snapshots, never recomputed after value fitting.
     """
     targets = value_targets.detach().clone()
+    effective_batch = batch_size * accumulation
+    actor_batch = batch_size if actor_batch_size is None else actor_batch_size
+    critic_batch = batch_size if critic_batch_size is None else critic_batch_size
+    if min(effective_batch, actor_batch, critic_batch) < 1 or any(
+        effective_batch % value for value in (actor_batch, critic_batch)
+    ):
+        raise ValueError("Actor/Critic microbatches must divide the fixed effective batch")
+    actor_accumulation = effective_batch // actor_batch
+    critic_accumulation = effective_batch // critic_batch
     advantages = advantages.detach().clone()
     old_logp = old_logp.detach().clone()
     actor_optimizer.zero_grad(set_to_none=True)
@@ -108,12 +121,17 @@ def optimize_separate(
     actor_steps = value_steps = 0
     value_losses, policy_metrics = [], []
     initial_logp_errors = []
+    reference_cache = None
+    if actor_enabled and cache_reference:
+        from cr_rl.training.reference_cache import ReferenceDistributionCache
+
+        reference_cache = ReferenceDistributionCache(len(old_logp))
     critic.train()
     for epoch in range(critic_epochs):
         permutation = rng.permutation(critic_indices)
         accumulated = samples = 0
-        for start in range(0, len(permutation), batch_size):
-            indices = permutation[start : start + batch_size]
+        for start in range(0, len(permutation), critic_batch):
+            indices = permutation[start : start + critic_batch]
             with autocast_for(device):
                 predictions = forward_inputs(critic, make_batch(indices)).float()
                 loss = 0.5 * (predictions - targets[indices]).square().mean()
@@ -122,15 +140,19 @@ def optimize_separate(
             (loss * len(indices)).backward()
             samples += len(indices)
             accumulated += 1
-            value_losses.append(float(loss.detach().cpu()))
-            if accumulated == accumulation or start + batch_size >= len(permutation):
+            value_losses.append(
+                loss.detach() if defer_scalar_metrics else float(loss.detach().cpu())
+            )
+            if accumulated == critic_accumulation or start + critic_batch >= len(permutation):
                 norm = _optimizer_step(critic, critic_optimizer, samples, max_grad_norm)
                 value_steps += 1
                 emit(
                     phase="critic_optimization",
                     epoch=epoch + 1,
                     critic_optimizer_steps=optimizer_steps(critic_optimizer),
-                    value_loss=value_losses[-1],
+                    value_loss=float(value_losses[-1].cpu())
+                    if defer_scalar_metrics
+                    else value_losses[-1],
                     grad_norm=norm,
                     learning_rate=float(critic_optimizer.param_groups[0]["lr"]),
                 )
@@ -143,18 +165,25 @@ def optimize_separate(
             permutation = rng.permutation(actor_indices)
             accumulated = samples = 0
             group_kl = group_approx_kl = 0.0
-            for start in range(0, len(permutation), batch_size):
-                indices = permutation[start : start + batch_size]
+            for start in range(0, len(permutation), actor_batch):
+                indices = permutation[start : start + actor_batch]
                 tensors = make_batch(indices)
                 with torch.no_grad(), autocast_for(device):
-                    reference, _ = forward_inputs(behavior, tensors)
+                    if reference_cache is None:
+                        reference, _ = forward_inputs(behavior, tensors)
+                    else:
+                        reference = reference_cache.evaluate(
+                            indices, lambda tensors=tensors: forward_inputs(behavior, tensors)[0]
+                        )
                 with autocast_for(device):
                     logp_all, _ = forward_inputs(actor, tensors)
                 distribution = torch.distributions.Categorical(logits=logp_all.float())
                 logp = distribution.log_prob(actions[indices])
                 if actor_steps == 0:
                     initial_logp_errors.append(
-                        float((logp.detach() - old_logp[indices]).abs().max())
+                        (logp.detach() - old_logp[indices]).abs().max()
+                        if defer_scalar_metrics
+                        else float((logp.detach() - old_logp[indices]).abs().max())
                     )
                 loss, metrics = ppo_loss_with_reference(
                     logp_all,
@@ -172,19 +201,38 @@ def optimize_separate(
                 )
                 if not torch.isfinite(loss):
                     raise FloatingPointError("Non-finite independent policy loss")
-                row = {k: float(v.cpu()) for k, v in metrics.items()}
+                row = {
+                    k: v.detach() if defer_scalar_metrics else float(v.cpu())
+                    for k, v in metrics.items()
+                }
                 # Value fitting has its own real loss/axis; policy updates have no value term.
                 row.pop("value_loss")
                 policy_metrics.append(row)
-                group_kl += row["reference_kl"] * len(indices)
-                group_approx_kl += row["approx_kl"] * len(indices)
+                group_kl += (
+                    row["reference_kl"].double() if defer_scalar_metrics else row["reference_kl"]
+                ) * len(indices)
+                group_approx_kl += (
+                    row["approx_kl"].double() if defer_scalar_metrics else row["approx_kl"]
+                ) * len(indices)
                 (loss * len(indices)).backward()
                 samples += len(indices)
                 accumulated += 1
-                if accumulated == accumulation or start + batch_size >= len(permutation):
+                if accumulated == actor_accumulation or start + actor_batch >= len(permutation):
                     # Judge the complete proposed optimizer batch, never a single microbatch.
                     average_kl = group_kl / samples
                     average_approx_kl = group_approx_kl / samples
+                    if defer_scalar_metrics:
+                        names = list(row)
+                        scalars = (
+                            torch.stack(
+                                [row[name].double() for name in names]
+                                + [average_kl, average_approx_kl, loss.detach().double()]
+                            )
+                            .cpu()
+                            .tolist()
+                        )
+                        row = dict(zip(names, scalars[: len(names)], strict=True))
+                        average_kl, average_approx_kl, current_loss = scalars[-3:]
                     if stop_for_kl(actor_optimizer, average_kl, target_kl):
                         emit(
                             phase="kl_stop",
@@ -204,7 +252,7 @@ def optimize_separate(
                         phase="optimization",
                         optimizer_steps=actor_steps,
                         optimizer_steps_total=optimizer_steps(actor_optimizer),
-                        loss=float(loss.detach().cpu()),
+                        loss=current_loss if defer_scalar_metrics else float(loss.detach().cpu()),
                         grad_norm=norm,
                         learning_rate=float(actor_optimizer.param_groups[0]["lr"]),
                         **{**row, "reference_kl": average_kl, "approx_kl": average_approx_kl},
@@ -214,17 +262,32 @@ def optimize_separate(
             if stopped:
                 break
     actor.eval()
+
+    def mean_metric(values):
+        if defer_scalar_metrics:
+            return float(torch.stack(values).double().mean().cpu())
+        return float(np.mean(values))
+
     return {
         "actor_steps": actor_steps,
         "critic_steps": value_steps,
         "actor_kl_stopped": stopped,
-        "initial_logp_errors": initial_logp_errors,
+        "initial_logp_errors": (
+            torch.stack(initial_logp_errors).cpu().tolist()
+            if defer_scalar_metrics and initial_logp_errors
+            else initial_logp_errors
+        ),
+        "reference_cache": {
+            "enabled": reference_cache is not None,
+            "forward_calls": reference_cache.forward_calls if reference_cache else 0,
+            "hit_rows": reference_cache.hit_rows if reference_cache else 0,
+        },
         "metrics": {
             **(
-                {k: float(np.mean([r[k] for r in policy_metrics])) for k in policy_metrics[0]}
+                {k: mean_metric([r[k] for r in policy_metrics]) for k in policy_metrics[0]}
                 if policy_metrics
                 else {}
             ),
-            "value_loss": float(np.mean(value_losses)) if value_losses else None,
+            "value_loss": mean_metric(value_losses) if value_losses else None,
         },
     }

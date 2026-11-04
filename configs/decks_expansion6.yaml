@@ -1,0 +1,113 @@
+version: 1
+purpose: Six ordinary-form candidates; interface acceptance before any PPO curriculum
+  expansion
+decks:
+  giant_sparky_v1:
+  - Giant
+  - ZapMachine
+  - MiniPekka
+  - Musketeer
+  - Minions
+  - Knight
+  - Zap
+  - Arrows
+  hog_cycle_v1:
+  - HogRider
+  - Musketeer
+  - Cannon
+  - Fireball
+  - Skeletons
+  - IceSpirits
+  - Log
+  - Knight
+  graveyard_control_v1:
+  - Graveyard
+  - Poison
+  - BabyDragon
+  - Tombstone
+  - Knight
+  - BarbLog
+  - IceWizard
+  - Tornado
+  human_popular_04:
+  - InfernoDragon
+  - Tombstone
+  - MegaMinion
+  - Zap
+  - IceGolemite
+  - Balloon
+  - Fireball
+  - Miner
+  human_popular_07:
+  - GoblinBarrel
+  - Valkyrie
+  - SkeletonArmy
+  - Wallbreakers
+  - Princess
+  - BlowdartGoblin
+  - IceSpirits
+  - Cannon
+  human_popular_18:
+  - Tesla
+  - Knight
+  - Archer
+  - ElectroSpirit
+  - Xbow
+  - Fireball
+  - Skeletons
+  - Log
+slots:
+  giant_sparky_v1:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  hog_cycle_v1:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  graveyard_control_v1:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_04:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_07:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_18:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0

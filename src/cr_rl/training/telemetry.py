@@ -177,6 +177,62 @@ def replay_rollout_metrics(path, telemetry):
             )
 
 
+def rollout_value_diagnostics(path):
+    """Reconstruct the original pre-fit GAE targets from immutable rollout data.
+
+    This is explained variance of the frozen rollout critic, not a post-fit value
+    measurement. Nothing here changes training arrays, rewards or old values.
+    """
+    import json
+
+    import numpy as np
+    import torch
+
+    from cr_rl.training.advantages import compute_gae
+
+    metadata = json.loads(path.with_suffix(path.suffix + ".json").read_text())
+    if metadata.get("training_driver") != "persistent-v2":
+        raise ValueError("Value diagnostics require persistent-v2 target provenance")
+    with np.load(path) as archive:
+        rewards, values, next_values = (
+            archive[name].astype(np.float32)
+            for name in ("training_rewards", "old_values", "bootstrap_values")
+        )
+        valid = (archive["learner_mask"] & archive["valid"] & archive["bootstrap_valid"]).astype(
+            bool
+        )
+        terminal, ends = archive["terminated"], archive["dones"]
+    if not valid.any() or not all(np.isfinite(x).all() for x in (rewards, values, next_values)):
+        raise ValueError("No finite valid value targets for diagnostics")
+    shape = rewards.shape[0], -1
+    advantages, targets = compute_gae(
+        torch.from_numpy(rewards.reshape(shape)),
+        torch.from_numpy(values.reshape(shape)),
+        torch.from_numpy(np.repeat(terminal[..., None], 2, axis=-1).reshape(shape)),
+        torch.from_numpy(next_values[-1].reshape(-1)),
+        gamma=metadata["gamma"],
+        gae_lambda=metadata["gae_lambda"],
+        next_values=torch.from_numpy(next_values.reshape(shape)),
+        episode_ends=torch.from_numpy(np.repeat(ends[..., None], 2, axis=-1).reshape(shape)),
+    )
+    target = targets.numpy().reshape(rewards.shape)[valid]
+    advantage = advantages.numpy().reshape(rewards.shape)[valid]
+    variance = float(target.var())
+    result = dict(
+        return_mean=float(target.mean()),
+        return_std=float(target.std()),
+        advantage_mean=float(advantage.mean()),
+        advantage_std=float(advantage.std()),
+        value_mean=float(values[valid].mean()),
+        value_std=float(values[valid].std()),
+        target_count=int(valid.sum()),
+        explained_variance_defined=variance > 1e-12,
+    )
+    if variance > 1e-12:
+        result["explained_variance"] = 1.0 - float((target - values[valid]).var()) / variance
+    return result
+
+
 def create_training_workspace(entity, project, run_name):
     """A manual workspace keeps metadata counters out of the learning dashboard."""
     import wandb_workspaces.reports.v2 as panels

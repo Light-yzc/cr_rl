@@ -12,8 +12,11 @@ class SnapshotAdmission:
     games: int = 0
     score_sum: float = 0.0
     last_failed_candidate_samples: int = 0
+    purpose: str = "promotion"
 
     def __post_init__(self):
+        if self.purpose not in ("promotion", "history"):
+            raise ValueError("Unknown snapshot gate purpose")
         if self.interval_samples < 1 or self.min_games < 1 or not 0 <= self.min_score <= 1:
             raise ValueError("Invalid snapshot admission gate")
 
@@ -24,11 +27,11 @@ class SnapshotAdmission:
         self.score_sum += (raw_result + 1) / 2
 
     def ready(self, learner_samples):
-        return (
-            learner_samples - max(self.last_admitted_samples, self.last_failed_candidate_samples)
-            >= self.interval_samples
-            and self.games >= self.min_games
-            and self.score_sum / self.games >= self.min_score
+        return learner_samples - max(
+            self.last_admitted_samples, self.last_failed_candidate_samples
+        ) >= self.interval_samples and (
+            self.purpose == "history"
+            or (self.games >= self.min_games and self.score_sum / self.games >= self.min_score)
         )
 
     def admitted(self, learner_samples):

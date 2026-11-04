@@ -2,15 +2,37 @@
 
 An experiment-first, shared multi-deck Clash Royale agent: human replay BC -> PPO -> historical-opponent self-play. Formal training starts from BC; random-initialized PPO is reserved for pipeline acceptance. The simulator is the training backend, not a claim of perfect parity with every live-client mechanic.
 
-## Verified training status — 2026-11-04
+## Verified training status — 2026-11-05
+
+The prior eight-update continuation completed through generation14, with
+67,701 learner samples. Its 64-game comparison is independently verified:
+generation14 scored 7–9 against generation6 and 10–6 against BC. Continued
+improvement is not established. See the
+[continuation record](docs/PPO_CONTINUATION_20261104.md).
+
+A new bounded history-league stage has resumed generation14 on L4, with frozen
+generations6/10/14 verified and seeded. Match-start sampling is 30% current policy,
+50% historical PPO and 20% fixed BC. Generation15 has collected 4,545 additional
+learner decisions, updated Actor21/Critic288 steps, and published its full checkpoint;
+independent CPU checks verified its SHA and the opponent pool. All 1,599 frozen
+opponent decisions were excluded from PPO learner samples. Generation16 is running.
+The FP32 frame-encoder configuration passed the original
+CUDA probability bounds after a preserved BF16 cache failure. Network size is
+unchanged. See the [current history-stage record](docs/PPO_HISTORY_20261105.md).
+
+Future v2 launches default to incremental keyed inference and receipt-based
+backups; both have explicit `--no-...` fallbacks. The measured L4 inference
+microbenchmark improved about 1.78×, not a full-update speed claim. See the
+[engineering measurements and remaining comparisons](docs/RL_ENGINEERING_SPEED_20261104.md).
 
 The completed 128-game fresh-seed replication scored **76–52 (59.4%)** against
 the exact BC initialization, with a deck-pair cluster interval of 53.1–65.6%
 and one-sided paired sign-test p=0.0195. This supports improvement on the fixed
 evaluation cohort, with overlapping-deck/generalization limits. See
 [final replication results](docs/PPO_REPLICATION_RESULTS_20261104.md) and
-[device handoff TODO](todo.md). Both GPU evaluation runtimes are released; the
-CPU Drive reader remains available subject to Colab lifetime limits.
+[device handoff TODO](todo.md). The two replication runtimes were released;
+one continuation L4 is now active alongside the CPU Drive reader, subject to
+Colab lifetime limits.
 
 The two BC repair/comparison arms reached step5096. Their fixed quick cohort
 shows mixed results: slot accuracy 33.6% → 38.2%, placement L1 11.8 → 11.1,

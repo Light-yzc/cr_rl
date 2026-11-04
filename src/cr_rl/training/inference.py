@@ -28,6 +28,46 @@ class FrozenInference:
     def __init__(self, model, adapter, device, capacity=None):
         self.model, self.adapter, self.device = model.eval(), adapter, device
         self.cache = FrameFeatureCache(model, adapter, device, capacity=capacity)
+        self.incremental_cache = None
+
+    @torch.inference_mode()
+    def evaluate_incremental(self, batch, legal_masks=None):
+        from cr_rl.models.incremental_frames import IncrementalFrameEncoder
+
+        if self.incremental_cache is None:
+            self.incremental_cache = IncrementalFrameEncoder(self.model, self.adapter, self.device)
+        with autocast_for(self.device):
+            encoded = self.incremental_cache.encode(batch)
+            if isinstance(self.model, HistoryValueNetwork):
+                return self.model.critic(encoded[0]).squeeze(-1).float()
+            if legal_masks is None:
+                raise ValueError("Actor inference requires current legal masks")
+            header, entities, mask = self.adapter(batch.current)
+            schema = self.adapter.schema
+            return self.model(
+                torch.as_tensor(header, device=self.device),
+                torch.as_tensor(entities, device=self.device),
+                torch.as_tensor(mask, device=self.device),
+                torch.as_tensor(legal_masks, dtype=torch.bool, device=self.device),
+                hand_card_ids=torch.as_tensor(
+                    batch.current[:, list(schema.header["hand_card"])], device=self.device
+                ),
+                encoded_history=encoded,
+            )[0].float()
+
+    @torch.inference_mode()
+    def sample_incremental(self, batch, legal_masks):
+        logits = self.evaluate_incremental(batch, legal_masks)
+        distribution = torch.distributions.Categorical(logits=logits)
+        actions = distribution.sample()
+        return (
+            actions.cpu().numpy().astype(np.int32),
+            distribution.log_prob(actions).cpu().numpy(),
+            {
+                "entropy": float(distribution.entropy().mean()),
+                "max_action_probability": float(distribution.probs.max(-1).values.mean()),
+            },
+        )
 
     @torch.inference_mode()
     def evaluate(self, windows, time_mask, legal_masks=None):

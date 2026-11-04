@@ -51,6 +51,7 @@ def sync_logs(local: Path, destination: Path) -> None:
         "summary.json",
         "supervisor.log",
         "league.yaml",
+        "history_bootstrap.json",
     ):
         source = local / name
         if source.exists():

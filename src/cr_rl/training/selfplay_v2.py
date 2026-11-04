@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from collections import OrderedDict, deque
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ from cr_rl.data.trajectory import TrajectoryBuffer
 from cr_rl.models import ActorCritic, ActorPolicy, HistoryValueNetwork, ModelConfig
 from cr_rl.opponents import OpponentEntry, OpponentPool
 from cr_rl.opponents.admission import SnapshotAdmission
+from cr_rl.opponents.role_sampling import FROZEN_VERSION_BASE, RoleMixture, historical_policy_id
 from cr_rl.training.advantages import compute_gae
 from cr_rl.training.episode_trace import EpisodeTrace, on_policy_seats
 from cr_rl.training.inference import FrozenInference
@@ -63,6 +65,8 @@ class PersistentSelfplay:
             if state
             else (ModelConfig.preset(args.model).for_v2(self.schema))
         )
+        if getattr(args, "frame_encoder_fp32", False):
+            self.cfg = replace(self.cfg, frame_encoder_fp32=True)
         if self.cfg.representation_version != 2:
             raise ValueError("Persistent v2 training requires the clean-slate v2 representation")
         if self.cfg.header_fields != tuple(self.schema.header_fields) or (
@@ -85,6 +89,8 @@ class PersistentSelfplay:
         )
         if args.resume:
             critic_cfg = ModelConfig(**state["critic_config"])
+            if getattr(args, "frame_encoder_fp32", False):
+                critic_cfg = replace(critic_cfg, frame_encoder_fp32=True)
         if critic_cfg.context_len != self.cfg.context_len:
             raise ValueError("Independent actor/critic history lengths must match")
         self.critic = HistoryValueNetwork(critic_cfg).to(self.device).eval()
@@ -159,6 +165,22 @@ class PersistentSelfplay:
             }
             if any(self.initialization[key] != value for key, value in actual.items()):
                 raise ValueError("BC/simulator provenance mismatch")
+        saved_mixture = state.get("role_mixture") if args.resume else None
+        self.role_mixture = (
+            RoleMixture(**saved_mixture)
+            if saved_mixture
+            else RoleMixture()
+            if getattr(args, "role_league", False)
+            else None
+        )
+        self.role_draws = dict(state.get("role_draws", {})) if args.resume else {}
+        if self.role_mixture and self.admission.purpose != "history":
+            # Explicit migration starts a fresh retention clock at the resumed sample count.
+            self.admission = SnapshotAdmission(
+                interval_samples=args.history_snapshot_interval,
+                last_admitted_samples=self.samples,
+                purpose="history",
+            )
         self.league = (
             state["league_config"]
             if args.resume
@@ -180,6 +202,13 @@ class PersistentSelfplay:
         self.opponents = [None] * args.envs
         self.traces = [None] * args.envs
         self.histories = [deque(maxlen=self.cfg.context_len) for _ in range(args.envs * 2)]
+        self.incremental_history = None
+        if getattr(args, "incremental_inference", False):
+            from cr_rl.models.incremental_frames import IncrementalFrameHistory
+
+            self.incremental_history = IncrementalFrameHistory(
+                args.envs * 2, self.cfg.context_len, self.schema.seat_ints
+            )
         self.opponent_cache = OrderedDict()
         self.critic_inference = FrozenInference(self.critic, self.adapter, self.device)
         self.actor_inference = FrozenInference(self.actor, self.adapter, self.device)
@@ -187,6 +216,22 @@ class PersistentSelfplay:
         if not self.pool.entries:
             path = self.save_opponent(0)
             self.pool.add(OpponentEntry(0, str(path), 0, role="anchor"))
+        if getattr(args, "history_seed_manifest", None):
+            from cr_rl.opponents.bootstrap import seed_history
+
+            if not self.role_mixture:
+                raise ValueError("History seeding requires --role-league")
+            seed_history(
+                self.pool,
+                args.history_seed_manifest,
+                self.out,
+                self.cfg.__dict__,
+                {
+                    "backend_commit": self.env.metadata().get("commit"),
+                    "data_version": self.env.vector.data_version,
+                    "content_sha": self.env.vector.content_sha,
+                },
+            )
         for env in range(args.envs):
             self.reset_match(env)
         self.tracking = self.telemetry = None
@@ -301,6 +346,30 @@ class PersistentSelfplay:
             self.deck_ids[env, self.learner_seats[env]],
             self.deck_ids[env, 1 - self.learner_seats[env]],
         )
+        if self.role_mixture:
+            opponent, requested, actual = self.role_mixture.sample(
+                self.pool, self.rng, self.deck_names[own], self.deck_names[enemy], self.update
+            )
+            key = f"{requested}->{actual}"
+            self.role_draws[key] = self.role_draws.get(key, 0) + 1
+        else:
+            opponent = self.sample_legacy_opponent(own, enemy)
+        self.opponents[env] = opponent
+        d0, d1 = self.deck_ids[env]
+        self.env.vector.reset_env(
+            env,
+            int(self.seeds[env]),
+            self.decks[d0],
+            self.decks[d1],
+            self.forms[d0],
+            self.forms[d1],
+        )
+        self.traces[env] = EpisodeTrace(self.next_episode, int(self.seeds[env]))
+        self.next_episode += 1
+        self.histories[env * 2].clear()
+        self.histories[env * 2 + 1].clear()
+
+    def sample_legacy_opponent(self, own, enemy):
         draw = self.rng.random()
         history = sorted(self.pool.entries, key=lambda entry: entry.generation)
         if draw < self.args.current_opponent_fraction or not history:
@@ -322,20 +391,7 @@ class PersistentSelfplay:
             weights = np.maximum(1 - scores, 1e-3)
             weights = 0.9 * weights / weights.sum() + 0.1 / len(weights)
             opponent = candidates[int(self.rng.choice(len(candidates), p=weights))]
-        self.opponents[env] = opponent
-        d0, d1 = self.deck_ids[env]
-        self.env.vector.reset_env(
-            env,
-            int(self.seeds[env]),
-            self.decks[d0],
-            self.decks[d1],
-            self.forms[d0],
-            self.forms[d1],
-        )
-        self.traces[env] = EpisodeTrace(self.next_episode, int(self.seeds[env]))
-        self.next_episode += 1
-        self.histories[env * 2].clear()
-        self.histories[env * 2 + 1].clear()
+        return opponent
 
     def windows(self, raw, append=False):
         windows = np.zeros(
@@ -357,9 +413,32 @@ class PersistentSelfplay:
             state = torch.load(entry.checkpoint, map_location="cpu", weights_only=False, mmap=True)
             model = ActorPolicy(ModelConfig(**state["config"])).to(self.device).eval()
             model.load_state_dict(state["model"], strict=True)
+            model.requires_grad_(False)
             self.opponent_cache[entry.policy_id] = FrozenInference(model, self.adapter, self.device)
         self.opponent_cache.move_to_end(entry.policy_id)
         return self.opponent_cache[entry.policy_id]
+
+    def inference_history(self, raw, append=False):
+        if self.incremental_history is None:
+            return self.windows(raw, append=append)
+        raw = raw.reshape(-1, self.schema.seat_ints)
+        episodes = np.repeat([trace.episode_id for trace in self.traces], 2)
+        if append:
+            self.incremental_history.append(raw, episodes)
+            return self.incremental_history.request()
+        return self.incremental_history.request(following=raw, episodes=episodes)
+
+    @staticmethod
+    def infer(inference, history, rows=None, masks=None, sample=False):
+        if not isinstance(history, tuple):
+            selected = history if rows is None else history.select(rows)
+            method = inference.sample_incremental if sample else inference.evaluate_incremental
+            return method(selected, masks)
+        windows, time_mask = history
+        if rows is not None:
+            windows, time_mask = windows[rows], time_mask[rows]
+        method = inference.sample if sample else inference.evaluate
+        return method(windows, time_mask, masks)
 
     def close(self):
         self.env.close()
@@ -368,48 +447,56 @@ class PersistentSelfplay:
 
     def collect(self):
         args = self.args
+        if not 0 <= self.update < FROZEN_VERSION_BASE:
+            raise ValueError("Current behavior version overlaps frozen policy namespace")
         snapshots, references, completed = [], [], []
         starts = [int(self.env.vector.info(i)["episode_step"]) for i in range(args.envs)]
         collected = 0
         began = time.perf_counter()
         for step in range(args.steps):
             raw, masks = self.env.observations.copy(), self.env.masks.copy()
-            windows, time_mask = self.windows(raw, append=True)
+            history = self.inference_history(raw, append=True)
             versions = np.full((args.envs, 2), self.update, dtype=np.int32)
             for env, entry in enumerate(self.opponents):
                 if entry is not None:
-                    versions[env, 1 - self.learner_seats[env]] = entry.policy_id
+                    # Stored legacy IDs (including BC=0) are not behavior versions.
+                    versions[env, 1 - self.learner_seats[env]] = historical_policy_id(
+                        entry.generation
+                    )
             learners = on_policy_seats(versions, self.update, self.learner_seats)
             actions = np.zeros((args.envs, 2), dtype=np.int32)
             logp = np.zeros((args.envs, 2), dtype=np.float32)
             actor_indices = np.flatnonzero(learners.reshape(-1))
-            selected, selected_logp, stats = self.actor_inference.sample(
-                windows[actor_indices],
-                time_mask[actor_indices],
+            selected, selected_logp, stats = self.infer(
+                self.actor_inference,
+                history,
+                actor_indices,
                 masks.reshape(-1, self.schema.actions)[actor_indices],
+                sample=True,
             )
             actions.reshape(-1)[actor_indices] = selected
             logp.reshape(-1)[actor_indices] = selected_logp
-            for policy_id in np.unique(versions[~learners.astype(bool)]):
-                indices = np.flatnonzero(
-                    (versions == policy_id).reshape(-1) & ~learners.reshape(-1).astype(bool)
+            for policy_id in sorted({e.policy_id for e in self.opponents if e is not None}):
+                indices = np.array(
+                    [
+                        env * 2 + 1 - self.learner_seats[env]
+                        for env, e in enumerate(self.opponents)
+                        if e is not None and e.policy_id == policy_id
+                    ]
                 )
                 entry = next(
                     entry for entry in self.opponents if entry and entry.policy_id == policy_id
                 )
                 inference = self.historical_inference(entry)
-                selected, selected_logp, _ = inference.sample(
-                    windows[indices],
-                    time_mask[indices],
+                selected, selected_logp, _ = self.infer(
+                    inference,
+                    history,
+                    indices,
                     masks.reshape(-1, self.schema.actions)[indices],
+                    sample=True,
                 )
                 actions.reshape(-1)[indices], logp.reshape(-1)[indices] = selected, selected_logp
-            values = (
-                self.critic_inference.evaluate(windows, time_mask)
-                .cpu()
-                .numpy()
-                .reshape(args.envs, 2)
-            )
+            values = self.infer(self.critic_inference, history).cpu().numpy().reshape(args.envs, 2)
             if not np.take_along_axis(masks, actions[..., None], -1).all():
                 raise RuntimeError("v2 policy sampled an illegal action")
             self.env.step(actions)
@@ -434,9 +521,12 @@ class PersistentSelfplay:
             )
             final_values = np.zeros((args.envs, 2), dtype=np.float32)
             if (truncated & (faults == 0)).any():
-                ww, tt = self.windows(following)
+                following_history = self.inference_history(following)
                 final_values = (
-                    self.critic_inference.evaluate(ww, tt).cpu().numpy().reshape(args.envs, 2)
+                    self.infer(self.critic_inference, following_history)
+                    .cpu()
+                    .numpy()
+                    .reshape(args.envs, 2)
                 )
             episode_ids = np.array([trace.episode_id for trace in self.traces], dtype=np.int64)
             episode_start = np.array(
@@ -501,8 +591,7 @@ class PersistentSelfplay:
                             self.deck_names[d1],
                             self.update,
                         )
-                        if entry.policy_id != self.update:
-                            self.admission.record(float(raw_reward[env, seat]))
+                        self.admission.record(float(raw_reward[env, seat]))
                 self.emit(
                     phase="episode",
                     reward=float(raw_reward[env, seat]),
@@ -527,8 +616,10 @@ class PersistentSelfplay:
                     seconds=time.perf_counter() - began,
                     learner_samples_total=self.samples + collected,
                 )
-        ww, tt = self.windows(self.env.observations.copy())
-        last = self.critic_inference.evaluate(ww, tt).cpu().numpy().reshape(args.envs, 2)
+        following_history = self.inference_history(self.env.observations.copy())
+        last = (
+            self.infer(self.critic_inference, following_history).cpu().numpy().reshape(args.envs, 2)
+        )
         next_values = np.empty((args.steps, args.envs, 2), dtype=np.float32)
         if len(snapshots) > 1:
             next_values[:-1] = np.stack([row["old_values"] for row in snapshots[1:]])
@@ -642,6 +733,10 @@ class PersistentSelfplay:
             max_grad_norm=args.max_grad_norm,
             actor_enabled=actor_enabled,
             emit=self.emit,
+            cache_reference=getattr(args, "cache_reference", False),
+            defer_scalar_metrics=getattr(args, "defer_scalar_metrics", False),
+            actor_batch_size=getattr(args, "actor_batch_size", None),
+            critic_batch_size=getattr(args, "critic_batch_size", None),
         )
         result["metrics"]["input_preparation_seconds"] = preparation_seconds
         result["metrics"]["optimization_seconds"] = time.perf_counter() - optimization_started
@@ -674,6 +769,8 @@ class PersistentSelfplay:
             "gae_lambda": self.args.gae_lambda,
             "league_config": self.league,
             "admission": self.admission.state_dict(),
+            "role_mixture": self.role_mixture.state_dict() if self.role_mixture else None,
+            "role_draws": self.role_draws,
             "next_episode": self.next_episode,
             "torch_rng_state": torch.get_rng_state(),
             "cuda_rng_state": torch.cuda.get_rng_state_all()
@@ -713,22 +810,32 @@ class PersistentSelfplay:
         if self.device.startswith("cuda"):
             torch.cuda.reset_peak_memory_stats()
         snapshots, refs, completed, next_values, starts = self.collect()
+        collected_at = time.perf_counter()
         result, actor_enabled, valid_samples = self.optimize(
             snapshots, refs, completed, next_values
         )
+        optimized_at = time.perf_counter()
         self.update += 1
+        admission_started = time.perf_counter()
+        admission_seconds = 0.0
         if result["actor_steps"] and self.admission.ready(self.samples):
-            path = self.save_opponent(self.update)
+            snapshot_id = historical_policy_id(self.update)
+            path = self.save_opponent(snapshot_id)
             if self.candidate_gate(path):
                 self.pool.add(
                     OpponentEntry(
-                        self.update, str(path.resolve()), self.update, deck_id="multi_deck"
+                        snapshot_id,
+                        str(path.resolve()),
+                        self.update,
+                        deck_id="multi_deck",
+                        role="historical" if self.role_mixture else "main",
                     )
                 )
                 self.admission.admitted(self.samples)
             else:
                 self.admission.last_failed_candidate_samples = self.samples
                 path.unlink()
+            admission_seconds = time.perf_counter() - admission_started
         evicted = self.pool.prune(
             [entry.policy_id for entry in self.opponents if entry is not None]
         )
@@ -753,6 +860,7 @@ class PersistentSelfplay:
             buffer.append(**{key: value for key, value in row.items() if not key.startswith("_")})
         rollout = buffer.save(self.out / "rollouts" / f"rollout_{self.update:06d}.npz")
         self.checkpoint()
+        saved_at = time.perf_counter()
         terminal_results = np.concatenate(
             [row["rewards"][row["terminated"].astype(bool)].reshape(-1) for row in snapshots]
         )
@@ -766,6 +874,14 @@ class PersistentSelfplay:
             "actor_kl_stopped": result["actor_kl_stopped"],
             "critic_warmup": self.warmup.copy(),
             "metrics": result["metrics"],
+            "reference_cache": result.get("reference_cache", {}),
+            "optimization_batches": {
+                "effective": self.args.batch_size * self.args.grad_accumulation,
+                "actor_microbatch": getattr(self.args, "actor_batch_size", None)
+                or self.args.batch_size,
+                "critic_microbatch": getattr(self.args, "critic_batch_size", None)
+                or self.args.batch_size,
+            },
             "seconds": time.perf_counter() - started,
             "peak_cuda_allocated_gib": torch.cuda.max_memory_allocated() / 2**30
             if self.device.startswith("cuda")
@@ -799,7 +915,16 @@ class PersistentSelfplay:
             ],
             "initial_logp_max_error": max(result["initial_logp_errors"], default=0),
             "opponent_pool_size": len(self.pool.entries),
-            "actor_cached_frames_encoded_total": self.actor_inference.cache.encoded_frames,
+            "role_mixture": self.role_mixture.state_dict() if self.role_mixture else None,
+            "role_draws": dict(self.role_draws),
+            "actor_cached_frames_encoded_total": (
+                self.actor_inference.incremental_cache.encoded_frames
+                if self.actor_inference.incremental_cache is not None
+                else self.actor_inference.cache.encoded_frames
+            ),
+            "inference_mode": "incremental_frames"
+            if self.incremental_history
+            else "legacy_windows",
             "rollout": str(rollout),
             "checkpoint": str(self.out / "ppo_latest.pt"),
             "resume_semantics": "continuous_simulator_between_updates_reset_on_process_restart",
@@ -809,11 +934,39 @@ class PersistentSelfplay:
             stream.write(json.dumps(summary) + "\n")
         if self.telemetry:
             self.telemetry.log_summary(summary)
+        publication_started = time.perf_counter()
         if getattr(self.args, "backup_dir", None):
-            publish_update(self.out, self.args.backup_dir, self.update)
+            if getattr(self.args, "incremental_backup", False):
+                from cr_rl.training.incremental_backup import publish_incremental
+
+                publish_incremental(self.out, self.args.backup_dir, self.update)
+            else:
+                publish_update(self.out, self.args.backup_dir, self.update)
             for name in ("archived_opponents.jsonl",):
                 if (self.out / name).exists():
                     copy_verified(self.out / name, self.args.backup_dir / name)
+        published_at = time.perf_counter()
+        timing = dict(
+            update=self.update,
+            learner_samples_total=self.samples,
+            valid_learner_samples=valid_samples,
+            rollout_seconds=collected_at - started,
+            optimization_seconds=optimized_at - collected_at,
+            admission_seconds=admission_seconds,
+            serialization_seconds=saved_at - optimized_at - admission_seconds,
+            prepublication_logging_seconds=publication_started - saved_at,
+            backup_seconds=published_at - publication_started,
+            update_wall_seconds=published_at - started,
+            effective_samples_per_second=valid_samples / (published_at - started),
+            incremental_backup=getattr(self.args, "incremental_backup", False),
+            incremental_inference=self.incremental_history is not None,
+            cache_reference=getattr(self.args, "cache_reference", False),
+            defer_scalar_metrics=getattr(self.args, "defer_scalar_metrics", False),
+        )
+        timing_path = self.out / "timings" / f"update_{self.update:06d}.json"
+        atomic_json(timing_path, timing)
+        if getattr(self.args, "backup_dir", None):
+            copy_verified(timing_path, self.args.backup_dir / "timings" / timing_path.name)
         print(json.dumps(summary), flush=True)
         return summary
 

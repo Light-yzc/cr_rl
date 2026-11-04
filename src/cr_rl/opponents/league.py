@@ -103,7 +103,7 @@ class OpponentPool:
             return evicted
         protected = set(protected_ids)
         if self.entries:
-            protected.add(max(entry.policy_id for entry in self.entries))
+            protected.add(max(self.entries, key=lambda entry: entry.generation).policy_id)
         if len(self.entries) <= self.max_entries:
             return evicted
         protected.update(entry.policy_id for entry in self.entries if entry.role == "anchor")

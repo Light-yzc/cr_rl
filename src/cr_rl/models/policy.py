@@ -38,6 +38,7 @@ class ModelConfig:
     entity_fields: tuple[str, ...] = ()
     header_fields: tuple[str, ...] = ()
     readout_version: int = 1
+    frame_encoder_fp32: bool = False
 
     def __post_init__(self):
         object.__setattr__(self, "entity_fields", tuple(self.entity_fields))
@@ -82,6 +83,7 @@ class ModelConfig:
                     "tile_head_fp32",
                     "spatial_fourier",
                     "readout_version",
+                    "frame_encoder_fp32",
                 )
             },
         )
@@ -267,6 +269,12 @@ class HistoryEncoder(nn.Module):
                         self.ordered_card_context[name] = projection
 
     def encode_frames(self, header, entities, entity_mask):
+        if self.cfg.frame_encoder_fp32:
+            with torch.autocast(header.device.type, enabled=False):
+                return self._encode_frames(header.float(), entities.float(), entity_mask)
+        return self._encode_frames(header, entities, entity_mask)
+
+    def _encode_frames(self, header, entities, entity_mask):
         card_context = None
         if self.cfg.representation_version == 2:
             summaries = []

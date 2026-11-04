@@ -1283,15 +1283,31 @@ def main() -> None:
     parser.add_argument("--envs", type=int, default=4)
     parser.add_argument("--v2", action="store_true")
     parser.add_argument("--backup-dir", type=Path)
+    parser.add_argument("--incremental-backup", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--cache-reference", action="store_true")
+    parser.add_argument(
+        "--incremental-inference", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument("--defer-scalar-metrics", action="store_true")
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--pool-capacity", type=int, default=8)
     parser.add_argument("--snapshot-interval", type=int, default=250_000)
     parser.add_argument("--snapshot-min-games", type=int, default=20)
     parser.add_argument("--snapshot-min-score", type=float, default=0.55)
+    parser.add_argument("--role-league", action="store_true", help="30/50/20 current/PPO/BC league")
+    parser.add_argument("--history-snapshot-interval", type=int, default=20_000)
+    parser.add_argument("--history-seed-manifest", type=Path)
+    parser.add_argument("--frame-encoder-fp32", action="store_true")
     parser.add_argument("--opponent-cache-size", type=int, default=2)
     parser.add_argument("--steps", type=int, default=1536)
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument(
+        "--actor-batch-size", type=int, help="v2 Actor microbatch; effective batch fixed"
+    )
+    parser.add_argument(
+        "--critic-batch-size", type=int, help="v2 Critic microbatch; effective batch fixed"
+    )
     parser.add_argument("--grad-accumulation", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--gamma", type=float)
@@ -1391,6 +1407,13 @@ def main() -> None:
         parser.error(
             "updates, grad-accumulation, steps, envs, epochs and batch-size must be positive"
         )
+    if not args.v2 and (args.actor_batch_size is not None or args.critic_batch_size is not None):
+        parser.error("Separate Actor/Critic batch overrides currently require --v2")
+    if any(
+        value is not None and (value < 1 or (args.batch_size * args.grad_accumulation) % value)
+        for value in (args.actor_batch_size, args.critic_batch_size)
+    ):
+        parser.error("Actor/Critic microbatches must divide the effective batch")
     if any(
         value is not None and value < 1
         for value in (args.critic_warmup_updates, args.critic_warmup_games)
