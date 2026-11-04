@@ -46,3 +46,25 @@ def test_continuation_preserves_training_hyperparameters_and_original_command(tm
     ]
     with pytest.raises(ValueError):
         module.continuation_command(original, tmp_path, tmp_path, 0)
+    with pytest.raises(ValueError, match="require v2"):
+        module.continuation_command(
+            original, tmp_path, tmp_path, 2, actor_effective_batch_size=256
+        )
+    v2 = original + ["--v2"]
+    changed = module.continuation_command(
+        v2, tmp_path, tmp_path, 2, actor_effective_batch_size=256
+    )
+    assert "--actor-effective-batch-size" not in v2
+    assert changed[-2:] == ["--actor-effective-batch-size", "256"]
+    assert changed[changed.index("--batch-size") + 1] == "8"
+    assert changed[changed.index("--grad-accumulation") + 1] == "8"
+    changed = module.continuation_command(
+        changed, tmp_path, tmp_path, 2, actor_effective_batch_size=128
+    )
+    assert changed.count("--actor-effective-batch-size") == 1
+    assert changed[-2:] == ["--actor-effective-batch-size", "128"]
+    for value in (0, 32, 65):
+        with pytest.raises(ValueError):
+            module.continuation_command(
+                v2, tmp_path, tmp_path, 2, actor_effective_batch_size=value
+            )

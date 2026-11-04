@@ -23,7 +23,9 @@ from cr_rl.training.persistence import (
 )
 
 
-def continuation_command(previous, run, backup, additional_updates):
+def continuation_command(
+    previous, run, backup, additional_updates, *, actor_effective_batch_size=None
+):
     if additional_updates < 1:
         raise ValueError("Positive fixed continuation budget required")
     command = list(previous)
@@ -45,6 +47,20 @@ def continuation_command(previous, run, backup, additional_updates):
             raise ValueError(f"Missing required original resume option: {option}")
         command[command.index(option) + 1] = value
     command[0] = sys.executable
+    if actor_effective_batch_size is not None:
+        if actor_effective_batch_size < 64 or "--v2" not in command:
+            raise ValueError("Actor effective batch transitions require v2 and at least 64")
+        microbatch_option = (
+            "--actor-batch-size" if "--actor-batch-size" in command else "--batch-size"
+        )
+        microbatch = int(command[command.index(microbatch_option) + 1])
+        if microbatch < 1 or actor_effective_batch_size % microbatch:
+            raise ValueError("Actor microbatch must divide its effective batch")
+        option = "--actor-effective-batch-size"
+        if option in command:
+            command[command.index(option) + 1] = str(actor_effective_batch_size)
+        else:
+            command.extend([option, str(actor_effective_batch_size)])
     return command
 
 
@@ -59,6 +75,7 @@ def main():
     parser.add_argument("--frame-encoder-fp32", action="store_true")
     parser.add_argument("--resume-actor-learning-rate", type=float)
     parser.add_argument("--resume-critic-learning-rate", type=float)
+    parser.add_argument("--actor-effective-batch-size", type=int)
     parser.add_argument("--new-wandb-run", action="store_true")
     parser.add_argument("--budget-seconds", type=int, default=3 * 3600)
     args = parser.parse_args()
@@ -102,6 +119,7 @@ def main():
         frame_encoder_fp32=args.frame_encoder_fp32,
         resume_actor_learning_rate=args.resume_actor_learning_rate,
         resume_critic_learning_rate=args.resume_critic_learning_rate,
+        actor_effective_batch_size=args.actor_effective_batch_size,
         history_seed_manifest_sha256=file_sha256(args.history_seed_manifest)
         if args.history_seed_manifest
         else None,
@@ -184,7 +202,11 @@ def main():
         if not json.loads(audit.read_text())["passed"]:
             raise ValueError("Numeric audit did not pass")
         command = continuation_command(
-            previous["command"], args.out, args.backup, args.additional_updates
+            previous["command"],
+            args.out,
+            args.backup,
+            args.additional_updates,
+            actor_effective_batch_size=args.actor_effective_batch_size,
         )
         if args.history_seed_manifest:
             command.extend(
