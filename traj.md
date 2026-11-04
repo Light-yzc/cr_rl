@@ -117,6 +117,10 @@ param_groups，保留step与moments；Critic LR可独立显式迁移。默认恢
 当前处于`waiting_source_evaluation`；原训练/评估保持原配置。这只是候选试验已准备，
 尚未得到LR对照结果。两阶段各有有限墙钟预算，不做无限空转。
 
+稳定参考登记：Drive `runs/stable_policy.json` 当前指向generation6，实际Actor SHA与
+128局复测completed/summary SHA重新核对一致。此记录代表已验证参考，不表示证明全卡组
+最优。后续候选不会仅凭最新step或开发集点估计自动覆盖这个记录。
+
 ## 恢复可靠性
 
 修复：恢复命令移除首次启动专用的`--history-seed-manifest`，避免向已有完整池重复导入。
