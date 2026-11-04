@@ -1303,12 +1303,17 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument(
-        "--actor-batch-size", type=int, help="v2 Actor microbatch; effective batch fixed"
+        "--actor-batch-size", type=int, help="v2 Actor microbatch; does not set effective batch"
     )
     parser.add_argument(
         "--critic-batch-size", type=int, help="v2 Critic microbatch; effective batch fixed"
     )
     parser.add_argument("--grad-accumulation", type=int, default=16)
+    parser.add_argument(
+        "--actor-effective-batch-size",
+        type=int,
+        help="v2 Actor-only effective batch; Critic retains batch-size * grad-accumulation",
+    )
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--resume-actor-learning-rate", type=float)
     parser.add_argument("--resume-critic-learning-rate", type=float)
@@ -1409,17 +1414,31 @@ def main() -> None:
         parser.error(
             "updates, grad-accumulation, steps, envs, epochs and batch-size must be positive"
         )
-    if not args.v2 and (args.actor_batch_size is not None or args.critic_batch_size is not None):
+    if not args.v2 and any(
+        value is not None
+        for value in (
+            args.actor_batch_size,
+            args.critic_batch_size,
+            args.actor_effective_batch_size,
+        )
+    ):
         parser.error("Separate Actor/Critic batch overrides currently require --v2")
     if any(
         v is not None for v in (args.resume_actor_learning_rate, args.resume_critic_learning_rate)
     ) and (not args.resume or not args.v2):
         parser.error("Explicit resume LR transitions require a v2 checkpoint resume")
-    if any(
-        value is not None and (value < 1 or (args.batch_size * args.grad_accumulation) % value)
-        for value in (args.actor_batch_size, args.critic_batch_size)
+    critic_effective = args.batch_size * args.grad_accumulation
+    actor_effective = (
+        critic_effective
+        if args.actor_effective_batch_size is None
+        else args.actor_effective_batch_size
+    )
+    actor_microbatch = args.batch_size if args.actor_batch_size is None else args.actor_batch_size
+    critic_microbatch = args.batch_size if args.critic_batch_size is None else args.critic_batch_size
+    if min(actor_effective, actor_microbatch, critic_microbatch) < 1 or (
+        actor_effective % actor_microbatch or critic_effective % critic_microbatch
     ):
-        parser.error("Actor/Critic microbatches must divide the effective batch")
+        parser.error("Actor/Critic microbatches must divide their effective batch")
     if any(
         value is not None and value < 1
         for value in (args.critic_warmup_updates, args.critic_warmup_games)

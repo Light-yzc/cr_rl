@@ -97,6 +97,7 @@ def optimize_separate(
     defer_scalar_metrics=False,
     actor_batch_size=None,
     critic_batch_size=None,
+    actor_effective_batch_size=None,
     emit=lambda **event: None,
 ):
     """Critic fits independently, even when actor is frozen or fails its KL guard.
@@ -106,13 +107,16 @@ def optimize_separate(
     """
     targets = value_targets.detach().clone()
     effective_batch = batch_size * accumulation
+    actor_effective = (
+        effective_batch if actor_effective_batch_size is None else actor_effective_batch_size
+    )
     actor_batch = batch_size if actor_batch_size is None else actor_batch_size
     critic_batch = batch_size if critic_batch_size is None else critic_batch_size
-    if min(effective_batch, actor_batch, critic_batch) < 1 or any(
-        effective_batch % value for value in (actor_batch, critic_batch)
+    if min(effective_batch, actor_effective, actor_batch, critic_batch) < 1 or (
+        actor_effective % actor_batch or effective_batch % critic_batch
     ):
-        raise ValueError("Actor/Critic microbatches must divide the fixed effective batch")
-    actor_accumulation = effective_batch // actor_batch
+        raise ValueError("Actor/Critic microbatches must divide their fixed effective batch")
+    actor_accumulation = actor_effective // actor_batch
     critic_accumulation = effective_batch // critic_batch
     advantages = advantages.detach().clone()
     old_logp = old_logp.detach().clone()

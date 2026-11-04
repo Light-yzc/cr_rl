@@ -745,6 +745,7 @@ class PersistentSelfplay:
             defer_scalar_metrics=getattr(args, "defer_scalar_metrics", False),
             actor_batch_size=getattr(args, "actor_batch_size", None),
             critic_batch_size=getattr(args, "critic_batch_size", None),
+            actor_effective_batch_size=getattr(args, "actor_effective_batch_size", None),
         )
         result["metrics"]["input_preparation_seconds"] = preparation_seconds
         result["metrics"]["optimization_seconds"] = time.perf_counter() - optimization_started
@@ -886,6 +887,9 @@ class PersistentSelfplay:
             "reference_cache": result.get("reference_cache", {}),
             "optimization_batches": {
                 "effective": self.args.batch_size * self.args.grad_accumulation,
+                "actor_effective": getattr(self.args, "actor_effective_batch_size", None)
+                or self.args.batch_size * self.args.grad_accumulation,
+                "critic_effective": self.args.batch_size * self.args.grad_accumulation,
                 "actor_microbatch": getattr(self.args, "actor_batch_size", None)
                 or self.args.batch_size,
                 "critic_microbatch": getattr(self.args, "critic_batch_size", None)
@@ -985,8 +989,10 @@ class PersistentSelfplay:
 
 
 def run(args):
-    if args.batch_size * args.grad_accumulation < 64:
-        raise ValueError("v2 requires an effective PPO optimizer batch of at least 64")
+    effective = args.batch_size * args.grad_accumulation
+    actor_effective = getattr(args, "actor_effective_batch_size", None)
+    if min(effective, effective if actor_effective is None else actor_effective) < 64:
+        raise ValueError("v2 requires Actor and Critic effective batches of at least 64")
     if args.critic_mode == "shared":
         raise ValueError("v2 uses an independent critic")
     runner = PersistentSelfplay(args)
