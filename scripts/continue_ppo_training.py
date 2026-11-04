@@ -26,6 +26,13 @@ def continuation_command(previous, run, backup, additional_updates):
     if additional_updates < 1:
         raise ValueError("Positive fixed continuation budget required")
     command = list(previous)
+    # A restored pool already contains verified seeds. This flag only belongs to
+    # the first launch of a fresh history stage, not its recovery command.
+    if "--history-seed-manifest" in command:
+        index = command.index("--history-seed-manifest")
+        if index + 1 >= len(command):
+            raise ValueError("Missing historical seed manifest argument")
+        del command[index : index + 2]
     for option, value in {
         "--resume": str(run / "ppo_latest.pt"),
         "--updates": str(additional_updates),

@@ -11,6 +11,9 @@
 > 最终强度尚未验证；当前仍3卡组训练，六卡组仅机制验收。
 > W&B新run `itnqtrmf`。详见[当前交接](docs/PPO_HISTORY_20261105.md)。
 
+恢复历史池阶段时不要重复传首次启动的`--history-seed-manifest`；完整pool已含对手。
+`continuation_command`已移除此一次性参数，显式开启新历史阶段时才重新追加。
+
 > **最新接续（历史池优先）：** generation14及64局固定评估全部结束，CPU独立复算通过；
 > Drive `122m_ppo_continue_20261104/independent_cpu_readback.json` 为独立证据，
 > `learning_curve_all_matches.jsonl` 为64局GUI合档。generation14对6为7–9，对BC为10–6。
