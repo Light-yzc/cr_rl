@@ -1372,6 +1372,7 @@ def main() -> None:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--init-from-bc", type=Path)
     parser.add_argument("--decks", type=Path)
+    parser.add_argument("--expand-decks", type=Path, help="Explicit append-only v2 resume curriculum")
     parser.add_argument("--out", type=Path, default=Path("artifacts/selfplay"))
     parser.add_argument("--updates", type=int, default=1)
     parser.add_argument("--progress-jsonl", type=Path)
@@ -1457,6 +1458,8 @@ def main() -> None:
         parser.error("Invalid gamma/lambda")
     if args.resume and args.init_from_bc:
         parser.error("Choose --resume or --init-from-bc")
+    if args.expand_decks and (not args.resume or not args.v2):
+        parser.error("--expand-decks requires a v2 checkpoint resume")
     if args.v2:
         from cr_rl.training.selfplay_v2 import run
 

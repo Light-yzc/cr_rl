@@ -1,7 +1,7 @@
 """Resume a verified generation for a fixed budget after a real CUDA parity audit.
 
-Run in an already mounted Colab kernel. This does not allocate a runtime, change
-the training league or reuse the old pilot's hardcoded six-update controller.
+Run in an already mounted Colab kernel. This does not allocate a runtime or reuse
+the old pilot's hardcoded controller. Deck curricula require an explicit override.
 """
 
 import argparse
@@ -36,6 +36,16 @@ def continuation_command(
         if index + 1 >= len(command):
             raise ValueError("Missing historical seed manifest argument")
         del command[index : index + 2]
+    if "--expand-decks" in command:
+        index = command.index("--expand-decks")
+        if index + 1 >= len(command):
+            raise ValueError("Missing expanded deck pool argument")
+        expanded_path = command[index + 1]
+        del command[index : index + 2]
+        if "--decks" in command:
+            command[command.index("--decks") + 1] = expanded_path
+        else:
+            command.extend(["--decks", expanded_path])
     for option, value in {
         "--resume": str(run / "ppo_latest.pt"),
         "--updates": str(additional_updates),
@@ -76,6 +86,7 @@ def main():
     parser.add_argument("--resume-actor-learning-rate", type=float)
     parser.add_argument("--resume-critic-learning-rate", type=float)
     parser.add_argument("--actor-effective-batch-size", type=int)
+    parser.add_argument("--expand-decks", type=Path)
     parser.add_argument("--new-wandb-run", action="store_true")
     parser.add_argument("--budget-seconds", type=int, default=3 * 3600)
     args = parser.parse_args()
@@ -120,6 +131,7 @@ def main():
         resume_actor_learning_rate=args.resume_actor_learning_rate,
         resume_critic_learning_rate=args.resume_critic_learning_rate,
         actor_effective_batch_size=args.actor_effective_batch_size,
+        expanded_decks_sha256=file_sha256(args.expand_decks) if args.expand_decks else None,
         history_seed_manifest_sha256=file_sha256(args.history_seed_manifest)
         if args.history_seed_manifest
         else None,
@@ -220,6 +232,8 @@ def main():
             )
         if args.frame_encoder_fp32:
             command.append("--frame-encoder-fp32")
+        if args.expand_decks:
+            command.extend(["--expand-decks", str(args.expand_decks)])
         for option, value in (
             ("--resume-actor-learning-rate", args.resume_actor_learning_rate),
             ("--resume-critic-learning-rate", args.resume_critic_learning_rate),

@@ -26,10 +26,11 @@ from cr_rl.opponents import OpponentEntry, OpponentPool
 from cr_rl.opponents.admission import SnapshotAdmission
 from cr_rl.opponents.role_sampling import FROZEN_VERSION_BASE, RoleMixture, historical_policy_id
 from cr_rl.training.advantages import compute_gae
+from cr_rl.training.deck_expansion import expand_deck_pool
 from cr_rl.training.episode_trace import EpisodeTrace, on_policy_seats
 from cr_rl.training.inference import FrozenInference
 from cr_rl.training.initialization import initialize_from_bc
-from cr_rl.training.persistence import atomic_json, copy_verified, publish_update
+from cr_rl.training.persistence import atomic_json, copy_verified, file_sha256, publish_update
 from cr_rl.training.prepared_history import PreparedHistoryBatches
 from cr_rl.training.resume_options import override_resume_rates
 from cr_rl.training.rewards import RewardConfig, shaped_rewards
@@ -194,8 +195,23 @@ class PersistentSelfplay:
             if args.resume
             else (yaml.safe_load(args.decks.read_text()) if args.decks else load_yaml("decks.yaml"))
         )
-        if args.resume and args.decks and yaml.safe_load(args.decks.read_text()) != self.league:
-            raise ValueError("Resume deck pool mismatch")
+        self.deck_pool_transitions = list(state.get("deck_pool_transitions", [])) if args.resume else []
+        expansion_path = getattr(args, "expand_decks", None)
+        requested = yaml.safe_load(expansion_path.read_text()) if expansion_path else None
+        if args.resume and args.decks:
+            supplied = yaml.safe_load(args.decks.read_text())
+            if supplied != self.league and supplied != requested:
+                raise ValueError("Resume deck pool mismatch")
+        if expansion_path:
+            if not args.resume:
+                raise ValueError("Deck expansion requires a checkpoint resume")
+            self.league, transition = expand_deck_pool(self.league, requested)
+            transition.update(
+                source_generation=self.update,
+                source_learner_samples=self.samples,
+                requested_file_sha256=file_sha256(expansion_path),
+            )
+            self.deck_pool_transitions.append(transition)
         self.deck_names = list(self.league["decks"])
         self.decks = [self.league["decks"][name] for name in self.deck_names]
         self.forms = [self.league.get("slots", {}).get(name, [0] * 8) for name in self.deck_names]
@@ -777,6 +793,7 @@ class PersistentSelfplay:
             "gamma": self.args.gamma,
             "gae_lambda": self.args.gae_lambda,
             "league_config": self.league,
+            "deck_pool_transitions": self.deck_pool_transitions,
             "admission": self.admission.state_dict(),
             "resume_learning_rates": self.resume_learning_rates,
             "role_mixture": self.role_mixture.state_dict() if self.role_mixture else None,

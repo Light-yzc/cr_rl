@@ -68,3 +68,8 @@ def test_continuation_preserves_training_hyperparameters_and_original_command(tm
             module.continuation_command(
                 v2, tmp_path, tmp_path, 2, actor_effective_batch_size=value
             )
+    curriculum = [*v2, "--expand-decks", "six.yaml", "--decks", "old.yaml"]
+    resumed = module.continuation_command(curriculum, tmp_path, tmp_path, 2)
+    assert "--expand-decks" not in resumed
+    assert resumed[resumed.index("--decks") + 1] == "six.yaml"
+    assert curriculum[-4:] == ["--expand-decks", "six.yaml", "--decks", "old.yaml"]
