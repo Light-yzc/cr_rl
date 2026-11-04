@@ -54,6 +54,7 @@ def main():
     parser.add_argument("--pairing-seed", type=int, default=20261103)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--frame-cache", action="store_true")
+    parser.add_argument("--forced-wait-fastpath", action="store_true")
     parser.add_argument("--wait-logit-bias", type=float, default=0.0)
     parser.add_argument("--opponent-wait-logit-bias", type=float, default=0.0)
     args = parser.parse_args()
@@ -94,13 +95,15 @@ def main():
     with CrForgeVector(count, count, independent=True, arena="Arena_L") as env:
         env.set_autoreset(False)
         env.reset(seeds, deck0, deck1, forms0, forms1)
-        cached = args.frame_cache or cfg.representation_version == 2
+        cached = args.frame_cache or args.forced_wait_fastpath or cfg.representation_version == 2
         adapter = CrForgeObservationAdapter(
             env.vector.schema, env.vector.vocabulary_size, entity_bucket=16 if cached else 0
         )
         inference = (
             {
-                id(policy): FrozenInference(policy, adapter, args.device)
+                id(policy): FrozenInference(
+                    policy, adapter, args.device, forced_wait_fastpath=args.forced_wait_fastpath
+                )
                 for policy in (model, opponent)
             }
             if cached
@@ -213,6 +216,7 @@ def main():
         "policy_checkpoint_calibration": model.checkpoint_calibration,
         "policy_optimizer_steps": model.checkpoint_optimizer_steps,
         "opponent_wait_logit_bias": args.opponent_wait_logit_bias,
+        "forced_wait_fastpath": args.forced_wait_fastpath,
         "protocol": "fixed physical decks/seeds, paired policy-seat swap, stochastic sampling",
         "deck_selection": f"unique pairs from seeded held-out pool (seed {args.pairing_seed})",
         "pairing_seed": args.pairing_seed,

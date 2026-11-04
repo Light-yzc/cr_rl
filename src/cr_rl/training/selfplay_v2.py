@@ -235,7 +235,12 @@ class PersistentSelfplay:
             )
         self.opponent_cache = OrderedDict()
         self.critic_inference = FrozenInference(self.critic, self.adapter, self.device)
-        self.actor_inference = FrozenInference(self.actor, self.adapter, self.device)
+        self.actor_inference = FrozenInference(
+            self.actor,
+            self.adapter,
+            self.device,
+            forced_wait_fastpath=getattr(args, "forced_wait_fastpath", False),
+        )
         self.completed = []
         if not self.pool.entries:
             path = self.save_opponent(0)
@@ -438,7 +443,12 @@ class PersistentSelfplay:
             model = ActorPolicy(ModelConfig(**state["config"])).to(self.device).eval()
             model.load_state_dict(state["model"], strict=True)
             model.requires_grad_(False)
-            self.opponent_cache[entry.policy_id] = FrozenInference(model, self.adapter, self.device)
+            self.opponent_cache[entry.policy_id] = FrozenInference(
+                model,
+                self.adapter,
+                self.device,
+                forced_wait_fastpath=getattr(self.args, "forced_wait_fastpath", False),
+            )
         self.opponent_cache.move_to_end(entry.policy_id)
         return self.opponent_cache[entry.policy_id]
 
@@ -959,6 +969,8 @@ class PersistentSelfplay:
             "inference_mode": "incremental_frames"
             if self.incremental_history
             else "legacy_windows",
+            "forced_wait_fastpath": self.actor_inference.forced_wait_fastpath,
+            "actor_forced_wait_rows_total": self.actor_inference.forced_wait_rows,
             "rollout": str(rollout),
             "checkpoint": str(self.out / "ppo_latest.pt"),
             "resume_semantics": "continuous_simulator_between_updates_reset_on_process_restart",

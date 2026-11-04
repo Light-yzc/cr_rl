@@ -1288,6 +1288,11 @@ def main() -> None:
     parser.add_argument(
         "--incremental-inference", action=argparse.BooleanOptionalAction, default=True
     )
+    parser.add_argument(
+        "--forced-wait-fastpath",
+        action="store_true",
+        help="v2: skip frozen Actor forward when WAIT is the only legal action",
+    )
     parser.add_argument("--defer-scalar-metrics", action="store_true")
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--pool-capacity", type=int, default=8)
@@ -1460,6 +1465,8 @@ def main() -> None:
         parser.error("Choose --resume or --init-from-bc")
     if args.expand_decks and (not args.resume or not args.v2):
         parser.error("--expand-decks requires a v2 checkpoint resume")
+    if args.forced_wait_fastpath and not args.v2:
+        parser.error("--forced-wait-fastpath requires v2")
     if args.v2:
         from cr_rl.training.selfplay_v2 import run
 
