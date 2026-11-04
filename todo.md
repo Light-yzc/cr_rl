@@ -3,7 +3,7 @@
 > **11月5日最新：** `ppo-history-l4`已挂载Drive、203项测试通过；历史分桶及tiny
 > 两update检查通过（1536 learner / 512 frozen decisions）。首次CUDA失败证据保留。
 > 帧编码FP32在同一64状态通过原门槛（BF16路径差.01549、原old logp差.04916）；
-> r2已完整恢复generation14并载入真实6/10/14历史模型，第15轮已发布，第16轮推进。
+> r2已完整恢复generation14并载入真实6/10/14历史模型，第15/16轮已发布，第17轮推进。
 > Drive `122m_ppo_history_20261105_r2`；控制器13220、trainer13779、评估13225、
 > release13233、指标镜像13456；kernel9111。实时进程可能变化，须查/proc后使用。
 > 第15轮CPU独立核验checkpoint/池SHA通过，累计72,246 learner样本，Actor21/Critic288步、

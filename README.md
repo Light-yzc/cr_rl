@@ -15,7 +15,8 @@ generations6/10/14 verified and seeded. Match-start sampling is 30% current poli
 50% historical PPO and 20% fixed BC. Generation15 has collected 4,545 additional
 learner decisions, updated Actor21/Critic288 steps, and published its full checkpoint;
 independent CPU checks verified its SHA and the opponent pool. All 1,599 frozen
-opponent decisions were excluded from PPO learner samples. Generation16 is running.
+opponent decisions were excluded from PPO learner samples. Generation16 is also published;
+generation17 is running. Only generation15 has the additional independent CPU weight readback.
 The FP32 frame-encoder configuration passed the original
 CUDA probability bounds after a preserved BF16 cache failure. Network size is
 unchanged. See the [current history-stage record](docs/PPO_HISTORY_20261105.md).
