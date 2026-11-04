@@ -55,9 +55,9 @@ def test_forced_wait_preserves_sampling_rng_history_wrap_reset_and_weight_change
         if step == 5:
             episodes[0] += 1
             queues[0].clear()
-        if step == 7:
+        if step == 5:
             with torch.no_grad():
-                next(model.parameters()).add_(0.001)
+                model.frame.entity_in.weight[0, 0].add_(0.05)
         raw = trace.observations[step % len(trace.observations)]
         history.append(raw, episodes)
         for seat in (0, 1):
@@ -68,7 +68,8 @@ def test_forced_wait_preserves_sampling_rng_history_wrap_reset_and_weight_change
             windows[seat, -len(queues[seat]) :] = np.stack(queues[seat])
             times[seat, -len(queues[seat]) :] = True
         legal = forced.copy()
-        if step >= 10:
+        normal_steps = (0, 1, 2, 3, 6, 13)
+        if step in normal_steps:
             legal[:, 1:6] = 1
 
         def evaluate(engine):
@@ -94,10 +95,25 @@ def test_forced_wait_preserves_sampling_rng_history_wrap_reset_and_weight_change
         torch.testing.assert_close(torch.get_rng_state(), after, rtol=0, atol=0)
         np.testing.assert_array_equal(actual_sample[0], expected_sample[0])
         np.testing.assert_allclose(actual_sample[1], expected_sample[1], atol=5e-5)
-        if step < 10:
+        if step not in normal_steps:
             assert (actual_sample[0] == 0).all()
             assert actual_sample[2] == {"entropy": 0.0, "max_action_probability": 1.0}
-    assert fast.forced_wait_batches == 20 and fast.forced_wait_rows == 40
+        if incremental and step == 2:
+            before_preview = history.raw.copy()
+            preview_episodes = episodes.copy()
+            preview_episodes[0] += 1
+            preview = history.request(
+                following=trace.observations[3], episodes=preview_episodes
+            )
+            expected_preview = regular.evaluate_incremental(preview, forced)
+            actual_preview = fast.evaluate_incremental(preview, forced)
+            torch.testing.assert_close(
+                actual_preview.exp(), expected_preview.exp(), rtol=0, atol=0
+            )
+            np.testing.assert_array_equal(history.raw, before_preview)
+    expected_batches = 16 + int(incremental)
+    assert fast.forced_wait_batches == expected_batches
+    assert fast.forced_wait_rows == expected_batches * 2
     if incremental:
         assert fast.incremental_cache.encoded_frames < regular.incremental_cache.encoded_frames
         stale = history.request()
