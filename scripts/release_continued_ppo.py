@@ -12,6 +12,26 @@ from cr_rl.training.persistence import atomic_json, file_sha256
 from cr_rl.training.runtime_supervision import process_alive
 
 
+def live_handoff(request, current_backup, alive=process_alive, command=None):
+    """Accept only a different project run with a real controller and release guard."""
+    if command is None:
+
+        def command(pid):
+            return Path(f"/proc/{pid}/cmdline").read_bytes()
+
+    try:
+        target = Path(request["backup"]).resolve()
+        current = current_backup.resolve()
+        pids = (request["controller_pid"], request["release_guard_pid"])
+        if target in (current, current.parent) or not target.is_relative_to(current.parent):
+            return False
+        if pids[0] == pids[1] or any(not alive(pid) for pid in pids):
+            return False
+        return all(str(target).encode() in command(pid) for pid in pids)
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+
+
 def verify_completion(backup, expected_generation=14):
     evaluation = json.loads((backup / "evaluation_status.json").read_text())
     if evaluation["phase"] != "completed" or process_alive(evaluation.get("pid")):
@@ -59,15 +79,43 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backup", required=True, type=Path)
     parser.add_argument("--final-generation", type=int, default=14)
+    parser.add_argument("--handoff-grace-seconds", type=int, default=0)
+    parser.add_argument("--handoff-request", type=Path)
     args = parser.parse_args()
+    if args.handoff_grace_seconds < 0:
+        parser.error("Handoff grace must be nonnegative")
     if not os.environ.get("TBE_RUNTIME_ADDR"):
         raise RuntimeError("Same-runtime management endpoint is required")
     began = time.monotonic()
+    completed_since = None
+    atomic_json(
+        args.backup / "release_guard_ready.json",
+        dict(
+            pid=os.getpid(),
+            final_generation=args.final_generation,
+            handoff_grace_seconds=args.handoff_grace_seconds,
+        ),
+    )
     while time.monotonic() - began < 5 * 3600:
         state = json.loads((args.backup / "evaluation_status.json").read_text())
         if state["phase"] in ("failed", "blocked_by_training_failure"):
             return  # Preserve failures for inspection, never release an unverified run.
         if state["phase"] == "completed" and not process_alive(state.get("pid")):
+            if args.handoff_request and args.handoff_request.exists():
+                request = json.loads(args.handoff_request.read_text())
+                if live_handoff(request, args.backup):
+                    verified = verify_completion(args.backup, args.final_generation)
+                    if live_handoff(request, args.backup):
+                        atomic_json(
+                            args.backup / "release_handoff.json",
+                            dict(request=request, source_verified=verified),
+                        )
+                        return
+            if completed_since is None:
+                completed_since = time.monotonic()
+            if time.monotonic() - completed_since < args.handoff_grace_seconds:
+                time.sleep(15)
+                continue
             verified = verify_completion(args.backup, args.final_generation)
             atomic_json(
                 args.backup / "release_verified.json", dict(verified, observed_unix=time.time())

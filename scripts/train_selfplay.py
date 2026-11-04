@@ -1310,6 +1310,8 @@ def main() -> None:
     )
     parser.add_argument("--grad-accumulation", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
+    parser.add_argument("--resume-actor-learning-rate", type=float)
+    parser.add_argument("--resume-critic-learning-rate", type=float)
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--gae-lambda", type=float)
     parser.add_argument("--tower-shaping", action=argparse.BooleanOptionalAction, default=None)
@@ -1409,6 +1411,10 @@ def main() -> None:
         )
     if not args.v2 and (args.actor_batch_size is not None or args.critic_batch_size is not None):
         parser.error("Separate Actor/Critic batch overrides currently require --v2")
+    if any(
+        v is not None for v in (args.resume_actor_learning_rate, args.resume_critic_learning_rate)
+    ) and (not args.resume or not args.v2):
+        parser.error("Explicit resume LR transitions require a v2 checkpoint resume")
     if any(
         value is not None and (value < 1 or (args.batch_size * args.grad_accumulation) % value)
         for value in (args.actor_batch_size, args.critic_batch_size)

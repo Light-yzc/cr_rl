@@ -6,6 +6,7 @@ the training league or reuse the old pilot's hardcoded six-update controller.
 
 import argparse
 import json
+import math
 import os
 import signal
 import subprocess
@@ -56,8 +57,16 @@ def main():
     parser.add_argument("--source-generation", type=int, default=6)
     parser.add_argument("--history-seed-manifest", type=Path)
     parser.add_argument("--frame-encoder-fp32", action="store_true")
+    parser.add_argument("--resume-actor-learning-rate", type=float)
+    parser.add_argument("--resume-critic-learning-rate", type=float)
+    parser.add_argument("--new-wandb-run", action="store_true")
     parser.add_argument("--budget-seconds", type=int, default=3 * 3600)
     args = parser.parse_args()
+    if any(
+        v is not None and (not math.isfinite(v) or v <= 0)
+        for v in (args.resume_actor_learning_rate, args.resume_critic_learning_rate)
+    ):
+        parser.error("Resume learning rates must be finite and positive")
     if not os.environ.get("TBE_RUNTIME_ADDR") or not args.original.is_dir():
         raise RuntimeError("Use an existing mounted Colab kernel")
     if args.out.exists() or args.backup.exists():
@@ -83,7 +92,7 @@ def main():
             "Unfinished source games reset; models, optimizers, RNG and warmup retained"
         ),
         reference="Existing per-update frozen behavior reference, not a permanent BC anchor",
-        evaluation="Frozen exports at every generation; final generation versus generation6 and BC",
+        evaluation="Frozen generation exports; comparison cohort supplied by parent protocol",
         numeric_thresholds=dict(
             fp32_logp=0.0005, fp32_tv=0.0001, bf16_logp=0.03, bf16_tv=0.01, stored_bf16_logp=0.05
         ),
@@ -91,6 +100,8 @@ def main():
         if args.history_seed_manifest
         else None,
         frame_encoder_fp32=args.frame_encoder_fp32,
+        resume_actor_learning_rate=args.resume_actor_learning_rate,
+        resume_critic_learning_rate=args.resume_critic_learning_rate,
         history_seed_manifest_sha256=file_sha256(args.history_seed_manifest)
         if args.history_seed_manifest
         else None,
@@ -134,7 +145,9 @@ def main():
     try:
         status("restoring")
         restore_run(args.original, args.out)
-        if args.history_seed_manifest and (args.out / "wandb_run.json").exists():
+        if (args.history_seed_manifest or args.new_wandb_run) and (
+            args.out / "wandb_run.json"
+        ).exists():
             (args.out / "wandb_run.json").rename(args.out / "source_wandb_run.json")
         five = json.loads(
             (
@@ -185,6 +198,15 @@ def main():
             )
         if args.frame_encoder_fp32:
             command.append("--frame-encoder-fp32")
+        for option, value in (
+            ("--resume-actor-learning-rate", args.resume_actor_learning_rate),
+            ("--resume-critic-learning-rate", args.resume_critic_learning_rate),
+        ):
+            if value is not None:
+                if option in command:
+                    command[command.index(option) + 1] = str(value)
+                else:
+                    command.extend([option, str(value)])
         config = dict(
             previous,
             command=command,

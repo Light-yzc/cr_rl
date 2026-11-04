@@ -31,6 +31,7 @@ from cr_rl.training.inference import FrozenInference
 from cr_rl.training.initialization import initialize_from_bc
 from cr_rl.training.persistence import atomic_json, copy_verified, publish_update
 from cr_rl.training.prepared_history import PreparedHistoryBatches
+from cr_rl.training.resume_options import override_resume_rates
 from cr_rl.training.rewards import RewardConfig, shaped_rewards
 from cr_rl.training.separate import optimize_separate
 
@@ -124,6 +125,7 @@ class PersistentSelfplay:
             min_games=args.snapshot_min_games,
             min_score=args.snapshot_min_score,
         )
+        self.resume_learning_rates = None
         if args.resume:
             if state.get("training_driver") != "persistent-v2":
                 raise ValueError("Cannot resume a reset-per-update trainer as persistent v2")
@@ -135,6 +137,12 @@ class PersistentSelfplay:
             self.critic.load_state_dict(state["critic"], strict=True)
             self.actor_optimizer.load_state_dict(state["optimizer"])
             self.critic_optimizer.load_state_dict(state["critic_optimizer"])
+            self.resume_learning_rates = override_resume_rates(
+                self.actor_optimizer,
+                self.critic_optimizer,
+                getattr(args, "resume_actor_learning_rate", None),
+                getattr(args, "resume_critic_learning_rate", None),
+            )
             self.warmup, self.update, self.samples = (
                 state["critic_warmup"],
                 state["updates"],
@@ -769,6 +777,7 @@ class PersistentSelfplay:
             "gae_lambda": self.args.gae_lambda,
             "league_config": self.league,
             "admission": self.admission.state_dict(),
+            "resume_learning_rates": self.resume_learning_rates,
             "role_mixture": self.role_mixture.state_dict() if self.role_mixture else None,
             "role_draws": self.role_draws,
             "next_episode": self.next_episode,
@@ -917,6 +926,10 @@ class PersistentSelfplay:
             "opponent_pool_size": len(self.pool.entries),
             "role_mixture": self.role_mixture.state_dict() if self.role_mixture else None,
             "role_draws": dict(self.role_draws),
+            "learning_rates": {
+                "actor": [float(g["lr"]) for g in self.actor_optimizer.param_groups],
+                "critic": [float(g["lr"]) for g in self.critic_optimizer.param_groups],
+            },
             "actor_cached_frames_encoded_total": (
                 self.actor_inference.incremental_cache.encoded_frames
                 if self.actor_inference.incremental_cache is not None
