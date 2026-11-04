@@ -75,12 +75,28 @@ def verify_completion(backup, expected_generation=14):
     )
 
 
+def verify_independent_receipt(backup, path, generation):
+    receipt = json.loads(path.read_text())
+    manifest_path = backup / f"checkpoints/update_{generation:06d}.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    checkpoint = next(r for r in manifest["files"] if r["path"] == manifest["checkpoint"])
+    if (
+        receipt.get("generation") != generation
+        or receipt.get("manifest_sha256") != file_sha256(manifest_path)
+        or receipt.get("checkpoint_sha256") != checkpoint["sha256"]
+        or receipt.get("backup_files_verified") != len(manifest["files"])
+        or receipt.get("full_weight_and_pool_hash_verified") is not True
+    ):
+        raise ValueError("Independent backup receipt differs from the final manifest")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backup", required=True, type=Path)
     parser.add_argument("--final-generation", type=int, default=14)
     parser.add_argument("--handoff-grace-seconds", type=int, default=0)
     parser.add_argument("--handoff-request", type=Path)
+    parser.add_argument("--independent-checkpoint-receipt", type=Path)
     args = parser.parse_args()
     if args.handoff_grace_seconds < 0:
         parser.error("Handoff grace must be nonnegative")
@@ -101,6 +117,13 @@ def main():
         if state["phase"] in ("failed", "blocked_by_training_failure"):
             return  # Preserve failures for inspection, never release an unverified run.
         if state["phase"] == "completed" and not process_alive(state.get("pid")):
+            if args.independent_checkpoint_receipt:
+                if not args.independent_checkpoint_receipt.exists():
+                    time.sleep(15)
+                    continue
+                verify_independent_receipt(
+                    args.backup, args.independent_checkpoint_receipt, args.final_generation
+                )
             if args.handoff_request and args.handoff_request.exists():
                 request = json.loads(args.handoff_request.read_text())
                 if live_handoff(request, args.backup):

@@ -15,11 +15,15 @@ generations6/10/14 verified and seeded. Match-start sampling is 30% current poli
 50% historical PPO and 20% fixed BC. Generation15 has collected 4,545 additional
 learner decisions, updated Actor21/Critic288 steps, and published its full checkpoint;
 independent CPU checks verified its SHA and the opponent pool. All 1,599 frozen
-opponent decisions were excluded from PPO learner samples. Generation16 is also published;
-generation17 is running. Only generation15 has the additional independent CPU weight readback.
+opponent decisions were excluded from PPO learner samples. The stage completed through
+generation22: 29,432 additional samples, 177 Actor steps, 1,852 Critic steps and zero
+faulted samples. All 51 final backup-manifest files were independently verified
+from the CPU Drive mount. The fixed 64-game evaluation is running.
 The FP32 frame-encoder configuration passed the original
 CUDA probability bounds after a preserved BF16 cache failure. Network size is
 unchanged. See the [current history-stage record](docs/PPO_HISTORY_20261105.md).
+The ongoing optimization decisions and controlled Actor-LR trial protocol are in
+[traj.md](traj.md); new candidates do not automatically replace the verified reference policy.
 
 Future v2 launches default to incremental keyed inference and receipt-based
 backups; both have explicit `--no-...` fallbacks. The measured L4 inference
