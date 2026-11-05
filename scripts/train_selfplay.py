@@ -1393,6 +1393,11 @@ def main() -> None:
     )
     parser.add_argument("--out", type=Path, default=Path("artifacts/selfplay"))
     parser.add_argument("--updates", type=int, default=1)
+    parser.add_argument(
+        "--min-training-games",
+        type=int,
+        help="v2: stop at a checkpoint after this many complete games in the saved counter scope",
+    )
     parser.add_argument("--progress-jsonl", type=Path)
     args = parser.parse_args()
     reference = args.resume or args.init_from_bc
@@ -1415,6 +1420,7 @@ def main() -> None:
         "max_initial_logp_error": saved.get("actor_update_config", {}).get(
             "max_initial_logp_error"
         ),
+        "min_training_games": saved.get("min_training_games"),
         "tower_shaping": saved.get("reward_config", {}).get("enabled", args.v2),
         "overflow_penalty": saved.get("reward_config", {}).get("overflow", 0.001 if args.v2 else 0),
         "current_opponent_fraction": 0.5 if args.v2 else 0.35,
@@ -1449,6 +1455,8 @@ def main() -> None:
         )
     ):
         parser.error("Separate Actor/Critic batch overrides currently require --v2")
+    if args.min_training_games is not None and (not args.v2 or args.min_training_games < 1):
+        parser.error("--min-training-games requires v2 and a positive completed-game target")
     if any(
         v is not None for v in (args.resume_actor_learning_rate, args.resume_critic_learning_rate)
     ) and (not args.resume or not args.v2):

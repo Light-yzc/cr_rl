@@ -33,6 +33,7 @@ from cr_rl.opponents.role_sampling import (
 from cr_rl.training.advantages import compute_actor_critic_targets
 from cr_rl.training.deck_expansion import expand_deck_pool
 from cr_rl.training.episode_trace import EpisodeTrace, on_policy_seats
+from cr_rl.training.game_budget import TrainingGameCounter
 from cr_rl.training.inference import FrozenInference
 from cr_rl.training.initialization import initialize_from_bc
 from cr_rl.training.persistence import atomic_json, copy_verified, file_sha256, publish_update
@@ -184,6 +185,10 @@ class PersistentSelfplay:
             }
             if any(self.initialization[key] != value for key, value in actual.items()):
                 raise ValueError("BC/simulator provenance mismatch")
+        self.game_counter = TrainingGameCounter(
+            state.get("training_game_counter") if args.resume else None,
+            origin_update=self.update,
+        )
         saved_mixture = state.get("role_mixture") if args.resume else None
         self.role_mixture = (
             RoleMixture(**saved_mixture)
@@ -808,6 +813,8 @@ class PersistentSelfplay:
             "critic_optimizer": self.critic_optimizer.state_dict(),
             "updates": self.update,
             "learner_samples_total": self.samples,
+            "training_game_counter": self.game_counter.state_dict(),
+            "min_training_games": getattr(self.args, "min_training_games", None),
             "initialization": self.initialization,
             "critic_initialization": self.critic_initialization,
             "critic_warmup": self.warmup,
@@ -873,6 +880,7 @@ class PersistentSelfplay:
         )
         optimized_at = time.perf_counter()
         self.update += 1
+        completed_training_games = self.game_counter.record(snapshots)
         admission_started = time.perf_counter()
         admission_seconds = 0.0
         if result["actor_steps"] and self.admission.ready(self.samples):
@@ -959,6 +967,9 @@ class PersistentSelfplay:
             "actor_training_samples": result["actor_training_samples"],
             "critic_training_samples": result["critic_training_samples"],
             "actor_choice_only": getattr(self.args, "actor_choice_only", False),
+            "completed_training_games": completed_training_games,
+            "completed_training_games_total": self.game_counter.count,
+            "training_game_counter_origin_update": self.game_counter.origin_update,
             "decision_coverage": {
                 "choice_rows": choice_rows,
                 "forced_wait_rows": valid_samples - choice_rows,
@@ -1090,6 +1101,9 @@ def run(args):
     runner = PersistentSelfplay(args)
     try:
         for _ in range(args.updates):
+            target = getattr(args, "min_training_games", None)
+            if target is not None and runner.game_counter.count >= target:
+                break
             runner.run_update()
     finally:
         runner.close()
