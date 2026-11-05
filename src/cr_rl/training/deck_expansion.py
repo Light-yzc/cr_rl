@@ -36,7 +36,9 @@ def expand_deck_pool(previous, requested):
     old, new = _specifications(previous), _specifications(requested)
     names, expanded = list(old), list(new)
     if len(expanded) <= len(names) or expanded[: len(names)] != names:
-        raise ValueError("Deck expansion must append names without removing or reordering old decks")
+        raise ValueError(
+            "Deck expansion must append names without removing or reordering old decks"
+        )
     if any(new[name] != spec for name, spec in old.items()):
         raise ValueError("Deck expansion cannot change existing cards or slot forms")
     added = expanded[len(names) :]
@@ -53,5 +55,7 @@ def expand_deck_pool(previous, requested):
         "added_decks": added,
         "old_spec_sha256": digest(old),
         "new_spec_sha256": digest(new),
-        "semantics": "Append-only ordinary-deck curriculum; source episodes reset on process resume",
+        "semantics": (
+            "Append-only ordinary-deck curriculum; source episodes reset on process resume"
+        ),
     }

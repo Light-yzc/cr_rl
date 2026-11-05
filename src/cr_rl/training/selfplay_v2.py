@@ -195,7 +195,9 @@ class PersistentSelfplay:
             if args.resume
             else (yaml.safe_load(args.decks.read_text()) if args.decks else load_yaml("decks.yaml"))
         )
-        self.deck_pool_transitions = list(state.get("deck_pool_transitions", [])) if args.resume else []
+        self.deck_pool_transitions = (
+            list(state.get("deck_pool_transitions", [])) if args.resume else []
+        )
         expansion_path = getattr(args, "expand_decks", None)
         requested = yaml.safe_load(expansion_path.read_text()) if expansion_path else None
         if args.resume and args.decks:

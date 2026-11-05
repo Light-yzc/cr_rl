@@ -1377,7 +1377,9 @@ def main() -> None:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--init-from-bc", type=Path)
     parser.add_argument("--decks", type=Path)
-    parser.add_argument("--expand-decks", type=Path, help="Explicit append-only v2 resume curriculum")
+    parser.add_argument(
+        "--expand-decks", type=Path, help="Explicit append-only v2 resume curriculum"
+    )
     parser.add_argument("--out", type=Path, default=Path("artifacts/selfplay"))
     parser.add_argument("--updates", type=int, default=1)
     parser.add_argument("--progress-jsonl", type=Path)
@@ -1440,7 +1442,9 @@ def main() -> None:
         else args.actor_effective_batch_size
     )
     actor_microbatch = args.batch_size if args.actor_batch_size is None else args.actor_batch_size
-    critic_microbatch = args.batch_size if args.critic_batch_size is None else args.critic_batch_size
+    critic_microbatch = (
+        args.batch_size if args.critic_batch_size is None else args.critic_batch_size
+    )
     if min(actor_effective, actor_microbatch, critic_microbatch) < 1 or (
         actor_effective % actor_microbatch or critic_effective % critic_microbatch
     ):
