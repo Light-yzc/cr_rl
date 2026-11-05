@@ -25,7 +25,7 @@ from cr_rl.models import ActorCritic, ActorPolicy, HistoryValueNetwork, ModelCon
 from cr_rl.opponents import OpponentEntry, OpponentPool
 from cr_rl.opponents.admission import SnapshotAdmission
 from cr_rl.opponents.role_sampling import FROZEN_VERSION_BASE, RoleMixture, historical_policy_id
-from cr_rl.training.advantages import compute_gae
+from cr_rl.training.advantages import compute_actor_critic_targets
 from cr_rl.training.deck_expansion import expand_deck_pool
 from cr_rl.training.episode_trace import EpisodeTrace, on_policy_seats
 from cr_rl.training.inference import FrozenInference
@@ -683,7 +683,7 @@ class PersistentSelfplay:
         terminated = np.stack([row["terminated"] for row in snapshots])
         ends = np.stack([row["dones"] for row in snapshots])
         shape = (args.steps, args.envs * 2)
-        advantage, returns = compute_gae(
+        advantage, returns = compute_actor_critic_targets(
             torch.as_tensor(reward.reshape(shape), device=self.device),
             torch.as_tensor(values.reshape(shape), device=self.device),
             torch.as_tensor(
@@ -692,6 +692,7 @@ class PersistentSelfplay:
             torch.as_tensor(next_values[-1].reshape(-1), device=self.device),
             gamma=args.gamma,
             gae_lambda=args.gae_lambda,
+            critic_gae_lambda=getattr(args, "critic_gae_lambda", None),
             next_values=torch.as_tensor(next_values.reshape(shape), device=self.device),
             episode_ends=torch.as_tensor(
                 np.repeat(ends[..., None], 2, -1).reshape(shape), device=self.device
@@ -804,6 +805,7 @@ class PersistentSelfplay:
             "reward_config": self.rewards.metadata(),
             "gamma": self.args.gamma,
             "gae_lambda": self.args.gae_lambda,
+            "critic_gae_lambda": getattr(self.args, "critic_gae_lambda", None),
             "league_config": self.league,
             "deck_pool_transitions": self.deck_pool_transitions,
             "admission": self.admission.state_dict(),
@@ -891,6 +893,7 @@ class PersistentSelfplay:
                 "model_config": self.cfg.__dict__,
                 "gamma": self.args.gamma,
                 "gae_lambda": self.args.gae_lambda,
+                "critic_gae_lambda": getattr(self.args, "critic_gae_lambda", None),
                 "training_reward_config": self.rewards.metadata(),
                 "behaviour_temperature": 1.0,
             }

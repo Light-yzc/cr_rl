@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 
 
@@ -36,3 +38,40 @@ def compute_gae(
         gae = delta + gamma * gae_lambda * continuation * gae
         advantages[t] = gae
     return advantages, advantages + values
+
+
+@torch.no_grad()
+def compute_actor_critic_targets(
+    rewards,
+    values,
+    dones,
+    last_value,
+    *,
+    gamma,
+    gae_lambda,
+    critic_gae_lambda=None,
+    next_values=None,
+    episode_ends=None,
+):
+    """Freeze Actor advantages and optional independent Critic TD(lambda) targets.
+
+    The default exactly preserves the shared GAE target. Critic lambda=1 uses
+    realized discounted rewards up to terminals, with the stored bootstrap for
+    unfinished rollout tails or time limits. It does not invent terminal zeros.
+    Both targets use collection-time values, before either optimizer runs.
+    """
+    if critic_gae_lambda is not None and (
+        not math.isfinite(critic_gae_lambda) or not 0 <= critic_gae_lambda <= 1
+    ):
+        raise ValueError("Critic GAE lambda must be finite and in [0, 1]")
+    arguments = dict(
+        gamma=gamma, next_values=next_values, episode_ends=episode_ends
+    )
+    advantages, targets = compute_gae(
+        rewards, values, dones, last_value, gae_lambda=gae_lambda, **arguments
+    )
+    if critic_gae_lambda is not None and critic_gae_lambda != gae_lambda:
+        _, targets = compute_gae(
+            rewards, values, dones, last_value, gae_lambda=critic_gae_lambda, **arguments
+        )
+    return advantages, targets

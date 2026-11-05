@@ -107,3 +107,37 @@ def test_explicit_lambda_changes_only_trace_parameter_and_persists_on_resume(tmp
         module.continuation_command(
             original + ["--gae-lambda", "0.98"], tmp_path, tmp_path, 2, gae_lambda=0.995
         )
+
+
+def test_critic_lambda_transition_preserves_actor_lambda_and_recovers_explicit_choice(tmp_path):
+    spec = importlib.util.spec_from_file_location(
+        "ppo_continue", Path(__file__).parents[1] / "scripts/continue_ppo_training.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    original = [
+        "python", "scripts/train_selfplay.py", "--v2", "--resume", "old.pt",
+        "--updates", "2", "--out", "old", "--backup-dir", "drive",
+        "--progress-jsonl", "log", "--gamma", "0.9995", "--gae-lambda", "0.98",
+    ]
+    before = original.copy()
+    changed = module.continuation_command(
+        original, tmp_path, tmp_path, 2, critic_gae_lambda=1.0
+    )
+    assert original == before
+    assert changed[changed.index("--gae-lambda") + 1] == "0.98"
+    assert changed[-2:] == ["--critic-gae-lambda", "1.0"]
+    recovered = module.continuation_command(changed, tmp_path, tmp_path, 2)
+    assert recovered[-2:] == ["--critic-gae-lambda", "1.0"]
+    for value in (float("nan"), float("inf"), -0.01, 1.01):
+        with pytest.raises(ValueError, match="finite"):
+            module.continuation_command(original, tmp_path, tmp_path, 2, critic_gae_lambda=value)
+    with pytest.raises(ValueError, match="duplicate"):
+        module.continuation_command(
+            changed + ["--critic-gae-lambda", "0.5"], tmp_path, tmp_path, 2,
+            critic_gae_lambda=1.0,
+        )
+    with pytest.raises(ValueError, match="requires v2"):
+        module.continuation_command(
+            [v for v in original if v != "--v2"], tmp_path, tmp_path, 2, critic_gae_lambda=1.0
+        )

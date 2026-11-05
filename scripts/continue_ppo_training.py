@@ -31,6 +31,7 @@ def continuation_command(
     *,
     actor_effective_batch_size=None,
     gae_lambda=None,
+    critic_gae_lambda=None,
 ):
     if additional_updates < 1:
         raise ValueError("Positive fixed continuation budget required")
@@ -87,6 +88,18 @@ def continuation_command(
             command[command.index(option) + 1] = str(gae_lambda)
         else:
             command.extend([option, str(gae_lambda)])
+    if critic_gae_lambda is not None:
+        if "--v2" not in command or not math.isfinite(critic_gae_lambda) or not (
+            0 <= critic_gae_lambda <= 1
+        ):
+            raise ValueError("Critic GAE lambda requires v2 and a finite value in [0, 1]")
+        option = "--critic-gae-lambda"
+        if command.count(option) > 1:
+            raise ValueError("Ambiguous duplicate Critic GAE lambda options")
+        if option in command:
+            command[command.index(option) + 1] = str(critic_gae_lambda)
+        else:
+            command.extend([option, str(critic_gae_lambda)])
     return command
 
 
@@ -103,6 +116,7 @@ def main():
     parser.add_argument("--resume-critic-learning-rate", type=float)
     parser.add_argument("--actor-effective-batch-size", type=int)
     parser.add_argument("--resume-gae-lambda", type=float)
+    parser.add_argument("--resume-critic-gae-lambda", type=float)
     parser.add_argument("--expand-decks", type=Path)
     parser.add_argument("--new-wandb-run", action="store_true")
     parser.add_argument("--budget-seconds", type=int, default=3 * 3600)
@@ -116,6 +130,11 @@ def main():
         not math.isfinite(args.resume_gae_lambda) or not 0 <= args.resume_gae_lambda <= 1
     ):
         parser.error("Resume GAE lambda must be finite and in [0, 1]")
+    if args.resume_critic_gae_lambda is not None and (
+        not math.isfinite(args.resume_critic_gae_lambda)
+        or not 0 <= args.resume_critic_gae_lambda <= 1
+    ):
+        parser.error("Resume Critic GAE lambda must be finite and in [0, 1]")
     if not os.environ.get("TBE_RUNTIME_ADDR") or not args.original.is_dir():
         raise RuntimeError("Use an existing mounted Colab kernel")
     if args.out.exists() or args.backup.exists():
@@ -153,6 +172,7 @@ def main():
         resume_critic_learning_rate=args.resume_critic_learning_rate,
         actor_effective_batch_size=args.actor_effective_batch_size,
         resume_gae_lambda=args.resume_gae_lambda,
+        resume_critic_gae_lambda=args.resume_critic_gae_lambda,
         expanded_decks_sha256=file_sha256(args.expand_decks) if args.expand_decks else None,
         history_seed_manifest_sha256=file_sha256(args.history_seed_manifest)
         if args.history_seed_manifest
@@ -242,6 +262,7 @@ def main():
             args.additional_updates,
             actor_effective_batch_size=args.actor_effective_batch_size,
             gae_lambda=args.resume_gae_lambda,
+            critic_gae_lambda=args.resume_critic_gae_lambda,
         )
         if args.history_seed_manifest:
             command.extend(

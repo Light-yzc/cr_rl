@@ -1324,6 +1324,10 @@ def main() -> None:
     parser.add_argument("--resume-critic-learning-rate", type=float)
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--gae-lambda", type=float)
+    parser.add_argument(
+        "--critic-gae-lambda", type=float,
+        help="v2 Critic TD(lambda) target; defaults to the Actor GAE lambda",
+    )
     parser.add_argument("--tower-shaping", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--princess-reward", type=float, default=0.15)
     parser.add_argument("--king-reward", type=float, default=0.20)
@@ -1397,6 +1401,9 @@ def main() -> None:
         "gae_lambda": saved.get(
             "gae_lambda", previous.get("gae_lambda", 0.98 if args.v2 else 0.95)
         ),
+        "critic_gae_lambda": saved.get(
+            "critic_gae_lambda", previous.get("critic_gae_lambda")
+        ),
         "tower_shaping": saved.get("reward_config", {}).get("enabled", args.v2),
         "overflow_penalty": saved.get("reward_config", {}).get("overflow", 0.001 if args.v2 else 0),
         "current_opponent_fraction": 0.5 if args.v2 else 0.35,
@@ -1465,6 +1472,11 @@ def main() -> None:
         parser.error("Opponent fractions must be nonnegative and sum to one")
     if not 0 < args.gamma <= 1 or not 0 <= args.gae_lambda <= 1:
         parser.error("Invalid gamma/lambda")
+    if args.critic_gae_lambda is not None and (
+        not args.v2 or not np.isfinite(args.critic_gae_lambda)
+        or not 0 <= args.critic_gae_lambda <= 1
+    ):
+        parser.error("Independent Critic GAE lambda requires v2 and a finite value in [0, 1]")
     if args.resume and args.init_from_bc:
         parser.error("Choose --resume or --init-from-bc")
     if args.expand_decks and (not args.resume or not args.v2):
