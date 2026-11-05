@@ -13,6 +13,26 @@ def historical_policy_id(generation):
     return FROZEN_VERSION_BASE + int(generation)
 
 
+def frozen_policy_version(entry):
+    """Use retained identity; restarted branches may share a generation number."""
+    if entry.policy_id >= FROZEN_VERSION_BASE:
+        if entry.policy_id >= 2 * FROZEN_VERSION_BASE:
+            raise ValueError("Frozen policy identity does not fit signed trajectory versions")
+        return entry.policy_id
+    return historical_policy_id(entry.generation)
+
+
+def next_history_snapshot_id(entries, generation):
+    """Keep legacy generation IDs when free, avoid overwriting seeded snapshots."""
+    proposed = historical_policy_id(generation)
+    used = {frozen_policy_version(entry) for entry in entries}
+    if proposed in used:
+        proposed = max(used, default=FROZEN_VERSION_BASE) + 1
+    if proposed >= 2 * FROZEN_VERSION_BASE:
+        raise ValueError("Frozen policy identity namespace exhausted")
+    return proposed
+
+
 @dataclass(frozen=True)
 class RoleMixture:
     current: float = 0.30

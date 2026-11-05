@@ -1325,7 +1325,8 @@ def main() -> None:
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--gae-lambda", type=float)
     parser.add_argument(
-        "--critic-gae-lambda", type=float,
+        "--critic-gae-lambda",
+        type=float,
         help="v2 Critic TD(lambda) target; defaults to the Actor GAE lambda",
     )
     parser.add_argument("--tower-shaping", action=argparse.BooleanOptionalAction, default=None)
@@ -1372,6 +1373,12 @@ def main() -> None:
     parser.add_argument("--entropy-coef", type=float, default=0.005)
     parser.add_argument("--reference-kl-coef", type=float, default=0.01)
     parser.add_argument("--target-kl", type=float, default=0.02)
+    parser.add_argument("--actor-choice-only", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--target-card-kl", type=float)
+    parser.add_argument("--target-tile-kl", type=float)
+    parser.add_argument("--max-initial-logp-error", type=float)
+    parser.add_argument("--elixir-wait-bias", type=float)
+    parser.add_argument("--elixir-hold-min-cost", type=float)
     parser.add_argument("--current-opponent-fraction", type=float)
     parser.add_argument("--historical-pfsp-fraction", type=float)
     parser.add_argument("--forgotten-opponent-fraction", type=float)
@@ -1401,8 +1408,12 @@ def main() -> None:
         "gae_lambda": saved.get(
             "gae_lambda", previous.get("gae_lambda", 0.98 if args.v2 else 0.95)
         ),
-        "critic_gae_lambda": saved.get(
-            "critic_gae_lambda", previous.get("critic_gae_lambda")
+        "critic_gae_lambda": saved.get("critic_gae_lambda", previous.get("critic_gae_lambda")),
+        "actor_choice_only": saved.get("actor_update_config", {}).get("choice_only", False),
+        "target_card_kl": saved.get("actor_update_config", {}).get("target_card_kl"),
+        "target_tile_kl": saved.get("actor_update_config", {}).get("target_tile_kl"),
+        "max_initial_logp_error": saved.get("actor_update_config", {}).get(
+            "max_initial_logp_error"
         ),
         "tower_shaping": saved.get("reward_config", {}).get("enabled", args.v2),
         "overflow_penalty": saved.get("reward_config", {}).get("overflow", 0.001 if args.v2 else 0),
@@ -1463,6 +1474,29 @@ def main() -> None:
         parser.error("Warmup rounds and games must be positive")
     if args.learning_rate <= 0 or args.critic_learning_rate <= 0 or args.target_kl <= 0:
         parser.error("Learning rates and target KL must be positive")
+    if (args.target_card_kl is None) != (args.target_tile_kl is None):
+        parser.error("Provide both card and tile KL limits")
+    if any(
+        v is not None and (not np.isfinite(v) or v <= 0)
+        for v in (args.target_card_kl, args.target_tile_kl, args.max_initial_logp_error)
+    ):
+        parser.error("Actor KL and initial log-prob limits must be finite and positive")
+    if not args.v2 and (
+        args.actor_choice_only
+        or args.target_card_kl is not None
+        or args.max_initial_logp_error is not None
+    ):
+        parser.error("Choice sampling and split KL require v2")
+    if args.elixir_wait_bias is not None and (
+        not args.v2 or not np.isfinite(args.elixir_wait_bias) or args.elixir_wait_bias < 0
+    ):
+        parser.error("Elixir WAIT bias requires v2 and a finite nonnegative value")
+    if args.elixir_hold_min_cost is not None and (
+        not args.v2
+        or not np.isfinite(args.elixir_hold_min_cost)
+        or not 0 < args.elixir_hold_min_cost <= 10
+    ):
+        parser.error("Elixir hold minimum cost must be in (0, 10]")
     fractions = (
         args.current_opponent_fraction,
         args.historical_pfsp_fraction,
@@ -1473,7 +1507,8 @@ def main() -> None:
     if not 0 < args.gamma <= 1 or not 0 <= args.gae_lambda <= 1:
         parser.error("Invalid gamma/lambda")
     if args.critic_gae_lambda is not None and (
-        not args.v2 or not np.isfinite(args.critic_gae_lambda)
+        not args.v2
+        or not np.isfinite(args.critic_gae_lambda)
         or not 0 <= args.critic_gae_lambda <= 1
     ):
         parser.error("Independent Critic GAE lambda requires v2 and a finite value in [0, 1]")

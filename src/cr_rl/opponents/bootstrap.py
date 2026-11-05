@@ -30,8 +30,11 @@ def seed_history(pool, manifest_path, output, config, provenance):
             raise ValueError("History seed checksum mismatch")
         state = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
         seed_config = ModelConfig(**state["config"])
-        expected = dict(ModelConfig(**config).__dict__, frame_encoder_fp32=False)
-        actual = dict(seed_config.__dict__, frame_encoder_fp32=False)
+        behavior_defaults = dict(
+            frame_encoder_fp32=False, elixir_wait_bias=0.0, elixir_hold_min_cost=4.0
+        )
+        expected = dict(ModelConfig(**config).__dict__, **behavior_defaults)
+        actual = dict(seed_config.__dict__, **behavior_defaults)
         if actual != expected or state.get("updates") != row["generation"]:
             raise ValueError("History seed architecture/generation mismatch")
         if any(state.get(k) != value for k, value in provenance.items()):

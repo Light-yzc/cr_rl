@@ -24,7 +24,12 @@ from cr_rl.data.trajectory import TrajectoryBuffer
 from cr_rl.models import ActorCritic, ActorPolicy, HistoryValueNetwork, ModelConfig
 from cr_rl.opponents import OpponentEntry, OpponentPool
 from cr_rl.opponents.admission import SnapshotAdmission
-from cr_rl.opponents.role_sampling import FROZEN_VERSION_BASE, RoleMixture, historical_policy_id
+from cr_rl.opponents.role_sampling import (
+    FROZEN_VERSION_BASE,
+    RoleMixture,
+    frozen_policy_version,
+    next_history_snapshot_id,
+)
 from cr_rl.training.advantages import compute_actor_critic_targets
 from cr_rl.training.deck_expansion import expand_deck_pool
 from cr_rl.training.episode_trace import EpisodeTrace, on_policy_seats
@@ -34,6 +39,7 @@ from cr_rl.training.persistence import atomic_json, copy_verified, file_sha256, 
 from cr_rl.training.prepared_history import PreparedHistoryBatches
 from cr_rl.training.resume_options import override_resume_rates
 from cr_rl.training.rewards import RewardConfig, shaped_rewards
+from cr_rl.training.sample_selection import actor_critic_rows, normalize_actor_advantages
 from cr_rl.training.separate import optimize_separate
 
 
@@ -69,6 +75,10 @@ class PersistentSelfplay:
         )
         if getattr(args, "frame_encoder_fp32", False):
             self.cfg = replace(self.cfg, frame_encoder_fp32=True)
+        for name in ("elixir_wait_bias", "elixir_hold_min_cost"):
+            value = getattr(args, name, None)
+            if value is not None:
+                self.cfg = replace(self.cfg, **{name: value})
         if self.cfg.representation_version != 2:
             raise ValueError("Persistent v2 training requires the clean-slate v2 representation")
         if self.cfg.header_fields != tuple(self.schema.header_fields) or (
@@ -496,9 +506,7 @@ class PersistentSelfplay:
             for env, entry in enumerate(self.opponents):
                 if entry is not None:
                     # Stored legacy IDs (including BC=0) are not behavior versions.
-                    versions[env, 1 - self.learner_seats[env]] = historical_policy_id(
-                        entry.generation
-                    )
+                    versions[env, 1 - self.learner_seats[env]] = frozen_policy_version(entry)
             learners = on_policy_seats(versions, self.update, self.learner_seats)
             actions = np.zeros((args.envs, 2), dtype=np.int32)
             logp = np.zeros((args.envs, 2), dtype=np.float32)
@@ -698,20 +706,17 @@ class PersistentSelfplay:
                 np.repeat(ends[..., None], 2, -1).reshape(shape), device=self.device
             ),
         )
-        eligible = (
-            np.stack([row["learner_mask"] & row["valid"] for row in snapshots])
-            .reshape(-1)
-            .astype(bool)
+        eligible = np.stack([row["learner_mask"] & row["valid"] for row in snapshots]).astype(bool)
+        actor_indices, critic_indices = actor_critic_rows(
+            eligible,
+            np.stack([row["masks"] for row in snapshots]),
+            choice_only=getattr(args, "actor_choice_only", False),
         )
-        actor_indices = np.flatnonzero(eligible)
-        if not len(actor_indices):
+        if not len(critic_indices):
             raise RuntimeError("No valid on-policy samples in the collected rollout")
-        self.samples += len(actor_indices)
-        advantage = advantage.flatten()
-        selected = advantage[torch.as_tensor(actor_indices, device=self.device)]
-        advantage = (advantage - selected.mean()) / (selected.std(unbiased=False) + 1e-8)
+        self.samples += len(critic_indices)
+        advantage = normalize_actor_advantages(advantage.flatten(), actor_indices)
         targets = returns.flatten()
-        critic_indices = actor_indices
         old_logp = np.stack([row["old_log_probs"] for row in snapshots]).reshape(-1)
         actions = np.stack([row["actions"] for row in snapshots]).reshape(-1)
         if not actor_enabled:
@@ -775,7 +780,12 @@ class PersistentSelfplay:
             actor_batch_size=getattr(args, "actor_batch_size", None),
             critic_batch_size=getattr(args, "critic_batch_size", None),
             actor_effective_batch_size=getattr(args, "actor_effective_batch_size", None),
+            target_card_kl=getattr(args, "target_card_kl", None),
+            target_tile_kl=getattr(args, "target_tile_kl", None),
+            max_initial_logp_error=getattr(args, "max_initial_logp_error", None),
         )
+        result["actor_training_samples"] = len(actor_indices) if actor_enabled else 0
+        result["critic_training_samples"] = len(critic_indices)
         result["metrics"]["input_preparation_seconds"] = preparation_seconds
         result["metrics"]["optimization_seconds"] = time.perf_counter() - optimization_started
         result["metrics"]["prepared_input_gib"] = preparation_metadata["bytes"] / 2**30
@@ -806,6 +816,12 @@ class PersistentSelfplay:
             "gamma": self.args.gamma,
             "gae_lambda": self.args.gae_lambda,
             "critic_gae_lambda": getattr(self.args, "critic_gae_lambda", None),
+            "actor_update_config": {
+                "choice_only": getattr(self.args, "actor_choice_only", False),
+                "target_card_kl": getattr(self.args, "target_card_kl", None),
+                "target_tile_kl": getattr(self.args, "target_tile_kl", None),
+                "max_initial_logp_error": getattr(self.args, "max_initial_logp_error", None),
+            },
             "league_config": self.league,
             "deck_pool_transitions": self.deck_pool_transitions,
             "admission": self.admission.state_dict(),
@@ -860,7 +876,7 @@ class PersistentSelfplay:
         admission_started = time.perf_counter()
         admission_seconds = 0.0
         if result["actor_steps"] and self.admission.ready(self.samples):
-            snapshot_id = historical_policy_id(self.update)
+            snapshot_id = next_history_snapshot_id(self.pool.entries, self.update)
             path = self.save_opponent(snapshot_id)
             if self.candidate_gate(path):
                 self.pool.add(
@@ -894,6 +910,11 @@ class PersistentSelfplay:
                 "gamma": self.args.gamma,
                 "gae_lambda": self.args.gae_lambda,
                 "critic_gae_lambda": getattr(self.args, "critic_gae_lambda", None),
+                "actor_update_config": {
+                    "choice_only": getattr(self.args, "actor_choice_only", False),
+                    "target_card_kl": getattr(self.args, "target_card_kl", None),
+                    "target_tile_kl": getattr(self.args, "target_tile_kl", None),
+                },
                 "training_reward_config": self.rewards.metadata(),
                 "behaviour_temperature": 1.0,
             }
@@ -906,11 +927,48 @@ class PersistentSelfplay:
         terminal_results = np.concatenate(
             [row["rewards"][row["terminated"].astype(bool)].reshape(-1) for row in snapshots]
         )
+        choice_rows = forced_affordable = elixir_five = request_count = core_requests = 0
+        request_cost = 0.0
+        for row in snapshots:
+            eligible = (row["learner_mask"] & row["valid"]).astype(bool)
+            choice = row["masks"].sum(-1) > 1
+            choice_rows += int((eligible & choice).sum())
+            raw = row["obs"]
+            available = (
+                raw[..., self.schema.header["elixir"][0]]
+                - raw[..., self.schema.header["elixir_reserved"][0]]
+            )
+            costs = raw[..., list(self.schema.header["hand_cost"])]
+            cards = raw[..., list(self.schema.header["hand_card"])]
+            pending = raw[..., list(self.schema.header["hand_pending"])]
+            affordable = (cards >= 0) & (pending == 0) & (costs * 10000 <= available[..., None])
+            forced_affordable += int((eligible & ~choice & affordable.any(-1)).sum())
+            elixir_five += int((eligible & (available >= 50000)).sum())
+            actions = row["actions"]
+            play = eligible & (actions > 0) & (actions < 2305)
+            slots = ((actions - 1) // 576).clip(0, 3)
+            chosen_cost = np.take_along_axis(costs, slots[..., None], -1)[..., 0]
+            request_count += int(play.sum())
+            request_cost += float(chosen_cost[play].sum())
+            core_requests += int((play & (chosen_cost >= 5)).sum())
         summary = {
             "update": self.update,
             "learner_samples_total": self.samples,
             "valid_learner_samples": valid_samples,
             "actor_enabled": actor_enabled,
+            "actor_training_samples": result["actor_training_samples"],
+            "critic_training_samples": result["critic_training_samples"],
+            "actor_choice_only": getattr(self.args, "actor_choice_only", False),
+            "decision_coverage": {
+                "choice_rows": choice_rows,
+                "forced_wait_rows": valid_samples - choice_rows,
+                "forced_wait_with_affordable_unqueued_card": forced_affordable,
+                "available_elixir_at_least_five_rows": elixir_five,
+                "card_requests": request_count,
+                "requested_card_cost_mean": request_cost / request_count if request_count else None,
+                "at_least_five_cost_requests": core_requests,
+                "scope": "On-policy valid requests; native replay confirms successful placements",
+            },
             "optimizer_steps": result["actor_steps"],
             "critic_optimizer_steps": result["critic_steps"],
             "actor_kl_stopped": result["actor_kl_stopped"],

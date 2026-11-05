@@ -89,8 +89,10 @@ def continuation_command(
         else:
             command.extend([option, str(gae_lambda)])
     if critic_gae_lambda is not None:
-        if "--v2" not in command or not math.isfinite(critic_gae_lambda) or not (
-            0 <= critic_gae_lambda <= 1
+        if (
+            "--v2" not in command
+            or not math.isfinite(critic_gae_lambda)
+            or not (0 <= critic_gae_lambda <= 1)
         ):
             raise ValueError("Critic GAE lambda requires v2 and a finite value in [0, 1]")
         option = "--critic-gae-lambda"
@@ -117,6 +119,12 @@ def main():
     parser.add_argument("--actor-effective-batch-size", type=int)
     parser.add_argument("--resume-gae-lambda", type=float)
     parser.add_argument("--resume-critic-gae-lambda", type=float)
+    parser.add_argument("--actor-choice-only", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--target-card-kl", type=float)
+    parser.add_argument("--target-tile-kl", type=float)
+    parser.add_argument("--max-initial-logp-error", type=float)
+    parser.add_argument("--elixir-wait-bias", type=float)
+    parser.add_argument("--elixir-hold-min-cost", type=float)
     parser.add_argument("--expand-decks", type=Path)
     parser.add_argument("--new-wandb-run", action="store_true")
     parser.add_argument("--budget-seconds", type=int, default=3 * 3600)
@@ -135,6 +143,21 @@ def main():
         or not 0 <= args.resume_critic_gae_lambda <= 1
     ):
         parser.error("Resume Critic GAE lambda must be finite and in [0, 1]")
+    if (args.target_card_kl is None) != (args.target_tile_kl is None):
+        parser.error("Both card and tile KL limits are required")
+    if any(
+        v is not None and (not math.isfinite(v) or v <= 0)
+        for v in (args.target_card_kl, args.target_tile_kl, args.max_initial_logp_error)
+    ):
+        parser.error("KL and initial log-prob limits must be finite and positive")
+    if args.elixir_wait_bias is not None and (
+        not math.isfinite(args.elixir_wait_bias) or args.elixir_wait_bias < 0
+    ):
+        parser.error("Elixir WAIT bias must be finite and nonnegative")
+    if args.elixir_hold_min_cost is not None and (
+        not math.isfinite(args.elixir_hold_min_cost) or not 0 < args.elixir_hold_min_cost <= 10
+    ):
+        parser.error("Elixir hold minimum cost must be in (0, 10]")
     if not os.environ.get("TBE_RUNTIME_ADDR") or not args.original.is_dir():
         raise RuntimeError("Use an existing mounted Colab kernel")
     if args.out.exists() or args.backup.exists():
@@ -173,6 +196,12 @@ def main():
         actor_effective_batch_size=args.actor_effective_batch_size,
         resume_gae_lambda=args.resume_gae_lambda,
         resume_critic_gae_lambda=args.resume_critic_gae_lambda,
+        actor_choice_only=args.actor_choice_only,
+        target_card_kl=args.target_card_kl,
+        target_tile_kl=args.target_tile_kl,
+        max_initial_logp_error=args.max_initial_logp_error,
+        elixir_wait_bias=args.elixir_wait_bias,
+        elixir_hold_min_cost=args.elixir_hold_min_cost,
         expanded_decks_sha256=file_sha256(args.expand_decks) if args.expand_decks else None,
         history_seed_manifest_sha256=file_sha256(args.history_seed_manifest)
         if args.history_seed_manifest
@@ -281,12 +310,24 @@ def main():
         for option, value in (
             ("--resume-actor-learning-rate", args.resume_actor_learning_rate),
             ("--resume-critic-learning-rate", args.resume_critic_learning_rate),
+            ("--target-card-kl", args.target_card_kl),
+            ("--target-tile-kl", args.target_tile_kl),
+            ("--max-initial-logp-error", args.max_initial_logp_error),
+            ("--elixir-wait-bias", args.elixir_wait_bias),
+            ("--elixir-hold-min-cost", args.elixir_hold_min_cost),
         ):
             if value is not None:
                 if option in command:
                     command[command.index(option) + 1] = str(value)
                 else:
                     command.extend([option, str(value)])
+        if args.actor_choice_only is not None:
+            command = [
+                x for x in command if x not in ("--actor-choice-only", "--no-actor-choice-only")
+            ]
+            command.append(
+                "--actor-choice-only" if args.actor_choice_only else "--no-actor-choice-only"
+            )
         config = dict(
             previous,
             command=command,

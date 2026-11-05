@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 import torch
 from torch import nn
+
+from cr_rl.models.holding_prior import ElixirHoldingPrior
 
 
 def spatial_features(coordinates, dimensions):
@@ -39,8 +42,16 @@ class ModelConfig:
     header_fields: tuple[str, ...] = ()
     readout_version: int = 1
     frame_encoder_fp32: bool = False
+    elixir_wait_bias: float = 0.0
+    elixir_hold_min_cost: float = 4.0
 
     def __post_init__(self):
+        if not math.isfinite(self.elixir_wait_bias) or self.elixir_wait_bias < 0:
+            raise ValueError("Elixir WAIT bias must be finite and nonnegative")
+        if not math.isfinite(self.elixir_hold_min_cost) or not 0 < self.elixir_hold_min_cost <= 10:
+            raise ValueError("Elixir hold minimum cost must be in (0, 10]")
+        if self.elixir_wait_bias and self.representation_version != 2:
+            raise ValueError("Elixir holding prior requires representation v2")
         object.__setattr__(self, "entity_fields", tuple(self.entity_fields))
         object.__setattr__(self, "header_fields", tuple(self.header_fields))
         if self.representation_version not in (1, 2):
@@ -423,6 +434,7 @@ class ActorCritic(HistoryEncoder):
         )
         nn.init.normal_(self.wait_actor.weight, std=0.01)
         nn.init.zeros_(self.wait_actor.bias)
+        self.holding_prior = ElixirHoldingPrior(cfg) if cfg.elixir_wait_bias else None
 
     def forward(
         self,
@@ -463,6 +475,22 @@ class ActorCritic(HistoryEncoder):
         card_logits = torch.cat(
             (self.wait_actor(context), slot_logits, self.ability_actor(context)), dim=-1
         )
+        if self.holding_prior is not None:
+            current_header = (
+                header if header.ndim == 2 else header[:, target_index % header.shape[1]]
+            )
+            raw_current_entities = (
+                entities if entities.ndim == 3 else entities[:, target_index % entities.shape[1]]
+            )
+            current_mask = (
+                entity_mask
+                if entity_mask.ndim == 2
+                else entity_mask[:, target_index % entity_mask.shape[1]]
+            )
+            bias = self.holding_prior(current_header, raw_current_entities, current_mask)
+            card_logits = torch.cat(
+                (card_logits[..., :1].float() + bias[:, None], card_logits[..., 1:].float()), -1
+            )
         tile_logits = self.placement_logits(
             context, current_entities, current_entity_mask, card_features
         )

@@ -67,3 +67,27 @@ def test_reserved_history_ids_prune_by_generation():
     )
     pool.prune([historical_policy_id(6)])
     assert {e.generation for e in pool.entries} == {0, 6, 20}
+
+
+def test_branch_snapshot_has_unique_retained_identity_and_restores(tmp_path):
+    from cr_rl.opponents.role_sampling import frozen_policy_version, next_history_snapshot_id
+
+    old = OpponentEntry(historical_policy_id(14), "old14.pt", 14, role="historical")
+    anchor = OpponentEntry(0, "bc.pt", 0, role="anchor")
+    later = OpponentEntry(historical_policy_id(22), "old22.pt", 22, role="historical")
+    entries = [anchor, old, later]
+    new_id = next_history_snapshot_id(entries, 14)
+    assert new_id == historical_policy_id(23)
+    new = OpponentEntry(new_id, "new14.pt", 14, role="historical")
+    pool = OpponentPool([*entries, new])
+    assert frozen_policy_version(old) != frozen_policy_version(new)
+    assert frozen_policy_version(anchor) == historical_policy_id(0)
+    for entry in (old, new):
+        np.testing.assert_array_equal(
+            on_policy_seats(np.array([[14, frozen_policy_version(entry)]]), 14, [0]), [[1, 0]]
+        )
+    restored = OpponentPool.load(pool.save(tmp_path / "pool.json"))
+    assert [frozen_policy_version(e) for e in restored.entries] == [
+        frozen_policy_version(e) for e in pool.entries
+    ]
+    assert next_history_snapshot_id(entries, 15) == historical_policy_id(15)

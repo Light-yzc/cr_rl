@@ -1,6 +1,51 @@
 from __future__ import annotations
 
+import math
+
 import torch
+
+
+def factorized_reverse_kl(new_log_probs, reference_log_probs):
+    """Per-state reverse KL split by WAIT/card/ability and conditional tile.
+
+    Placement KL is weighted by the new policy's card probability, as required
+    by the chain rule. Cardinality alone does not determine either component.
+    """
+    if new_log_probs.shape != reference_log_probs.shape or new_log_probs.shape[-1] != 2307:
+        raise ValueError("Factorized KL requires matching 2307-action distributions")
+    new = torch.log_softmax(new_log_probs.float(), dim=-1)
+    reference = torch.log_softmax(reference_log_probs.float(), dim=-1)
+
+    def card_logp(joint):
+        return torch.cat(
+            (
+                joint[..., :1],
+                joint[..., 1:2305].reshape(*joint.shape[:-1], 4, 576).logsumexp(-1),
+                joint[..., 2305:2307],
+            ),
+            dim=-1,
+        )
+
+    card, reference_card = card_logp(new), card_logp(reference)
+    card_difference = torch.where(card.exp() > 0, card - reference_card, 0)
+    card_kl = (card.exp() * card_difference).sum(-1)
+    tiles = new[..., 1:2305].reshape(*new.shape[:-1], 4, 576)
+    reference_tiles = reference[..., 1:2305].reshape(*new.shape[:-1], 4, 576)
+    conditional_difference = (
+        tiles - card[..., 1:5, None] - reference_tiles + reference_card[..., 1:5, None]
+    )
+    conditional_difference = torch.where(tiles.exp() > 0, conditional_difference, 0)
+    tile_kl = (tiles.exp() * conditional_difference).sum((-1, -2))
+    return card_kl, tile_kl
+
+
+def stop_for_factorized_kl(optimizer, card_kl, tile_kl, target_card_kl, target_tile_kl):
+    if not all(math.isfinite(x) and x > 0 for x in (target_card_kl, target_tile_kl)):
+        raise ValueError("Both factorized KL limits must be finite and positive")
+    if card_kl <= target_card_kl and tile_kl <= target_tile_kl:
+        return False
+    optimizer.zero_grad(set_to_none=True)
+    return True
 
 
 def stop_for_kl(optimizer: torch.optim.Optimizer, approx_kl: float, target_kl: float) -> bool:

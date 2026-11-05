@@ -7,7 +7,12 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 
-from cr_rl.training.ppo import ppo_loss_with_reference, stop_for_kl
+from cr_rl.training.ppo import (
+    factorized_reverse_kl,
+    ppo_loss_with_reference,
+    stop_for_factorized_kl,
+    stop_for_kl,
+)
 
 
 def complete_episode_returns(rewards, terminated, truncated, valid, gamma):
@@ -98,6 +103,9 @@ def optimize_separate(
     actor_batch_size=None,
     critic_batch_size=None,
     actor_effective_batch_size=None,
+    target_card_kl=None,
+    target_tile_kl=None,
+    max_initial_logp_error=None,
     emit=lambda **event: None,
 ):
     """Critic fits independently, even when actor is frozen or fails its KL guard.
@@ -106,6 +114,11 @@ def optimize_separate(
     Targets/log probabilities are snapshots, never recomputed after value fitting.
     """
     targets = value_targets.detach().clone()
+    factorized_guard = target_card_kl is not None or target_tile_kl is not None
+    if factorized_guard and (target_card_kl is None or target_tile_kl is None):
+        raise ValueError("Both card and tile KL limits are required")
+    if factorized_guard:
+        stop_for_factorized_kl(actor_optimizer, 0.0, 0.0, target_card_kl, target_tile_kl)
     effective_batch = batch_size * accumulation
     actor_effective = (
         effective_batch if actor_effective_batch_size is None else actor_effective_batch_size
@@ -168,7 +181,7 @@ def optimize_separate(
         for epoch in range(actor_epochs):
             permutation = rng.permutation(actor_indices)
             accumulated = samples = 0
-            group_kl = group_approx_kl = 0.0
+            group_kl = group_approx_kl = group_card_kl = group_tile_kl = 0.0
             for start in range(0, len(permutation), actor_batch):
                 indices = permutation[start : start + actor_batch]
                 tensors = make_batch(indices)
@@ -203,6 +216,10 @@ def optimize_separate(
                     entropy_coef=entropy_coef,
                     reference_kl_coef=reference_kl_coef,
                 )
+                if factorized_guard:
+                    with torch.no_grad():
+                        card_kl, tile_kl = factorized_reverse_kl(logp_all, reference)
+                        metrics.update(card_kl=card_kl.mean(), tile_kl=tile_kl.mean())
                 if not torch.isfinite(loss):
                     raise FloatingPointError("Non-finite independent policy loss")
                 row = {
@@ -218,6 +235,9 @@ def optimize_separate(
                 group_approx_kl += (
                     row["approx_kl"].double() if defer_scalar_metrics else row["approx_kl"]
                 ) * len(indices)
+                if factorized_guard:
+                    group_card_kl += row["card_kl"] * len(indices)
+                    group_tile_kl += row["tile_kl"] * len(indices)
                 (loss * len(indices)).backward()
                 samples += len(indices)
                 accumulated += 1
@@ -237,7 +257,33 @@ def optimize_separate(
                         )
                         row = dict(zip(names, scalars[: len(names)], strict=True))
                         average_kl, average_approx_kl, current_loss = scalars[-3:]
-                    if stop_for_kl(actor_optimizer, average_kl, target_kl):
+                    if actor_steps == 0 and max_initial_logp_error is not None:
+                        maximum_error = max(float(x) for x in initial_logp_errors)
+                        if maximum_error > max_initial_logp_error:
+                            actor_optimizer.zero_grad(set_to_none=True)
+                            raise ValueError(
+                                "Collected old log-prob differs from the initial Actor"
+                            )
+                    components = {}
+                    if factorized_guard:
+                        average_card = float(group_card_kl / samples)
+                        average_tile = float(group_tile_kl / samples)
+                        components = dict(
+                            card_kl=average_card,
+                            tile_kl=average_tile,
+                            target_card_kl=target_card_kl,
+                            target_tile_kl=target_tile_kl,
+                        )
+                        reject = stop_for_factorized_kl(
+                            actor_optimizer,
+                            average_card,
+                            average_tile,
+                            target_card_kl,
+                            target_tile_kl,
+                        )
+                    else:
+                        reject = stop_for_kl(actor_optimizer, average_kl, target_kl)
+                    if reject:
                         emit(
                             phase="kl_stop",
                             epoch=epoch + 1,
@@ -247,6 +293,7 @@ def optimize_separate(
                             discarded_microbatches=accumulated,
                             kl_samples=samples,
                             optimizer_steps=actor_steps,
+                            **components,
                         )
                         stopped = True
                         break
@@ -259,10 +306,15 @@ def optimize_separate(
                         loss=current_loss if defer_scalar_metrics else float(loss.detach().cpu()),
                         grad_norm=norm,
                         learning_rate=float(actor_optimizer.param_groups[0]["lr"]),
-                        **{**row, "reference_kl": average_kl, "approx_kl": average_approx_kl},
+                        **{
+                            **row,
+                            "reference_kl": average_kl,
+                            "approx_kl": average_approx_kl,
+                            **components,
+                        },
                     )
                     accumulated = samples = 0
-                    group_kl = group_approx_kl = 0.0
+                    group_kl = group_approx_kl = group_card_kl = group_tile_kl = 0.0
             if stopped:
                 break
     actor.eval()
