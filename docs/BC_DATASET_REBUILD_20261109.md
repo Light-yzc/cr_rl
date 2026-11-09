@@ -1,8 +1,13 @@
 # BC 数据集重建与模拟器对齐（2026-11-09）
 
-这轮先重建 BC 数据，暂不启动长 PPO。目标是让监督样本和当前模型实际看到的
-`crforge` 状态、合法动作 mask、2307 维动作编码完全一致。人类回放只提供动作事件和
-坐标，并不提供可验证的完整战场状态，因此不能把原始事件表直接喂给模型。
+本轮整理 BC 重建方法，暂不启动训练。目标是统一监督样本与模型的 `crforge` 输入格式、
+合法动作 mask 和 2307 维动作编码契约。格式与 backend 内部合法性一致，不等于重建状态
+与人类原局一致。人类回放主要提供动作事件和坐标，缺少可验证的完整战场状态。
+
+本轮代码只增加跨来源/跨 shard 的共享 replay registry，并补充文档；没有修复模拟器
+动力学、恢复被截断的后半局或重训 BC。初始手牌推断与 omission-prefix 机制此前已存在。
+视觉数据候选、限制及待实现的接入方案见
+[BC_DATASET_ALTERNATIVES_20261109.md](BC_DATASET_ALTERNATIVES_20261109.md)。
 
 ## 数据来源
 
@@ -29,8 +34,9 @@ Drive/Colab 的数据目录，不能只保存一个压缩后的训练数组。
    模型的契约是 pinned `crforge`、`decision_ticks=5`、`mask_version=2`、统一 level 11、
    2307 action codec；等级差异只能作为 provenance，不能混进没有记录的观测。
 
-因此转换器必须以模拟器输出的 observation 和 legal mask 为唯一监督状态来源；人类事件
-只用于产生动作标签和检查重放前缀。
+在当前完整原生 observation 的重建管线中，状态和 legal mask 来自模拟器；人类事件
+用于产生动作标签和检查重放前缀。这只保证 backend 内部一致，不能恢复缺失的原局状态。
+若接入视频观测，需要另外定义视频与 simulator 共有的观测契约。
 
 ## 重建流程
 
@@ -41,15 +47,18 @@ Drive/Colab 的数据目录，不能只保存一个压缩后的训练数组。
 2. 以 replay tag 派生稳定 seed，在 `crforge` 中用 level/tower level 11、统一 action
    codec reset。若启用 `--infer-opening-cycle`，先用源事件序列反推可行的初始发牌顺序，
    只有该顺序能在 backend 中重现才采用；否则保留 seeded reset 并在 provenance 中标明。
+   推断结果只是与事件序列相容的候选，不是真实初始手牌的核验结果。
 3. 按 replay tick 回放 card/ability 事件。每个成功事件必须同时满足：卡在手牌、动作在
    当前 legal mask 中、坐标能映射到 18×32 网格、技能槽唯一可用。
-4. 使用有界 omission policy：生产数据推荐 `--max-omissions 2`。第三次无法执行的事件
-   会触发 `prefix_cutoff`，只保留此前的高保真前缀；被遗漏 tick 的两边监督窗口加
-   `SOURCE_COMMAND_OMITTED` 标记，既不把人类出牌改成 WAIT，也不把错位后缀用于 loss。
-   严格对照集可用 `--max-omissions 0 --strict-subset`。
+4. 使用有界 omission policy。`--max-omissions 2` 是放宽覆盖率的实验设置：前两次
+   遗漏后继续模拟，只对遗漏附近默认 ±5 tick 的双方监督行加 `SOURCE_COMMAND_OMITTED`；
+   第三次遗漏所在决策窗口及以后才整体截断。前两次遗漏可能持续改变费用、轮转和战场，
+   局部屏蔽不能修复后续状态。保守对照用 `--max-omissions 0 --strict-subset`；这也只是在
+   首次检测到的遗漏前截断，`strict-subset` 另限制来源/覆盖率，都不是状态真值校验。
 5. 调用 pinned backend 的 `label_replays`，得到模型真正使用的 observations、masks、
    actions、ticks、seats 和 native flags。保留所有历史帧以维持 5 tick 间隔，训练只接收
-   `flags == 0` 且 `masks[row, action] == 1` 的行；BC 的 128 帧上下文由
+   `flags == 0` 且 `masks[row, action] == 1` 的行；这些条件不证明人类标签与重建状态匹配。
+   BC 的 128 帧上下文由
    `build_bc_batch()` 从同一 replay/seat 的时间轴构造。
 6. 每个 shard 写入 `human_bc_reconstructed.npz`、metadata、import stats、原生重放和
    SHA-256。跨 IL/Cochon 和跨 shard 使用同一个 replay registry 按
@@ -75,8 +84,8 @@ python scripts/build_bc_shards.py \
   --cochon-parquet /content/data/cochon.parquet \
   --out /content/bc_dataset_build \
   --drive /content/drive/MyDrive/cr_rl/datasets/bc_20261109 \
-  --target 0 --shard-replays 16 --max-omissions 2 \
-  --infer-opening-cycle
+  --target 0 --shard-replays 16 --max-omissions 0 \
+  --strict-subset --infer-opening-cycle
 ```
 
 `--target 0` 扫描已提供的候选全集；若先做小验证，改成 `--target 4` 或 `--target 8`，
@@ -96,7 +105,9 @@ print({k: p[k] for k in ('active_metadata_games','valid_supervision_rows',
 PY
 ```
 
-通过审计后再用 `train_bc.py` 读取 `dataset.manifest.json`。训练必须按完整 replay 做
+上述审计只检查文件完整性、时间网格和内部合法性，不能证明后半局已恢复或状态已对齐。
+需补充小样本状态核验和截断分布后，再决定是否用 `train_bc.py` 读取 `dataset.manifest.json`。
+训练必须按完整 replay 做
 train/validation split，并排除整个 held-out deck，而不是随机切行；训练缓存使用
 `ShardedBCDataset` 的有界 memmap，避免把全量 observation 展开到 RAM。
 
@@ -108,15 +119,17 @@ train/validation split，并排除整个 held-out deck，而不是随机切行�
   写入 provenance；
 - 每个 active replay 有两席成对的 5 tick 时间网格，或者被明确排除；
 - `unflagged_illegal_target_rows == 0`，且有效 card/ability 标签都通过 native mask；
-- 第一次严重 omission 之后没有监督后缀，遗漏窗口不会被当作 WAIT；
+- 首个超过所选 omission budget 的事件窗口及以后不参与监督；预算内遗漏仅局部屏蔽，
+  须单列其后样本占比与持续失步风险，不能宣称后缀均已排除；
 - registry 去重数、每个来源计数、level/form 分布和 held-out deck 列表写入报告；
 - 先做少量 BC `--evaluate-only`/quick validation，再决定 Colab 正式训练。模仿 loss、
   play recall 或单次对战不能单独证明 BC 强度；必须保留自然 WAIT 误出牌率、实际成功出牌数、
   落点距离和固定换边对局。
 
-如果源数据没有足够可重建事件，宁可减少 replay 数量并保留高保真前缀，也不要用随机状态
-补齐缺失后缀。这样得到的 BC 才能作为 PPO 的合法 on-policy 起点，而不是把模拟器错位
-噪声带入 Actor。
+如果源数据没有足够可重建事件，不用随机状态补齐缺失后缀。保留截断和未知状态记录，
+通过小样本状态核验、held-out 验证及固定对战判断是否适合 BC 初始化。BC 是离线模仿，
+这些检查不能保证 PPO 的 on-policy 条件或模型强度。即使没有检测到遗漏，双方交战、
+路径和伤害仍可能偏离原局；现有事件流无法单独验证这些误差。
 
 ## 与当前 PPO 结果的关系
 
@@ -124,5 +137,5 @@ update 216 的 BC 对战合计为 33 胜 31 负（64 局，Wilson 95% 区间约
 39.6%–63.4%，双侧二项检验约 0.90），这不能证明 BC 冷启动太弱，也不能证明 PPO 已
 学会超越 BC。检查点日志显示近期 Actor 的 choice 行很少，而且 factorized tile-KL
 超限会提前结束本轮 Actor epoch；这属于 PPO 样本利用率问题。重新训练 BC 的首要理由是
-消除状态/标签错位并提高动作质量，不能把 BC 重训本身当成 PPO 变强的证据。PPO 恢复时
+验证并减少状态/标签错位、提高动作质量，不能把去重或 BC 重训本身当成 PPO 变强的证据。PPO 恢复时
 应固定 BC SHA、数据 manifest SHA、backend commit 和评估种子，再单独比较训练改动。
