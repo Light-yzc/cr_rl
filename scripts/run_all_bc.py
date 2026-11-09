@@ -18,6 +18,31 @@ from cr_rl.training.persistence import atomic_json, copy_verified
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def resolve_shard_mix_window(stage, requested=64):
+    """Use the saved setting for an old stage; default new stages to mixing.
+
+    This prevents a resumed historical checkpoint from silently changing its
+    within-epoch order, while new BC snapshots avoid shard-local batches.
+    """
+    stage = Path(stage)
+    config_path = stage / "training_config.json"
+    if config_path.exists():
+        config = json.loads(config_path.read_text())
+        command = config.get("command", [])
+        if "--shard-mix-window" in command:
+            index = command.index("--shard-mix-window") + 1
+            try:
+                saved = int(command[index])
+            except (IndexError, TypeError, ValueError):
+                saved = None
+            if saved is not None and saved >= 1:
+                return saved
+        # Old stages without an explicit flag used train_bc's historical
+        # default of one shard. Preserve that order when resuming them.
+        return 1
+    return requested
+
+
 def stage_training_plan(stage, source_complete, final_epochs):
     """Keep a resumed stage's epoch target independent of producer progress."""
     path = stage / "training_plan.json"
@@ -51,7 +76,12 @@ def main():
     parser.add_argument("--carry-initial-optimizer", action="store_true")
     parser.add_argument("--stream-cache-gib", type=float, default=8.0)
     parser.add_argument("--persistent-validation-cache", type=Path)
-    parser.add_argument("--shard-mix-window", type=int, default=1)
+    parser.add_argument(
+        "--shard-mix-window",
+        type=int,
+        default=64,
+        help="Number of randomized shards in one working set (default: 64)",
+    )
     parser.add_argument("--timing-objective", choices=("balanced", "natural"), default="balanced")
     args = parser.parse_args()
     if args.final_epochs < 1:
@@ -248,8 +278,6 @@ def main():
                 command += [
                     "--tile-learning-rate",
                     "3e-4",
-                    "--shard-mix-window",
-                    str(args.shard_mix_window),
                     "--timing-objective",
                     args.timing_objective,
                     "--bc-objective",
@@ -265,6 +293,12 @@ def main():
                     "--wandb-name",
                     args.run_name + "/" + stage.name,
                 ]
+            # Apply the safe default to both joint and conditional objectives.
+            # Existing stages retain their recorded order for reproducibility.
+            command += [
+                "--shard-mix-window",
+                str(resolve_shard_mix_window(stage, args.shard_mix_window)),
+            ]
             if args.split_registry:
                 command += ["--split-registry", str(args.split_registry)]
             if args.persistent_validation_cache:

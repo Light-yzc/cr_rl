@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.audit_bc_coverage import audit_dataset, compare_coverage, replay_identity
+from scripts.audit_bc_coverage import audit_dataset, compare_coverage, quality_tier, replay_identity
 
 
 def fixture(root, replays, ids, ticks, actions, flags, seats, excluded=(), illegal=()):
@@ -59,6 +59,22 @@ def fixture(root, replays, ids, ticks, actions, flags, seats, excluded=(), illeg
 
 
 class BCCoverageTest(unittest.TestCase):
+    def test_quality_tier_fails_closed_without_reconstruction_provenance(self):
+        self.assertEqual(
+            quality_tier(
+                {
+                    "excluded": False,
+                    "retained_horizon_seconds": 90,
+                    "valid_card_plays": 8,
+                    "valid_abilities": 0,
+                    "complete_paired_history_grid": True,
+                    "observed_seats": 2,
+                    "collisions": 0,
+                }
+            ),
+            "C",
+        )
+
     def test_exact_valid_labels_exclusion_and_cutoff_none_is_not_complete(self):
         with tempfile.TemporaryDirectory() as directory:
             root = fixture(

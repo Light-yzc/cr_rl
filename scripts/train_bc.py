@@ -357,7 +357,10 @@ def main() -> None:
         ("ability_fraction", 0.1 if v2 else 0.0),
         ("tile_label_sigma", 1.0 if v2 else 0.0),
         ("card_prior_correction", v2),
-        ("shard_mix_window", 1),
+        # A one-shard window causes long runs of deck/source-local gradients.
+        # Keep an explicit checkpoint setting when resuming an old run, but make
+        # fresh BC stages mix a bounded working set by default.
+        ("shard_mix_window", 64),
         ("timing_objective", "balanced"),
     ):
         if getattr(args, name) is None:
@@ -540,7 +543,7 @@ def main() -> None:
                 ("bc_objective", "joint"),
                 ("wait_margin_before", 0),
                 ("wait_margin_after", 0),
-                ("shard_mix_window", 1),
+                ("shard_mix_window", 64),
                 ("timing_objective", "balanced"),
             ):
                 if settings.get(name, default) != getattr(args, name):

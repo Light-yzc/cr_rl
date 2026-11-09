@@ -12,7 +12,7 @@ def epoch_rows(
     offsets=None,
     ability_rows=None,
     ability_fraction=0.0,
-    shard_mix_window=1,
+    shard_mix_window=64,
 ):
     if shard_mix_window < 1:
         raise ValueError("shard_mix_window must be positive")

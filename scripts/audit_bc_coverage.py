@@ -50,7 +50,62 @@ def _distribution(values):
     }
 
 
-def _summary(records, late_seconds):
+def quality_tier(
+    record,
+    *,
+    a_horizon_seconds=60.0,
+    a_min_labels=8,
+    b_horizon_seconds=30.0,
+    b_min_labels=4,
+):
+    """Classify one retained replay for BC/PPO use.
+
+    This is deliberately based on native labelled rows and the retained prefix,
+    rather than source ``used`` counts.  The returned tier is a data quality
+    admission signal, not a claim that the reconstructed state is identical to
+    the original client state.
+    """
+    if record["excluded"]:
+        return "excluded"
+    horizon = record["retained_horizon_seconds"]
+    labels = record["valid_card_plays"] + record["valid_abilities"]
+    paired = record["complete_paired_history_grid"] and record["observed_seats"] == 2
+    # Unknown provenance must fail closed.  A missing field is common in old
+    # fixtures, but it is not evidence that suffix rows were removed.
+    bounded = record.get("reconstruction_policy") in {
+        "first_omission_prefix",
+        "bounded_omission_prefix",
+    }
+    collisions = record.get("collisions", 0)
+    if (
+        paired
+        and bounded
+        and collisions == 0
+        and horizon is not None
+        and horizon >= a_horizon_seconds
+        and labels >= a_min_labels
+    ):
+        return "A"
+    if (
+        paired
+        and bounded
+        and horizon is not None
+        and horizon >= b_horizon_seconds
+        and labels >= b_min_labels
+    ):
+        return "B"
+    return "C"
+
+
+def _summary(
+    records,
+    late_seconds,
+    *,
+    a_horizon_seconds=60.0,
+    a_min_labels=8,
+    b_horizon_seconds=30.0,
+    b_min_labels=4,
+):
     active = [row for row in records if not row["excluded"]]
     late = sum(
         row["retained_horizon_seconds"] is not None
@@ -62,6 +117,20 @@ def _summary(records, late_seconds):
         and row["last_observation_seconds"] >= late_seconds
         for row in active
     )
+    tiers = {
+        tier: sum(
+            quality_tier(
+                row,
+                a_horizon_seconds=a_horizon_seconds,
+                a_min_labels=a_min_labels,
+                b_horizon_seconds=b_horizon_seconds,
+                b_min_labels=b_min_labels,
+            )
+            == tier
+            for row in active
+        )
+        for tier in ("A", "B", "C")
+    }
     return {
         "raw_metadata_games": len(records),
         "excluded_metadata_games": len(records) - len(active),
@@ -82,6 +151,15 @@ def _summary(records, late_seconds):
         "valid_wait_labels": sum(row["valid_waits"] for row in active),
         "flagged_rows": sum(row["flagged_rows"] for row in active),
         "unflagged_illegal_target_rows": sum(row["unflagged_illegal_rows"] for row in active),
+        "quality_tiers": tiers,
+        "ppo_bootstrap_eligible_games": tiers["A"],
+        "ppo_bootstrap_eligible_fraction": tiers["A"] / len(active) if active else 0.0,
+        "quality_thresholds": {
+            "A_horizon_seconds": a_horizon_seconds,
+            "A_min_labels": a_min_labels,
+            "B_horizon_seconds": b_horizon_seconds,
+            "B_min_labels": b_min_labels,
+        },
         "retained_horizon_seconds": _distribution(
             [row["retained_horizon_seconds"] for row in active]
         ),
@@ -116,7 +194,17 @@ def _summary(records, late_seconds):
     }
 
 
-def audit_dataset(dataset, verify_shards=True, late_seconds=120.0, progress=None):
+def audit_dataset(
+    dataset,
+    verify_shards=True,
+    late_seconds=120.0,
+    progress=None,
+    *,
+    a_horizon_seconds=60.0,
+    a_min_labels=8,
+    b_horizon_seconds=30.0,
+    b_min_labels=4,
+):
     manifest_path = Path(dataset)
     if manifest_path.is_dir():
         manifest_path /= "dataset.manifest.json"
@@ -258,6 +346,15 @@ def audit_dataset(dataset, verify_shards=True, late_seconds=120.0, progress=None
             ),
             **{key: int(values[index]) for key, values in fields.items() if key != "seat_bits"},
         }
+        row["collisions"] = int(meta.get("collisions", 0))
+        row["reconstruction_policy"] = meta.get("reconstruction_policy", "unknown")
+        row["quality_tier"] = quality_tier(
+            row,
+            a_horizon_seconds=a_horizon_seconds,
+            a_min_labels=a_min_labels,
+            b_horizon_seconds=b_horizon_seconds,
+            b_min_labels=b_min_labels,
+        )
         records.append(row)
     identities = defaultdict(list)
     for row in records:
@@ -279,12 +376,26 @@ def audit_dataset(dataset, verify_shards=True, late_seconds=120.0, progress=None
         "metadata_sha256": manifest["metadata_sha256"],
         "shard_hashes_verified": verify_shards,
         "decision_ticks": decision_ticks,
-        **_summary(records, late_seconds),
+        **_summary(
+            records,
+            late_seconds,
+            a_horizon_seconds=a_horizon_seconds,
+            a_min_labels=a_min_labels,
+            b_horizon_seconds=b_horizon_seconds,
+            b_min_labels=b_min_labels,
+        ),
         "active_duplicate_identity_groups": active_duplicates,
         "excluded_seeded_duplicates_overridden_by_active_cycle": cycle_overrides,
         "active_seeded_with_excluded_inferred_cycle_identity_groups": priority_violations,
         "by_source": {
-            str(source): _summary([row for row in records if row["source"] == source], late_seconds)
+            str(source): _summary(
+                [row for row in records if row["source"] == source],
+                late_seconds,
+                a_horizon_seconds=a_horizon_seconds,
+                a_min_labels=a_min_labels,
+                b_horizon_seconds=b_horizon_seconds,
+                b_min_labels=b_min_labels,
+            )
             for source in sorted({row["source"] for row in records}, key=str)
         },
     }
@@ -350,10 +461,23 @@ def main():
     parser.add_argument("--after", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--late-seconds", type=float, default=120.0)
+    parser.add_argument("--a-horizon-seconds", type=float, default=60.0)
+    parser.add_argument("--a-min-labels", type=int, default=8)
+    parser.add_argument("--b-horizon-seconds", type=float, default=30.0)
+    parser.add_argument("--b-min-labels", type=int, default=4)
     parser.add_argument("--no-verify-shards", action="store_true")
     args = parser.parse_args()
-    if not np.isfinite(args.late_seconds) or args.late_seconds < 0:
-        parser.error("--late-seconds must be finite and nonnegative")
+    if (
+        not np.isfinite(args.late_seconds)
+        or args.late_seconds < 0
+        or not np.isfinite(args.a_horizon_seconds)
+        or not np.isfinite(args.b_horizon_seconds)
+        or args.a_horizon_seconds < args.b_horizon_seconds
+        or args.b_horizon_seconds < 0
+        or args.a_min_labels < args.b_min_labels
+        or args.b_min_labels < 1
+    ):
+        parser.error("invalid quality thresholds")
     results, records = {}, {}
     for label, path in (("before", args.before), ("after", args.after)):
 
@@ -373,7 +497,14 @@ def main():
                 )
 
         results[label], records[label] = audit_dataset(
-            path, not args.no_verify_shards, args.late_seconds, progress
+            path,
+            not args.no_verify_shards,
+            args.late_seconds,
+            progress,
+            a_horizon_seconds=args.a_horizon_seconds,
+            a_min_labels=args.a_min_labels,
+            b_horizon_seconds=args.b_horizon_seconds,
+            b_min_labels=args.b_min_labels,
         )
     report = {
         "protocol": "retained observation intervals and exact legal unmasked BC labels",
