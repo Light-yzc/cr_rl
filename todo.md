@@ -17,6 +17,10 @@
 > 和 PPO 门禁写在 [BC 数据采集计划](docs/BC_DATA_COLLECTION_PLAN_20261109.md)。
 > 当前 PPO 效果不足以证明模型强度；下一次训练应先做质量分层 BC 快照和自然时机/落点评估，
 > 再决定是否重新进入 PPO。
+> 用户指定的 `codex/training-game-budget` 比 main 超前5个提交，最新 `81f9374`。
+> 分支的 shared replay registry 已同步到本地 `build_bc_shards.py`；分支 PPO 的 choice-only、
+> card/tile 分离 KL 和 complete-game budget 仍是待独立 A/B 验证的训练改动，不能与 BC
+> 数据修复混为一个结论。
 
 当前权威更新：第22轮完整结束，CPU已读回校验51份备份文件；累计97,133有效样本，
 本阶段29,432样本、177/1852 Actor/Critic步、27正常终局、0故障。64局固定评估进行中。

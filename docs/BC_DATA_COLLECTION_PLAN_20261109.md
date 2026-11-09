@@ -23,6 +23,21 @@ natural sample). The PPO pilot improved behaviour such as waiting, but did not
 pass a strength gate. More PPO updates on the same BC distribution are not a
 substitute for better state/action supervision.
 
+The requested branch `codex/training-game-budget` is five commits ahead of
+`main` (latest `81f9374`). Its BC work adds a shared replay registry across
+source shards and documents KataCR and TV Royale as visual-data candidates.
+The registry change is now applied to the local rebuild entry point. The visual
+datasets remain audit candidates because they expose image-derived fields and
+screen coordinates rather than the pinned 7024-int simulator state and legal
+mask; the branch has not trained BC on either candidate.
+
+The branch also adds PPO-side controls (`894857e`, `ca56c4f`): Actor updates
+can use only rows with a genuine action choice, card and tile KL budgets are
+separated, and a run can stop after a checkpointed number of complete learner
+games. These address PPO sample-use and early-KL-stop risks; they do not repair
+state/action mismatch in reconstructed BC data. Its 64-game BC comparison
+(33--31) is inconclusive and is not evidence that either BC or PPO is strong.
+
 ## Dataset tiers
 
 Every imported replay must be assigned a quality tier in metadata. The tier is

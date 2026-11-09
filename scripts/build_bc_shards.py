@@ -31,6 +31,14 @@ def main():
     parser.add_argument("--shard-replays", type=int, default=16)
     parser.add_argument("--max-omissions", type=int, default=0)
     parser.add_argument("--infer-opening-cycle", action="store_true")
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        help=(
+            "Shared replay/deck registry across all source shards. "
+            "Defaults to <out>/replay_registry.json."
+        ),
+    )
     args = parser.parse_args()
     if args.target < 0:
         parser.error("target cannot be negative")
@@ -38,6 +46,8 @@ def main():
         parser.error("omission budget cannot be negative")
     target = args.target or sys.maxsize
     args.out.mkdir(parents=True, exist_ok=True)
+    registry_path = args.registry or (args.out / "replay_registry.json")
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
     sources = [
         (
             "Cochon123/clash-royale-replays",
@@ -84,10 +94,23 @@ def main():
         raise ValueError("Use a new output directory when changing opening-cycle inference")
     metadata_path = args.out / "dataset_metadata.json"
     metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else None
+    if metadata is not None and not metadata.get("additional_deduplication", False):
+        raise ValueError(
+            "Existing dataset was built without the shared replay registry; "
+            "use a new output directory"
+        )
+    if metadata is not None and metadata.get("additional_deduplication", False):
+        if not registry_path.exists():
+            raise ValueError(
+                "Existing registry-backed dataset is missing its replay registry; "
+                "restore the registry before resuming"
+            )
 
     def publish():
         atomic_json(state_path, status)
         copy_verified(state_path, args.drive / state_path.name)
+        if registry_path.exists():
+            copy_verified(registry_path, args.drive / registry_path.name)
         if metadata is None:
             return
         atomic_json(metadata_path, metadata)
@@ -99,7 +122,8 @@ def main():
             "shards": status["shards"],
             "rows": status["rows"],
             "replays": status["replays"],
-            "additional_deduplication": False,
+            "additional_deduplication": True,
+            "registry": str(registry_path),
         }
         manifest_path = args.out / "dataset.manifest.json"
         atomic_json(manifest_path, manifest)
@@ -137,6 +161,8 @@ def main():
                     "1000000",
                     "--max-omissions",
                     str(args.max_omissions),
+                    "--registry",
+                    str(registry_path),
                 ]
                 if args.strict_subset:
                     command += [
@@ -173,7 +199,8 @@ def main():
                         "source": [s[0] for s in sources],
                         "replays": [],
                         "label_totals": {},
-                        "additional_deduplication": False,
+                        "additional_deduplication": True,
+                        "registry": str(registry_path),
                         "source_files": [
                             {"source": s[0], "revision": s[2], "sha256": file_sha256(s[1])}
                             for s in sources
@@ -208,6 +235,8 @@ def main():
                 status["rows"] += shard_meta["rows"]
                 status["replays"] += len(shard_meta["replays"])
                 metadata["rows"] = status["rows"]
+                metadata["additional_deduplication"] = True
+                metadata["registry"] = str(registry_path)
                 count += len(shard_meta["replays"])
                 status["source_counts"][source] = count
                 elapsed = time.time() - status["started_unix"]
