@@ -2,6 +2,7 @@ primary:
   name: crforge
   repository: https://github.com/voonhous/crforge.git
   commit: 7ee59b39bf1d41d5c01645f01c47ed8c8d3355d6
+  patch_manifest: patches/crforge/manifest.json
   client_version: "16.635.1"
   observed_current_client: "16.635.7"
   data_version: "16.635.3"

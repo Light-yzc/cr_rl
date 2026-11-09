@@ -1,5 +1,11 @@
 # BC data collection and PPO cold-start plan
 
+> Latest user-directed work: the explicit repaired-trajectory BC experiment is now
+> implemented. Use [repair protocol](TRAJ_REPAIR_PROTOCOL_20261109.md) and
+> [measured results](TRAJ_REPAIR_RESULTS_20261109.md) for current execution and
+> handoff. The exact A-tier and real-client tracks below remain alternatives;
+> they do not block the separately labelled repaired-BC comparison.
+
 ## Finding from the latest branch
 
 The current pipeline is reproducible, but its supervision is only an

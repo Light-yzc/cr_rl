@@ -97,8 +97,10 @@ def main():
         alive = proc.exists() and proc.read_text().split()[2] != "Z"
         if args.resume_trial:
             command_line = Path(f"/proc/{previous['pid']}/cmdline")
-            same_controller = alive and command_line.exists() and (
-                b"run_bc_repair_trial.py" in command_line.read_bytes()
+            same_controller = (
+                alive
+                and command_line.exists()
+                and (b"run_bc_repair_trial.py" in command_line.read_bytes())
             )
             if same_controller or previous["phase"] == "completed":
                 raise ValueError("Cannot resume an active or completed trial")
@@ -155,7 +157,7 @@ def main():
                 backup / "source.tar.gz", backup / f"source_before_resume_{time.time_ns()}.tar.gz"
             )
         with tarfile.open(out / "source.tar.gz", "w:gz") as archive:
-            for name in ("src", "scripts", "tests", "configs", "pyproject.toml"):
+            for name in ("src", "scripts", "tests", "configs", "patches", "pyproject.toml"):
                 archive.add(
                     ROOT / name,
                     arcname=name,
@@ -243,10 +245,13 @@ def main():
         atomic_json(out / "protocol.json", protocol)
         copy_verified(out / "protocol.json", backup / "protocol.json")
         if args.evaluate_results:
-            atomic_json(out / "evaluation_request.json", {
-                "full_validation": True,
-                "paired_games_per_candidate": 2 * args.evaluation_pairs,
-            })
+            atomic_json(
+                out / "evaluation_request.json",
+                {
+                    "full_validation": True,
+                    "paired_games_per_candidate": 2 * args.evaluation_pairs,
+                },
+            )
             copy_verified(out / "evaluation_request.json", backup / "evaluation_request.json")
         env = dict(os.environ, OMP_NUM_THREADS="4", MKL_NUM_THREADS="4", PYTHONUNBUFFERED="1")
         for name, arm_settings in protocol["arms"].items():
@@ -338,11 +343,10 @@ def main():
                     latest = json.loads(latest_path.read_text())
                     if Path(latest["path"]).name != latest["path"]:
                         raise ValueError("Invalid checkpoint backup filename")
-                    restored = copy_verified(
-                        arm_backup / "bc" / latest["path"], arm / "bc.pt"
-                    )
+                    restored = copy_verified(arm_backup / "bc" / latest["path"], arm / "bc.pt")
                     if (restored["sha256"], restored["bytes"]) != (
-                        latest["sha256"], latest["bytes"]
+                        latest["sha256"],
+                        latest["bytes"],
                     ):
                         raise ValueError("Resumed checkpoint checksum mismatch")
                     import torch
@@ -407,9 +411,9 @@ def main():
                 ("repaired5096", out / "repaired/bc.pt", "repaired"),
                 ("baseline5096", out / "baseline/bc.pt", "baseline"),
             ):
-                command = json.loads(
-                    (out / command_arm / "registered_command.json").read_text()
-                )["command"]
+                command = json.loads((out / command_arm / "registered_command.json").read_text())[
+                    "command"
+                ]
                 for flag in ("--carry-optimizer", "--upgrade-readouts"):
                     if flag in command:
                         command.remove(flag)
@@ -430,12 +434,21 @@ def main():
                     pairs = min(4, args.evaluation_pairs - start)
                     battle = evaluation / f"{label}_pairs_{start:03d}"
                     command = [
-                        sys.executable, "scripts/evaluate_policy.py",
-                        "--policy", str(out / label / "bc.pt"),
-                        "--opponent", str(checkpoint),
-                        "--decks", "configs/decks_eval.yaml",
-                        "--out", str(battle), "--pairs", str(pairs),
-                        "--pair-start", str(start), "--frame-cache",
+                        sys.executable,
+                        "scripts/evaluate_policy.py",
+                        "--policy",
+                        str(out / label / "bc.pt"),
+                        "--opponent",
+                        str(checkpoint),
+                        "--decks",
+                        "configs/decks_eval.yaml",
+                        "--out",
+                        str(battle),
+                        "--pairs",
+                        str(pairs),
+                        "--pair-start",
+                        str(start),
+                        "--frame-cache",
                     ]
                     with (evaluation / f"{label}_battle_{start:03d}.log").open("w") as log:
                         child = subprocess.Popen(
@@ -466,12 +479,15 @@ def main():
                 ),
             }
             atomic_json(evaluation / "summary.json", summary)
-            atomic_json(evaluation / "completed.json", {
-                "full_validation_candidates": ["parent4096", "repaired5096", "baseline5096"],
-                "paired_games_per_candidate": 2 * args.evaluation_pairs,
-                "wait_logit_bias": 0.0,
-                "limitation": "Small simulator cohort; not proof of official-client strength",
-            })
+            atomic_json(
+                evaluation / "completed.json",
+                {
+                    "full_validation_candidates": ["parent4096", "repaired5096", "baseline5096"],
+                    "paired_games_per_candidate": 2 * args.evaluation_pairs,
+                    "wait_logit_bias": 0.0,
+                    "limitation": "Small simulator cohort; not proof of official-client strength",
+                },
+            )
             sync_arm(evaluation)
         comparison = {}
         for name in protocol["arms"]:

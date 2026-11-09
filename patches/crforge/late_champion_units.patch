@@ -1,0 +1,314 @@
+diff --git a/core/src/main/java/org/crforge/core/battle/replay/ScenarioWriter.java b/core/src/main/java/org/crforge/core/battle/replay/ScenarioWriter.java
+index 6431c84a..85a01534 100644
+--- a/core/src/main/java/org/crforge/core/battle/replay/ScenarioWriter.java
++++ b/core/src/main/java/org/crforge/core/battle/replay/ScenarioWriter.java
+@@ -26,7 +26,6 @@ import org.crforge.core.battle.match.MatchCard;
+ import org.crforge.core.battle.match.MatchSide;
+ import org.crforge.core.battle.match.MirrorItem;
+ import org.crforge.core.battle.match.VariantItem;
+-import org.crforge.core.battle.unit.CharacterEntity;
+ import org.crforge.core.battle.unit.Standard1v1Battle;
+ 
+ /**
+@@ -49,7 +48,7 @@ import org.crforge.core.battle.unit.Standard1v1Battle;
+  * player's arena row, so the caller of a fresh battle names it, and a replay's plan keeps its own);
+  * a deck card played at two levels, as a replay gives each deck card one level; a Mirror whose item
+  * repeats nothing; a variant play whose option the battle has not picked yet; an ability command
+- * naming a unit no play made; and any input the version's replays cannot carry (a tower selection
++   * naming no real unit; and any input the version's replays cannot carry (a tower selection
+  * no support card places, a level below the rarity's first, players' data other than one choice
+  * each, a card level minimum in a version whose replays do not carry one, a data version whose
+  * command types are not established).
+@@ -273,19 +272,13 @@ public final class ScenarioWriter {
+   }
+ 
+   /**
+-   * The game object id of the unit an ability command names: its own, or that of the unit a play
+-   * made under the name it gives.
++   * The real object id a command names, including a late-spawned unit retained in the command's
++   * history after it left the live holder.
+    */
+   private static int objectId(Standard1v1Battle battle, Standard1v1Battle.Command command) {
+-    if (command.objectId() >= 0) {
+-      return command.objectId();
+-    }
+-    for (Standard1v1Battle.Play play : battle.getPlays()) {
+-      for (CharacterEntity unit : play.units()) {
+-        if (unit.name().equals(command.unit()) && unit.side() == command.side()) {
+-          return unit.getId();
+-        }
+-      }
++    int id = battle.abilityObjectId(command);
++    if (id >= 0) {
++      return id;
+     }
+     throw new UnsupportedOperationException(
+         command.name()
+diff --git a/core/src/main/java/org/crforge/core/battle/unit/PlayerCommands.java b/core/src/main/java/org/crforge/core/battle/unit/PlayerCommands.java
+index 4a3228f1..9840a100 100644
+--- a/core/src/main/java/org/crforge/core/battle/unit/PlayerCommands.java
++++ b/core/src/main/java/org/crforge/core/battle/unit/PlayerCommands.java
+@@ -399,36 +399,15 @@ public final class PlayerCommands {
+   /**
+    * The unit an ability command for one of a side's champion slots names now, as the player's
+    * button for the slot names it: the unit of the play the slot follows (its deploy count) whose
+-   * row names the champion's ability, not a clone, found among the side's plays that have run.
++   * row names the champion's ability, not a clone. This includes a real unit a play's projectile or
++   * action made after the original card play ran.
+    *
+    * @param side the commanding side
+    * @param slot the champion slot, 0 for the king's first, 1 for its second
+-   * @return the unit, or null when the slot follows no play, or no play of the side that has run
+-   *     made such a unit (a champion an action spawned, which the player's commands cannot name)
++   * @return the unit, or null when the slot follows no play or no such unit has been made
+    */
+   public CharacterEntity championUnit(int side, int slot) {
+-    ChampionController controller = battle.getWorld().kingTower(side).championSlot(slot + 1);
+-    UnitData champion = controller == null ? null : controller.getChampion();
+-    int index = controller == null ? -1 : controller.getDeployIndex();
+-    if (champion == null || champion.ability() == null || index < 0) {
+-      return null;
+-    }
+-    String ability = champion.ability().name();
+-    for (Standard1v1Battle.Play play : battle.getPlays()) {
+-      if (play.side() != side) {
+-        continue;
+-      }
+-      for (CharacterEntity unit : play.units()) {
+-        AbilityData data = unit.getData().ability();
+-        if (unit.getDeployIndex() == index
+-            && !unit.isClone()
+-            && data != null
+-            && data.name().equals(ability)) {
+-          return unit;
+-        }
+-      }
+-    }
+-    return null;
++    return battle.championUnit(side, slot);
+   }
+ 
+   /** The client's try of an ability command: the run's gates, the promised costs set aside. */
+@@ -679,14 +658,7 @@ public final class PlayerCommands {
+ 
+   /** The unit of the side a play that has run made under a name, or null. */
+   private CharacterEntity playedUnit(int side, String unit) {
+-    for (Standard1v1Battle.Play play : battle.getPlays()) {
+-      for (CharacterEntity made : play.units()) {
+-        if (made.name().equals(unit) && made.side() == side) {
+-          return made;
+-        }
+-      }
+-    }
+-    return null;
++    return battle.playedUnit(side, unit);
+   }
+ 
+   private Standard1v1Battle.Play findPlay(String name) {
+diff --git a/core/src/main/java/org/crforge/core/battle/unit/Standard1v1Battle.java b/core/src/main/java/org/crforge/core/battle/unit/Standard1v1Battle.java
+index d39e45dd..0c974a63 100644
+--- a/core/src/main/java/org/crforge/core/battle/unit/Standard1v1Battle.java
++++ b/core/src/main/java/org/crforge/core/battle/unit/Standard1v1Battle.java
+@@ -102,6 +102,11 @@ import org.crforge.core.pathfinding.grid.TileMap;
+             + " the play is given, as for every card.")
+ public class Standard1v1Battle {
+ 
++  /** Identifies the command lookup patch in the jar actually loaded by an adapter. */
++  public static String commandLookupPatch() {
++    return "cr_rl_late_champion_units_v1";
++  }
++
+   /**
+    * The towers' level when none is given, and the level the mechanic tests and the visualizer play
+    * their units at.
+@@ -425,9 +430,16 @@ public class Standard1v1Battle {
+    * @param unit the name of the unit it names, or null when it names one by id
+    * @param objectId the game object id of the unit it names, or -1 when it names one by name
+    * @param name the command's name
++   * @param namedUnit the real unit resolved when queued, retained for the native gates if it dies
+    */
+   private record QueuedAbility(
+-      int given, int tick, int side, String unit, int objectId, String name) {}
++      int given,
++      int tick,
++      int side,
++      String unit,
++      int objectId,
++      String name,
++      CharacterEntity namedUnit) {}
+ 
+   /**
+    * Every card play queued so far, which a Mirror's and a variant card's item are built against.
+@@ -777,7 +789,9 @@ public class Standard1v1Battle {
+       throw new UnsupportedOperationException(
+           name + ": an ability command outside a match, which has no champion slots");
+     }
+-    queuedAbilities.add(new QueuedAbility(tick - PLAY_DELAY_TICKS, tick, side, unit, -1, name));
++    CharacterEntity namedUnit = playedUnit(side, unit);
++    queuedAbilities.add(
++        new QueuedAbility(tick - PLAY_DELAY_TICKS, tick, side, unit, -1, name, namedUnit));
+     commands.add(
+         new Command(
+             name,
+@@ -802,13 +816,13 @@ public class Standard1v1Battle {
+ 
+           @Override
+           public void execute(Battle target) {
+-            CharacterEntity named = playedUnit(unit);
++            CharacterEntity named = namedUnit != null ? namedUnit : playedUnit(side, unit);
+             checkArgument(
+                 named != null && named.side() == side,
+                 () -> name + " names " + unit + ", which no play of side " + side + " made");
++            rememberAbilityUnit(name, named);
+             abilityUses.add(
+-                new AbilityUse(
+-                    name, side, unit, target.getTick(), AbilityCommand.run(world, side, named)));
++                new AbilityUse(name, side, unit, target.getTick(), AbilityCommand.run(world, side, named)));
+           }
+         });
+   }
+@@ -848,7 +862,7 @@ public class Standard1v1Battle {
+       throw new UnsupportedOperationException(
+           name + ": an ability command outside a match, which has no champion slots");
+     }
+-    queuedAbilities.add(new QueuedAbility(given, tick, side, null, objectId, name));
++    queuedAbilities.add(new QueuedAbility(given, tick, side, null, objectId, name, null));
+     commands.add(
+         new Command(
+             name, CommandKind.ABILITY, given, tick, side, null, 0, 0, 0, -1, null, objectId));
+@@ -870,6 +884,12 @@ public class Standard1v1Battle {
+                 }
+               }
+             }
++            for (BattleEntity entity : world.getHolder().entities()) {
++              if (entity instanceof CharacterEntity live && live.getId() == objectId) {
++                unit = live.name();
++                break;
++              }
++            }
+             abilityUses.add(
+                 new AbilityUse(
+                     name, side, unit, target.getTick(), AbilityCommand.run(world, side, objectId)));
+@@ -877,18 +897,107 @@ public class Standard1v1Battle {
+         });
+   }
+ 
+-  /** The unit a card play run so far made under a name, or null. */
+-  private CharacterEntity playedUnit(String name) {
++  /**
++   * The real unit a name identifies: an original play unit, else a live champion made later by a
++   * projectile or action and followed by the side's native slot. The command's native gates still
++   * decide whether that unit can use its ability.
++   */
++  CharacterEntity playedUnit(int side, String name) {
+     for (Play play : plays) {
+       for (CharacterEntity unit : play.units()) {
+-        if (unit.name().equals(name)) {
++        if (unit.side() == side && unit.name().equals(name)) {
+           return unit;
+         }
+       }
+     }
++    for (BattleEntity entity : world.getHolder().entities()) {
++      if (entity instanceof CharacterEntity unit
++          && unit.side() == side
++          && unit.name().equals(name)
++          && unit.getView().isAlive()) {
++        for (int slot = 1; slot <= 2; slot++) {
++          ChampionController controller = world.kingTower(side).championSlot(slot);
++          if (controller != null
++              && controller.follows(unit)
++              && !unit.getData().building()
++              && controller.getChampion() != null
++              && controller.getChampion().name().equals(unit.getData().name())) {
++            return unit;
++          }
++        }
++      }
++    }
++    return null;
++  }
++
++  /** A slot's current real copy, including units the original play did not directly make. */
++  CharacterEntity championUnit(int side, int slot) {
++    ChampionController controller = world.kingTower(side).championSlot(slot + 1);
++    if (controller == null || controller.getChampion() == null || controller.getDeployIndex() < 0) {
++      return null;
++    }
++    for (BattleEntity entity : world.getHolder().entities()) {
++      if (entity instanceof CharacterEntity unit
++          && unit.getView().isAlive()
++          && controller.follows(unit)) {
++        return unit;
++      }
++    }
++    // Keep the original reference behavior for ordinary card plays: AbilityCommand.find handles
++    // a removed original unit and refuses it when no live copy of that deployment remains.
++    for (Play play : plays) {
++      if (play.side() == side) {
++        for (CharacterEntity unit : play.units()) {
++          if (controller.follows(unit)) {
++            return unit;
++          }
++        }
++      }
++    }
+     return null;
+   }
+ 
++  /**
++   * The real object id an ability command names, for a replay writer. A named late-spawned unit's
++   * original reference belongs to the command's history, even after it has died or the slot follows
++   * another deployment. This read never changes the battle or supplies a unit to an ability gate.
++   *
++   * @param command an ability command queued on this battle
++   * @return its object id, or -1 when no real named unit has been resolved yet
++   */
++  public int abilityObjectId(Command command) {
++    if (command.objectId() >= 0) {
++      return command.objectId();
++    }
++    for (QueuedAbility ability : queuedAbilities) {
++      if (ability.name().equals(command.name())
++          && ability.side() == command.side()
++          && ability.namedUnit() != null) {
++        return ability.namedUnit().getId();
++      }
++    }
++    CharacterEntity unit = playedUnit(command.side(), command.unit());
++    return unit == null ? -1 : unit.getId();
++  }
++
++  /** Retains the real target first resolved at execution, for commands queued before it spawned. */
++  private void rememberAbilityUnit(String name, CharacterEntity unit) {
++    if (unit == null) {
++      return;
++    }
++    for (int index = 0; index < queuedAbilities.size(); index++) {
++      QueuedAbility queued = queuedAbilities.get(index);
++      if (queued.name().equals(name) && queued.namedUnit() == null) {
++        queuedAbilities.set(
++            index,
++            new QueuedAbility(
++                queued.given(), queued.tick(), queued.side(), queued.unit(), queued.objectId(),
++                queued.name(), unit));
++        return;
++      }
++    }
++  }
++
+   /**
+    * Queues a card play as a player makes it, between two steps: the play is stamped with the
+    * battle's tick counter, the number of the next step, or 1 while the counter is still 0, and runs
+@@ -1497,7 +1606,10 @@ public class Standard1v1Battle {
+   private int abilityCost(QueuedAbility ability, String name) {
+     CharacterEntity unit = null;
+     if (ability.unit() != null) {
+-      unit = playedUnit(ability.unit());
++      unit =
++          ability.namedUnit() != null
++              ? ability.namedUnit()
++              : playedUnit(ability.side(), ability.unit());
+     } else {
+       for (Play play : plays) {
+         for (CharacterEntity made : play.units()) {

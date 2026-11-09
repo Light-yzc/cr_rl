@@ -206,8 +206,15 @@ def main():
                             for s in sources
                         ],
                     }
-                for key in ("schema", "vocabulary", "backend_commit", "content_sha", "level"):
-                    if metadata[key] != shard_meta[key]:
+                for key in (
+                    "schema",
+                    "vocabulary",
+                    "backend_commit",
+                    "content_sha",
+                    "level",
+                    "backend_patch_sha256",
+                ):
+                    if metadata.get(key) != shard_meta.get(key):
                         raise ValueError(f"Incompatible shard {key}")
                 relative = data_path.relative_to(args.out)
                 record = copy_verified(data_path, args.drive / relative)

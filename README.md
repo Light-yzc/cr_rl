@@ -2,7 +2,21 @@
 
 An experiment-first, shared multi-deck Clash Royale agent: human replay BC -> PPO -> historical-opponent self-play. Formal training starts from BC; random-initialized PPO is reserved for pipeline acceptance. The simulator is the training backend, not a claim of perfect parity with every live-client mechanic.
 
-## Verified training status — 2026-11-05
+## Current trajectory-repair work — 2026-11-09
+
+The new event-to-simulator repair path captures actual pre-action states and
+confirms native card/ability executions. On a fixed 100-game CPU cohort, complete
+source execution reached 40% with native skill-card identity and hand/tile/time
+repairs. Counting confirmed normal early simulator results separately gives
+78% combined completion; the two measures are not interchangeable. Two complete repaired games passed bitwise state/mask
+replay checks, BC ingestion and a one-update CPU compatibility smoke. A separate
+16-game repaired dataset is ready: 755 confirmed events and 22,390 legal rows. The prior
+121M/122M policy has not been retrained on this data yet; playing-strength
+improvement remains untested. No active Colab sessions were found this turn.
+See [measured results](docs/TRAJ_REPAIR_RESULTS_20261109.md),
+[repair protocol](docs/TRAJ_REPAIR_PROTOCOL_20261109.md), and [current TODO](todo.md).
+
+## Historical training record — 2026-11-05
 
 The prior eight-update continuation completed through generation14, with
 67,701 learner samples. Its 64-game comparison is independently verified:

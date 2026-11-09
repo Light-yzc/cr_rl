@@ -67,6 +67,13 @@ class CrForgeVector:
             )
 
         self.vector = IndependentBattles(count, factory) if independent else factory(count, threads)
+        from cr_rl.envs.backend_patch import loaded_backend
+
+        try:
+            self.backend_provenance = loaded_backend(self.paths.install)
+        except Exception:
+            self.vector.close()
+            raise
         self.count = count
 
     @property
@@ -122,7 +129,12 @@ class CrForgeVector:
         self.vector.step()
 
     def metadata(self) -> dict:
-        return {**dict(self.vector.metadata), "commit": self.backend_commit}
+        return {
+            **dict(self.vector.metadata),
+            "commit": self.backend_commit,
+            "backend_provenance": self.backend_provenance,
+            "backend_patch_sha256": self.backend_provenance["patch_manifest_sha256"],
+        }
 
     def close(self) -> None:
         self.vector.close()

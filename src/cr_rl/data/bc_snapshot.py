@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 
+from cr_rl.data.bc_provenance import require_dataset_kind
 from cr_rl.training.persistence import atomic_json, copy_verified, file_sha256
 
 
@@ -20,16 +21,27 @@ def read_published(root):
     return manifest, json.loads(metadata_bytes), hashlib.sha256(manifest_bytes).hexdigest()
 
 
-def freeze_datasets(sources, destination, deduplicate=False):
-    """Freeze immutable shards by hard link or verified cross-filesystem copy."""
+def freeze_datasets(sources, destination, deduplicate=False, *, allow_repaired=False):
+    """Freeze homogeneous exact or explicitly requested repaired BC datasets."""
+    # Check every source before publishing/linking anything.  A repair experiment
+    # can contain unmodified games, but exact and repaired *datasets* must not be
+    # silently merged and advertised as one clean corpus.
+    checked = []
+    for local, cloud in sources:
+        manifest, metadata, fingerprint = read_published(Path(local))
+        kind = require_dataset_kind(metadata, allow_repaired=allow_repaired, manifest=manifest)
+        checked.append((local, cloud, manifest, metadata, fingerprint, kind))
+    kinds = {row[-1] for row in checked}
+    if len(kinds) != 1:
+        raise ValueError("Freeze a separate BC snapshot for exact and repaired datasets")
+    kind = kinds.pop()
     destination.mkdir(parents=True, exist_ok=True)
     records, replay_offset, rows, locations = [], 0, 0, []
     combined = None
     fingerprints = []
     excluded = []
     seen = set()
-    for source_index, (local, cloud) in enumerate(sources):
-        manifest, metadata, fingerprint = read_published(Path(local))
+    for source_index, (local, cloud, manifest, metadata, fingerprint, _) in enumerate(checked):
         prior_locations_path = Path(local) / "source_locations.json"
         prior_locations = (
             {
@@ -47,9 +59,17 @@ def freeze_datasets(sources, destination, deduplicate=False):
                 "replays": [],
                 "label_totals": {},
                 "additional_deduplication": deduplicate,
+                "dataset_kind": kind,
             }
-        for key in ("schema", "vocabulary", "backend_commit", "content_sha", "level"):
-            if combined[key] != metadata[key]:
+        for key in (
+            "schema",
+            "vocabulary",
+            "backend_commit",
+            "content_sha",
+            "level",
+            "backend_patch_sha256",
+        ):
+            if combined.get(key) != metadata.get(key):
                 raise ValueError(f"Cannot merge BC shards with different {key}")
         for record in manifest["shards"]:
             relative = Path("shards") / f"source_{source_index}" / record["path"]
@@ -108,6 +128,7 @@ def freeze_datasets(sources, destination, deduplicate=False):
             "replays": replay_offset,
             "additional_deduplication": deduplicate,
             "supervised_replays": replay_offset - len(excluded),
+            "dataset_kind": kind,
         },
     )
     atomic_json(destination / "source_locations.json", {"files": locations})
@@ -117,4 +138,5 @@ def freeze_datasets(sources, destination, deduplicate=False):
         "duplicates_excluded": len(excluded),
         "rows": rows,
         "source_manifest_sha256": fingerprints,
+        "dataset_kind": kind,
     }

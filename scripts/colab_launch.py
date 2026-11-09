@@ -139,6 +139,7 @@ def main() -> None:
         for name in (
             "src",
             "configs",
+            "patches",
             "scripts",
             "tests",
             "docs",

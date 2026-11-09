@@ -6,6 +6,7 @@ import numpy as np
 
 # Separate from the simulator's native row flags; training already rejects nonzero flags.
 SOURCE_COMMAND_OMITTED = 1 << 16
+GENERATED_WAIT_TAIL = 1 << 17
 
 
 def prefix_cutoff(omitted, decision_ticks=5, max_omissions=0):

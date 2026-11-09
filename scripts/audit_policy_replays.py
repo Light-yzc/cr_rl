@@ -26,7 +26,16 @@ def main():
     args = parser.parse_args()
     cache = args.simulator_cache.resolve()
     marker = cache / "UPSTREAM_COMMIT"
-    if marker.exists():
+    patched_install = ROOT / ".cache/vendor/crforge/env/build/install/env"
+    backend_provenance = None
+    if (patched_install / "cr_rl_backend.json").exists():
+        from cr_rl.envs.backend_patch import installed_backend
+
+        backend_provenance = installed_backend(patched_install)
+        commit = backend_provenance["base_commit"]
+        library = patched_install / "lib"
+        tables = Path.home() / ".crforge/tables/16.635.3"
+    elif marker.exists():
         commit = marker.read_text().strip()
         library = cache / "crforge/desktop/build/install/desktop/lib"
         tables = cache / "tables/16.635.3"
@@ -105,6 +114,7 @@ def main():
         "evaluation_sha256": hashlib.sha256(args.evaluation.read_bytes()).hexdigest(),
         "paired": pair_summary,
         "simulator_commit": commit,
+        "backend_provenance": backend_provenance,
         "games": games,
         "limitation": (
             "Replay requests do not reveal unrecorded WAIT decisions; "
