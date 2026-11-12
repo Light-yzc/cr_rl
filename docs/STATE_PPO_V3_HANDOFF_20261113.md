@@ -28,5 +28,11 @@ rewards and episode boundaries for both seats, then calls `state_ppo_update`.
 the Colab/V100 launch paths. Checkpoint backup, progress JSONL and optional
 W&B logging are enabled on the v3 driver.
 
+The real crforge smoke completed one simulator rollout and one PPO update on
+the local CUDA GPU. It produced two v3 sequences, two samples, a finite loss,
+and `artifacts/ppo_v3_smoke_real/ppo_latest.pt`. Forced-WAIT entropy was zero
+for that smoke, as expected; the synthetic smoke covers nonzero categorical
+entropy. Illegal flat actions are excluded from the entropy calculation.
+
 The legacy `selfplay_v2.py` path remains available only for architecture-v2
 checkpoints. It is never selected for a v3 checkpoint.
