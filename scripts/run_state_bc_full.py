@@ -459,7 +459,6 @@ def training_argv(args, snapshot, local_stage, registry, *, resume, parent, pare
     if args.unfreeze_after_checkpoints is not None and not resume:
         argv += ['--unfreeze-after-checkpoints', str(args.unfreeze_after_checkpoints),
                  '--unfreeze-learning-rate', str(args.unfreeze_learning_rate)]
-    argv += ['--metrics-every-updates',str(args.metrics_every_updates)]
     return argv
 
 
