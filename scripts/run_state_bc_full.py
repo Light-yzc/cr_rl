@@ -429,7 +429,7 @@ def training_argv(args, snapshot, local_stage, registry, *, resume, parent, pare
         "--split-registry",
         str(registry),
         "--lr-schedule",
-        "constant" if args.upgrade_placement else "cosine",
+        "cosine" if resume else ("constant" if args.upgrade_placement else "cosine"),
         "--early-stopping-patience",
         str(args.patience),
         "--early-stopping-min-delta",
