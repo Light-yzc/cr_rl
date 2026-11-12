@@ -20,6 +20,7 @@ class StatePPOConfig:
     entropy_coef: float = 0.0
     max_grad_norm: float = 1.0
     precision: str = "fp16"
+    max_initial_logp_error: float = 0.05
 
 
 def _autocast(device: torch.device, precision: str):
@@ -85,6 +86,12 @@ def state_ppo_update(model, optimizer, sequences: Iterable[dict], *, config=None
         offset += count
         if not (chosen.shape == old_logp.shape == advantages.shape == returns.shape == values.shape):
             raise ValueError("State PPO sequence tensors have inconsistent lengths")
+        initial_error = (chosen.detach().float() - old_logp).abs().max()
+        if float(initial_error) > config.max_initial_logp_error:
+            raise ValueError(
+                "Collected old log-prob differs from the initial v3 Actor: "
+                f"{float(initial_error):.6f} > {config.max_initial_logp_error:.6f}"
+            )
         log_ratio = chosen.float() - old_logp
         ratio = log_ratio.exp()
         if not torch.isfinite(ratio).all():

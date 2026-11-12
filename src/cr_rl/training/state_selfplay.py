@@ -216,7 +216,9 @@ class StateSelfplay:
                     self.model, self.optimizer, sequences,
                     config=StatePPOConfig(clip_coef=self.args.clip_coef, value_coef=self.args.value_coef,
                                           entropy_coef=self.args.entropy_coef, max_grad_norm=self.args.max_grad_norm,
-                                          precision=self.args.precision), scaler=self.scaler if self.args.precision == "fp16" else None)
+                                          precision=self.args.precision,
+                                          max_initial_logp_error=self.args.max_initial_logp_error or 0.05),
+                    scaler=self.scaler if self.args.precision == "fp16" else None)
             # PPO changed weights; v3 memory generations are intentionally invalidated.
             # Re-seed memory at the next live observation rather than reusing stale KV state.
             self.states = self.model.initial_state(self.env.count * 2, device=self.device)
