@@ -20,9 +20,13 @@ no AMP overflow. V100 should use the same `--precision fp16` path. Do not use
 BF16 on V100. Keep recurrent matrices in FP32 and use CUDA autocast FP16 for
 the forward/loss path, as the v3 model already does.
 
-This is the PPO update core and numerical smoke. The old `train_selfplay.py`
-and `selfplay_v2.py` rollout supervisors still produce architecture-v2
-sliding-window trajectories; they must not be pointed at this v3 checkpoint.
-The next integration step is a v3 native rollout collector that records the
-chronological state inputs, action, old log-probability, value, reward, and
-terminal flag for each seat, then calls `state_ppo_update`.
+`src/cr_rl/training/state_selfplay.py` is the v3 native rollout driver. It
+records chronological raw frames, masks, actions, old log-probabilities, values,
+rewards and episode boundaries for both seats, then calls `state_ppo_update`.
+`scripts/train_selfplay.py --v3` routes directly to it, and
+`scripts/run_colab_training.py --v3` plus `loc_transfer/run_v100_v3.sh` provide
+the Colab/V100 launch paths. Checkpoint backup, progress JSONL and optional
+W&B logging are enabled on the v3 driver.
+
+The legacy `selfplay_v2.py` path remains available only for architecture-v2
+checkpoints. It is never selected for a v3 checkpoint.
