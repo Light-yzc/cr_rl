@@ -174,7 +174,10 @@ def run_v3_training(args):
                "--epochs", str(args.epochs), "--updates", str(args.updates - completed),
                "--learning-rate", str(args.learning_rate or 1e-6), "--weight-decay", str(args.weight_decay),
                "--out", str(local), "--decks", str(args.decks or (ROOT / "configs/decks.yaml")),
+               "--backup-dir", str(destination), "--progress-jsonl", str(local / "progress.jsonl"),
                "--tower-shaping" if args.tower_shaping else "--no-tower-shaping"]
+    if os.environ.get("WANDB_API_KEY"):
+        command.append("--wandb")
     if checkpoint.exists(): command.extend(["--resume", str(checkpoint)])
     else: command.extend(["--init-from-bc", str(args.init_from_bc)])
     atomic_json(local / "run_config.json", {"driver": "persistent-state-v3", "command": command,

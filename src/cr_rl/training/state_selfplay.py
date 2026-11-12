@@ -7,6 +7,7 @@ historical opponents can be added later as the same StateActorCritic replica.
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -99,6 +100,13 @@ class StateSelfplay:
         self.rewards = RewardConfig(enabled=args.tower_shaping, princess=args.princess_reward,
                                     king=args.king_reward, crown=args.crown_reward,
                                     overflow=args.overflow_penalty)
+        self.tracking = None
+        if getattr(args, "wandb", False):
+            import wandb
+            self.tracking = wandb.init(project="cr-rl-state-ppo-v3", config={
+                "architecture": 3, "decision_ticks": 8, "precision": args.precision,
+                "envs": args.envs, "steps": args.steps,
+            }, resume="allow")
         self.states = None
         self.reset_all()
 
@@ -213,9 +221,23 @@ class StateSelfplay:
             # Re-seed memory at the next live observation rather than reusing stale KV state.
             self.states = self.model.initial_state(self.env.count * 2, device=self.device)
             self.update = update + 1
-            _save(Path(self.args.out) / "ppo_latest.pt", self.model, self.optimizer, self.scaler, self.update, self.args)
-            print(json.dumps({"phase": "state_ppo", "update": self.update,
-                              "sequences": len(sequences), "samples": sum(len(s["actions"]) for s in sequences), **metrics}), flush=True)
+            checkpoint = Path(self.args.out) / "ppo_latest.pt"
+            _save(checkpoint, self.model, self.optimizer, self.scaler, self.update, self.args)
+            if self.args.backup_dir:
+                destination = Path(self.args.backup_dir) / "ppo_latest.pt"
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                temporary = destination.with_suffix(".tmp")
+                shutil.copy2(checkpoint, temporary)
+                temporary.replace(destination)
+            event = {"phase": "state_ppo", "update": self.update,
+                     "sequences": len(sequences), "samples": sum(len(s["actions"]) for s in sequences), **metrics}
+            if self.args.progress_jsonl:
+                Path(self.args.progress_jsonl).parent.mkdir(parents=True, exist_ok=True)
+                with Path(self.args.progress_jsonl).open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(event) + "\n")
+            if self.tracking:
+                self.tracking.log({f"ppo/{key}": value for key, value in metrics.items()}, step=self.update)
+            print(json.dumps(event), flush=True)
         self.env.close()
 
 
@@ -226,3 +248,5 @@ def run(args):
         trainer.run()
     finally:
         trainer.env.close()
+        if trainer.tracking:
+            trainer.tracking.finish()
