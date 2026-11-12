@@ -617,6 +617,8 @@ def main():
         command.extend(["--precision", args.precision, "--steps", str(args.steps),
                         "--envs", str(args.envs), "--epochs", str(args.epochs),
                         "--weight-decay", str(args.weight_decay)])
+        if args.learning_rate is not None:
+            command.extend(["--learning-rate", str(args.learning_rate)])
         with (output / "supervisor.log").open("a") as log:
             child = subprocess.Popen(
                 command,
