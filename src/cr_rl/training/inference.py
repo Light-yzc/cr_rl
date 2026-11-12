@@ -97,6 +97,55 @@ class FrozenInference:
         logits = self.evaluate_incremental(batch, legal_masks)
         return self._sample_logits(logits, collect_stats=collect_stats)
 
+
+class StateInference:
+    """Frozen architecture-v3 inference with one explicit memory per stream."""
+
+    def __init__(self, model, adapter, device, streams):
+        if getattr(model, "architecture_version", None) != 3:
+            raise ValueError("StateInference requires architecture-v3")
+        self.model = model.eval()
+        self.adapter = adapter
+        self.device = torch.device(device)
+        self.streams = int(streams)
+        self.state = model.initial_state(self.streams, device=self.device)
+
+    @torch.inference_mode()
+    def evaluate(self, raw, legal_masks):
+        raw = np.asarray(raw)
+        if raw.shape != (self.streams, self.adapter.schema.seat_ints):
+            raise ValueError("State inference observation shape differs from stream count")
+        header, entities, entity_mask = self.adapter(raw)
+        hand = raw[:, list(self.adapter.schema.header["hand_card"])]
+        with autocast_for(self.device):
+            logits, values, self.state = self.model.step(
+                torch.as_tensor(header, device=self.device),
+                torch.as_tensor(entities, device=self.device),
+                torch.as_tensor(entity_mask, device=self.device),
+                legal_action_mask=torch.as_tensor(legal_masks, dtype=torch.bool, device=self.device),
+                state=self.state,
+                hand_card_ids=torch.as_tensor(hand, device=self.device),
+                compute_value=True,
+            )
+        return logits.float(), values.float()
+
+    @torch.inference_mode()
+    def sample(self, raw, legal_masks):
+        logits, values = self.evaluate(raw, legal_masks)
+        distribution = torch.distributions.Categorical(logits=logits)
+        actions = distribution.sample()
+        return (actions.cpu().numpy().astype(np.int32),
+                distribution.log_prob(actions).cpu().numpy(), values.cpu().numpy(),
+                {"entropy": float(distribution.entropy().mean())})
+
+    def reset(self, mask=None):
+        if mask is None:
+            mask = torch.ones(self.streams, dtype=torch.bool, device=self.device)
+        self.state = type(self.state)(
+            self.state.temporal.reset(torch.as_tensor(mask, device=self.device)),
+            id(self.model), self.model.memory_generation,
+        )
+
     @staticmethod
     def _sample_logits(logits, *, collect_stats):
         distribution = torch.distributions.Categorical(logits=logits)
