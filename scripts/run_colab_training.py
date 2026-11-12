@@ -1,4 +1,4 @@
-"""Bounded Colab self-play with W&B and verified per-update Google Drive backups.
+﻿"""Bounded Colab self-play with W&B and verified per-update Google Drive backups.
 
 Secrets enter the detached launcher over stdin, never through command arguments/files.
 """
@@ -42,6 +42,15 @@ def critic_arguments(args):
         "critic_warmup_updates",
         "critic_warmup_games",
     ):
+        value = getattr(args, name, None)
+        if value is not None:
+            command.extend(["--" + name.replace("_", "-"), str(value)])
+    return command
+
+
+def actor_arguments(args):
+    command = []
+    for name in ("learning_rate", "card_entropy_coef", "tile_entropy_coef"):
         value = getattr(args, name, None)
         if value is not None:
             command.extend(["--" + name.replace("_", "-"), str(value)])
@@ -383,6 +392,7 @@ def run_training(args):
                 command.extend(["--init-from-bc", str(args.init_from_bc)])
             if args.decks:
                 command.extend(["--decks", str(args.decks)])
+            command.extend(actor_arguments(args))
             command.extend(critic_arguments(args))
             if args.tower_shaping:
                 command.append("--tower-shaping")
@@ -514,6 +524,9 @@ def main():
     parser.add_argument("--overflow-penalty", type=float)
     parser.add_argument("--critic-warmup-updates", type=int)
     parser.add_argument("--critic-warmup-games", type=int)
+    parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--card-entropy-coef", type=float)
+    parser.add_argument("--tile-entropy-coef", type=float)
     args = parser.parse_args()
     if args.start:
         secrets = json.load(sys.stdin)
@@ -564,3 +577,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
