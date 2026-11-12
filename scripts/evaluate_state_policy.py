@@ -347,7 +347,9 @@ def main():
     parser.add_argument("--out",type=Path,required=True)
     parser.add_argument("--pairs",type=int,default=4)
     parser.add_argument("--pair-start",type=int,default=0)
-    parser.add_argument("--envs",type=int,choices=(2,4),default=2)
+    # A single lane is useful for local replay preview: with autoreset disabled,
+    # finished lanes must not be stepped again by the vector backend.
+    parser.add_argument("--envs",type=int,choices=(1,2,4),default=2)
     parser.add_argument("--device",default="cuda")
     parser.add_argument("--precision",choices=("fp16","fp32"),default="fp16")
     parser.add_argument("--max-decisions",type=int,default=1500,
