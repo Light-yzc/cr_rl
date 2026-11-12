@@ -53,6 +53,21 @@ def main():
     parser.add_argument("--simulator-seed-base", type=int, default=1000000)
     parser.add_argument("--pairing-seed", type=int, default=20261103)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--level-mixture",
+        type=int,
+        nargs="+",
+        help="Per-lane global card levels; each lane applies one level to both seats.",
+    )
+    parser.add_argument(
+        "--tower-level-mixture",
+        type=int,
+        nargs="+",
+        help="Per-lane global tower levels; one value broadcasts across the card schedule.",
+    )
+    parser.add_argument("--level-jitter-prob", type=float)
+    parser.add_argument("--level-jitter", type=int, default=2)
+    parser.add_argument("--level-jitter-seed", type=int, default=20261103)
     parser.add_argument("--frame-cache", action="store_true")
     parser.add_argument("--forced-wait-fastpath", action="store_true")
     parser.add_argument("--wait-logit-bias", type=float, default=0.0)
@@ -92,7 +107,17 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     active = np.ones(count, dtype=bool)
     started = time.perf_counter()
-    with CrForgeVector(count, count, independent=True, arena="Arena_L") as env:
+    with CrForgeVector(
+        count,
+        count,
+        independent=True,
+        arena="Arena_L",
+        level_mixture=args.level_mixture,
+        tower_level_mixture=args.tower_level_mixture,
+        level_jitter_prob=args.level_jitter_prob,
+        level_jitter=args.level_jitter,
+        level_jitter_seed=args.level_jitter_seed,
+    ) as env:
         env.set_autoreset(False)
         env.reset(seeds, deck0, deck1, forms0, forms1)
         cached = args.frame_cache or args.forced_wait_fastpath or cfg.representation_version == 2
@@ -216,6 +241,7 @@ def main():
         "policy_checkpoint_calibration": model.checkpoint_calibration,
         "policy_optimizer_steps": model.checkpoint_optimizer_steps,
         "opponent_wait_logit_bias": args.opponent_wait_logit_bias,
+        "level_profile": env.level_profile,
         "forced_wait_fastpath": args.forced_wait_fastpath,
         "protocol": "fixed physical decks/seeds, paired policy-seat swap, stochastic sampling",
         "deck_selection": f"unique pairs from seeded held-out pool (seed {args.pairing_seed})",

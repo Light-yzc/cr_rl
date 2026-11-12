@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import hashlib
 import json
 import time
@@ -202,6 +203,20 @@ def train(args) -> None:
         resume_metadata = {
             key: state.get(key) for key in ("backend_commit", "data_version", "content_sha")
         }
+        if state.get("level_profile") is not None:
+            resume_metadata["level_profile"] = state["level_profile"]
+        if (
+            state.get("level_profile") is None
+            and (
+                getattr(args, "level_mixture", None)
+                or getattr(args, "tower_level_mixture", None)
+                or getattr(args, "level_jitter_prob", None) is not None
+            )
+            and not getattr(args, "allow_level_profile_migration", False)
+        ):
+            raise ValueError(
+                "This checkpoint predates level profiles; pass --allow-level-profile-migration for an explicit curriculum migration"
+            )
         if "torch_rng_state" in state:
             torch.set_rng_state(state["torch_rng_state"].cpu())
         if device.startswith("cuda") and state.get("cuda_rng_state") is not None:
@@ -361,7 +376,16 @@ def train(args) -> None:
     model.eval()
 
     started = time.perf_counter()
-    with CrForgeVector(args.envs, min(args.envs, 8), independent=True) as env:
+    with CrForgeVector(
+        args.envs,
+        min(args.envs, 8),
+        independent=True,
+        level_mixture=getattr(args, "level_mixture", None),
+        tower_level_mixture=getattr(args, "tower_level_mixture", None),
+        level_jitter_prob=getattr(args, "level_jitter_prob", None),
+        level_jitter=getattr(args, "level_jitter", 2),
+        level_jitter_seed=args.seed,
+    ) as env:
         if initialization:
             actual = {
                 "backend_commit": env.metadata().get("commit"),
@@ -371,6 +395,10 @@ def train(args) -> None:
                 "decision_ticks": 5,
                 "mask_version": 2,
             }
+            if "tower_level" in initialization:
+                actual["tower_level"] = env.tower_level
+            if "level_profile" in initialization:
+                actual["level_profile"] = env.level_profile
             if any(initialization[key] != value for key, value in actual.items()):
                 raise ValueError(f"BC/PPO simulator mismatch: {initialization} vs {actual}")
         if resume_metadata is not None:
@@ -379,6 +407,8 @@ def train(args) -> None:
                 "data_version": env.vector.data_version,
                 "content_sha": env.vector.content_sha,
             }
+            if "level_profile" in resume_metadata:
+                actual["level_profile"] = env.level_profile
             if resume_metadata != actual:
                 raise ValueError(f"Resume simulator/data mismatch: {resume_metadata} != {actual}")
         # Do not autoreset behind the trainer's back. The final pre-reset observation is
@@ -1159,6 +1189,7 @@ def train(args) -> None:
                 "backend_commit": env.metadata().get("commit"),
                 "data_version": env.vector.data_version,
                 "content_sha": env.vector.content_sha,
+                "level_profile": env.level_profile,
                 "resume_semantics": "model_optimizer_rng_restored_simulator_episodes_reset",
                 "training_args": {
                     key: str(value) if isinstance(value, Path) else value
@@ -1182,6 +1213,7 @@ def train(args) -> None:
                     "backend_commit": env.metadata().get("commit"),
                     "data_version": env.vector.data_version,
                     "content_sha": env.vector.content_sha,
+                    "level_profile": env.level_profile,
                 },
                 export_tmp,
             )
@@ -1189,6 +1221,7 @@ def train(args) -> None:
         rollout_path = buffer.save(output / "rollouts" / f"rollout_{update_number + 1:06d}.npz")
         summary = {
             "update": update_number + 1,
+            "level_profile": env.level_profile,
             "device": device,
             "model": args.model,
             "parameters": model.parameter_count(),
@@ -1281,10 +1314,56 @@ def main() -> None:
         default="general",
     )
     parser.add_argument("--envs", type=int, default=4)
+    parser.add_argument("--env-threads", type=int, default=1,
+                        help="v2 simulator lane workers; independent of Torch CPU threads")
+    parser.add_argument(
+        "--level-mixture",
+        type=int,
+        nargs="+",
+        help=(
+            "Optional per-lane global card levels for a fresh curriculum pilot, e.g. 10 11 12. "
+            "The pinned backend applies one level to both seats in each lane; this is not per-card level support."
+        ),
+    )
+    parser.add_argument(
+        "--tower-level-mixture",
+        type=int,
+        nargs="+",
+        help="Optional per-lane global tower levels; one value broadcasts across the card-level schedule.",
+    )
+    parser.add_argument(
+        "--level-jitter-prob",
+        type=float,
+        help="Fraction of lane base levels to perturb; perturbations are reproducible ±level-jitter.",
+    )
+    parser.add_argument(
+        "--level-jitter",
+        type=int,
+        default=2,
+        help="Absolute level perturbation used with --level-jitter-prob (default: 2).",
+    )
+    parser.add_argument(
+        "--allow-level-profile-migration",
+        action="store_true",
+        help="Resume an older single-level checkpoint while explicitly changing the simulator level profile.",
+    )
+    parser.add_argument("--torch-threads", type=int)
+    parser.add_argument("--torch-interop-threads", type=int)
     parser.add_argument("--v2", action="store_true")
     parser.add_argument("--backup-dir", type=Path)
     parser.add_argument("--incremental-backup", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--async-publication", action="store_true",
+                        help="Publish immutable snapshots while collecting the next update")
+    parser.add_argument("--publication-interval", type=int, default=1,
+                        help="Publish every N updates; local checkpoints remain current")
     parser.add_argument("--cache-reference", action="store_true")
+    parser.add_argument("--deduplicate-training-frames", action="store_true",
+                        help="Encode each repeated raw history frame once per training microbatch")
+    parser.add_argument(
+        "--stream-training-batches",
+        action="store_true",
+        help="Keep prepared history on CPU and transfer only each microbatch to CUDA",
+    )
     parser.add_argument(
         "--incremental-inference", action=argparse.BooleanOptionalAction, default=True
     )
@@ -1302,8 +1381,15 @@ def main() -> None:
     parser.add_argument("--role-league", action="store_true", help="30/50/20 current/PPO/BC league")
     parser.add_argument("--history-snapshot-interval", type=int, default=20_000)
     parser.add_argument("--history-seed-manifest", type=Path)
+    parser.add_argument(
+        "--league-diversity-manifest",
+        type=Path,
+        help="v2 frozen-opponent diversity manifest",
+    )
     parser.add_argument("--frame-encoder-fp32", action="store_true")
     parser.add_argument("--opponent-cache-size", type=int, default=2)
+    parser.add_argument("--training-opponent-cache-size", type=int,
+                        help="Evict excess frozen opponents before PPO to preserve memory")
     parser.add_argument("--steps", type=int, default=1536)
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -1322,6 +1408,17 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--resume-actor-learning-rate", type=float)
     parser.add_argument("--resume-critic-learning-rate", type=float)
+    parser.add_argument(
+        "--adaptive-actor-lr",
+        action="store_true",
+        help="v2: adapt next-update Actor LR within bounds using factorized KL",
+    )
+    parser.add_argument("--adaptive-actor-lr-min", type=float, default=2.5e-6)
+    parser.add_argument(
+        "--adaptive-actor-lr-max",
+        type=float,
+        help="Actor LR ceiling; defaults to the restored or initial Actor LR",
+    )
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--gae-lambda", type=float)
     parser.add_argument(
@@ -1371,20 +1468,45 @@ def main() -> None:
         help="Complete games needed for warmup; new-run default 4",
     )
     parser.add_argument("--entropy-coef", type=float, default=0.005)
+    parser.add_argument("--card-entropy-coef", type=float)
+    parser.add_argument("--tile-entropy-coef", type=float)
     parser.add_argument("--reference-kl-coef", type=float, default=0.01)
     parser.add_argument("--target-kl", type=float, default=0.02)
     parser.add_argument("--actor-choice-only", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--target-card-kl", type=float)
     parser.add_argument("--target-tile-kl", type=float)
+    parser.add_argument(
+        "--continue-after-kl-reject",
+        action="store_true",
+        help="v2: skip an over-limit Actor KL group and continue later groups instead of ending the epoch",
+    )
     parser.add_argument("--max-initial-logp-error", type=float)
     parser.add_argument("--elixir-wait-bias", type=float)
+    parser.add_argument("--disable-holding-prior", action="store_true",
+                        help="Remove WAIT/slot tactical priors when resuming any checkpoint")
     parser.add_argument("--elixir-hold-min-cost", type=float)
+    parser.add_argument("--holding-prior-version", type=int, choices=(1, 2))
+    parser.add_argument("--holding-core-cards", nargs="+")
+    parser.add_argument("--core-slot-bias", type=float)
     parser.add_argument("--current-opponent-fraction", type=float)
     parser.add_argument("--historical-pfsp-fraction", type=float)
     parser.add_argument("--forgotten-opponent-fraction", type=float)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=20261102)
+    parser.add_argument("--keep-checkpoints", type=int, default=2)
+    parser.add_argument("--keep-periodic-checkpoints", type=int, default=2)
+    parser.add_argument("--compact-host-memory", action="store_true",
+                        help="Share immutable rollout arrays and release stale CPU mappings")
+    parser.add_argument("--dual-rollout", action="store_true",
+                        help="Sample learner Actor streams on both CUDA devices")
+    parser.add_argument("--balanced-critic", action="store_true",
+                        help="Use the Actor GPU for Critic data parallel after Actor updates")
+    parser.add_argument("--amp-dtype", choices=("auto", "fp32", "fp16"), default="auto")
     parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--critic-device",
+        help="v2 Critic device; a different CUDA device enables concurrent optimization",
+    )
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--init-from-bc", type=Path)
     parser.add_argument("--decks", type=Path)
@@ -1400,6 +1522,43 @@ def main() -> None:
     )
     parser.add_argument("--progress-jsonl", type=Path)
     args = parser.parse_args()
+    if args.league_diversity_manifest is not None and not args.league_diversity_manifest.is_file():
+        parser.error("League diversity manifest must be an existing file")
+    if not np.isfinite(args.adaptive_actor_lr_min) or args.adaptive_actor_lr_min <= 0:
+        parser.error("Adaptive Actor LR minimum must be finite and positive")
+    if args.adaptive_actor_lr_max is not None and (
+        not np.isfinite(args.adaptive_actor_lr_max)
+        or args.adaptive_actor_lr_max < args.adaptive_actor_lr_min
+    ):
+        parser.error("Adaptive Actor LR maximum must be finite and at least the minimum")
+    if args.training_opponent_cache_size is not None and args.training_opponent_cache_size < 1:
+        parser.error("Training opponent cache size must be positive")
+    if args.env_threads < 1:
+        parser.error("Environment threads must be positive")
+    for name in ("level_mixture", "tower_level_mixture"):
+        values = getattr(args, name)
+        if values is not None and any(value < 1 or value > 15 for value in values):
+            parser.error(f"{name.replace('_', ' ')} values must be in [1, 15]")
+    if args.tower_level_mixture is not None and args.level_mixture is not None and len(
+        args.tower_level_mixture
+    ) not in (1, len(args.level_mixture)):
+        parser.error("--tower-level-mixture must contain one value or match --level-mixture length")
+    if args.level_jitter_prob is not None and (
+        not np.isfinite(args.level_jitter_prob) or not 0 <= args.level_jitter_prob <= 1
+    ):
+        parser.error("--level-jitter-prob must be finite and in [0, 1]")
+    if args.level_jitter < 1 or args.level_jitter > 14:
+        parser.error("--level-jitter must be in [1, 14]")
+    for name in ("torch_threads", "torch_interop_threads"):
+        value = getattr(args, name)
+        if value is not None and value < 1:
+            parser.error("Torch CPU thread counts must be positive")
+    if args.torch_threads is not None:
+        torch.set_num_threads(args.torch_threads)
+    if args.torch_interop_threads is not None:
+        torch.set_num_interop_threads(args.torch_interop_threads)
+    import os
+    os.environ["CRRL_AMP_DTYPE"] = args.amp_dtype
     reference = args.resume or args.init_from_bc
     saved = (
         torch.load(reference, map_location="cpu", weights_only=False, mmap=True)
@@ -1407,6 +1566,8 @@ def main() -> None:
         else {}
     )
     args.v2 |= saved.get("config", {}).get("representation_version", 1) == 2
+    if not args.v2 and (args.critic_device or args.amp_dtype == "fp16"):
+        parser.error("Separate devices and FP16 AMP currently require --v2")
     previous = saved.get("training_args", {})
     defaults = {
         "gamma": saved.get("gamma", previous.get("gamma", 0.9995 if args.v2 else 0.999)),
@@ -1482,6 +1643,11 @@ def main() -> None:
         parser.error("Warmup rounds and games must be positive")
     if args.learning_rate <= 0 or args.critic_learning_rate <= 0 or args.target_kl <= 0:
         parser.error("Learning rates and target KL must be positive")
+    entropy_pair = (args.card_entropy_coef, args.tile_entropy_coef)
+    if any(c is not None for c in entropy_pair) and (
+        not args.v2 or any(c is None or not np.isfinite(c) or c < 0 for c in entropy_pair)
+    ):
+        parser.error("v2 split entropy requires two finite nonnegative coefficients")
     if (args.target_card_kl is None) != (args.target_tile_kl is None):
         parser.error("Provide both card and tile KL limits")
     if any(
@@ -1495,6 +1661,10 @@ def main() -> None:
         or args.max_initial_logp_error is not None
     ):
         parser.error("Choice sampling and split KL require v2")
+    if args.adaptive_actor_lr and (not args.v2 or args.target_card_kl is None):
+        parser.error("Adaptive Actor LR requires v2 and both Card/Tile KL limits")
+    if args.league_diversity_manifest is not None and not args.v2:
+        parser.error("League diversity manifest requires v2")
     if args.elixir_wait_bias is not None and (
         not args.v2 or not np.isfinite(args.elixir_wait_bias) or args.elixir_wait_bias < 0
     ):
@@ -1527,6 +1697,7 @@ def main() -> None:
     if args.forced_wait_fastpath and not args.v2:
         parser.error("--forced-wait-fastpath requires v2")
     if args.v2:
+        gc.collect()
         from cr_rl.training.selfplay_v2 import run
 
         run(args)

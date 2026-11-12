@@ -5,13 +5,19 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
 
 def file_sha256(path: Path) -> str:
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        if hasattr(hashlib, "file_digest"):
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+        digest = hashlib.sha256()
+        for block in iter(lambda: stream.read(4 * 1024**2), b""):
+            digest.update(block)
+        return digest.hexdigest()
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -62,6 +68,59 @@ def sync_logs(local: Path, destination: Path) -> None:
             copy_verified(snapshot, destination / name)
 
 
+def prune_backup(
+    destination: Path,
+    update: int,
+    recent: int = 2,
+    keep_every: int = 64,
+    rollout_recent: int = 2,
+    max_periodic: int | None = None,
+) -> dict:
+    """Bound immutable publication storage without removing restore points.
+
+    Full checkpoints and exports are retained for the latest ``recent`` updates
+    and periodic ``keep_every`` checkpoints. Rollouts keep only the latest
+    ``rollout_recent`` updates. Opponent snapshots remain because retained pool
+    manifests may reference older snapshots.
+    """
+    keep_updates = {update - i for i in range(recent)}
+    periodic = list(range(keep_every, update + 1, keep_every)) if keep_every else []
+    if max_periodic is not None:
+        periodic = periodic[-max_periodic:] if max_periodic else []
+    keep_updates.update(periodic)
+    removed = 0
+    removed_bytes = 0
+    patterns = (
+        (destination / "checkpoints", r"update_(\d+)(?:\.pt|\.pool\.json|\.manifest\.json)$"),
+        (destination / "exports", r"update_(\d+)\.actor\.pt$"),
+    )
+    for root, pattern in patterns:
+        if not root.exists():
+            continue
+        for path in root.iterdir():
+            match = re.fullmatch(pattern, path.name)
+            if match and int(match.group(1)) not in keep_updates and path.is_file():
+                size = path.stat().st_size
+                path.unlink()
+                removed += 1
+                removed_bytes += size
+    rollout_floor = max(0, update - rollout_recent + 1)
+    rollout_root = destination / "rollouts"
+    if rollout_root.exists():
+        for path in rollout_root.iterdir():
+            match = re.match(r"rollout_(\d+)", path.name)
+            if match and int(match.group(1)) < rollout_floor and path.is_file():
+                size = path.stat().st_size
+                path.unlink()
+                removed += 1
+                removed_bytes += size
+    return {
+        "removed_files": removed,
+        "removed_bytes": removed_bytes,
+        "keep_updates": sorted(keep_updates),
+    }
+
+
 def publish_update(local: Path, destination: Path, update: int) -> dict:
     """Advance latest.json only after checkpoint, pool and all raw data are verified."""
     pool = json.loads((local / "opponent_pool.json").read_text())
@@ -90,6 +149,8 @@ def publish_update(local: Path, destination: Path, update: int) -> dict:
         files.append(record)
     atomic_json(destination / pool_path, pool)
     sync_logs(local, destination)
+    prune_backup(destination, update)
+    files = [record for record in files if (destination / record["path"]).exists()]
     summary_path = local / "summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
     manifest = {
@@ -139,3 +200,56 @@ def restore_run(source: Path, destination: Path) -> dict:
         if (source / name).exists():
             copy_verified(source / name, destination / name)
     return manifest
+
+
+def prune_local_opponents(local: Path, active=()) -> dict:
+    """Collect only owned opponents unreferenced by current/retained restore pools.
+
+    The handoff/source archive and any paths outside local/opponents are never touched.
+    Malformed reference files abort collection rather than risking a restore dependency.
+    """
+    local = Path(local)
+    references = set()
+    pools = [local / "opponent_pool.json", *(local / "checkpoints").glob("*.pool.json")]
+    for pool_path in pools:
+        pool = json.loads(pool_path.read_text())
+        for entry in pool["entries"]:
+            source = Path(entry["checkpoint"])
+            references.add(
+                (source if source.is_absolute() else pool_path.parent / source).resolve()
+            )
+    for source in active:
+        references.add(Path(source).resolve())
+    # Frozen eval/publication jobs must also retain their snapshot dependencies.
+    for root in (local / "evaluation", local / ".publication_snapshots"):
+        for path in root.rglob("*"):
+            if path.is_file() and path.suffix == ".pt":
+                references.add(path.resolve())
+            elif path.is_file() and path.suffix == ".json":
+
+                def collect(value, path=path):
+                    if isinstance(value, dict):
+                        for child in value.values():
+                            collect(child)
+                    elif isinstance(value, list):
+                        for child in value:
+                            collect(child)
+                    elif isinstance(value, str) and value.endswith(".pt"):
+                        item = Path(value)
+                        references.add(
+                            (item if item.is_absolute() else path.parent / item).resolve()
+                        )
+
+                collect(json.loads(path.read_text()))
+    removed = removed_bytes = 0
+    reference_names = {path.name for path in references}
+    for path in [*(local / "opponents").glob("opponent_*.pt"), *local.glob("opponent_*.pt")]:
+        if (
+            not path.is_symlink()
+            and path.resolve() not in references
+            and path.name not in reference_names
+        ):
+            removed_bytes += path.stat().st_size
+            path.unlink()
+            removed += 1
+    return {"removed_opponents": removed, "removed_opponent_bytes": removed_bytes}

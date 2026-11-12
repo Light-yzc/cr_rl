@@ -5,6 +5,25 @@ import math
 import torch
 
 
+def factorized_entropy(log_probs):
+    """Card entropy and conditional tile entropy without a card-mass gradient.
+
+    The tile term has the joint entropy's numerical weighting, but its mixture
+    weights are detached: spreading placements must not directly reward playing.
+    Shared encoder gradients still train the placement representation.
+    """
+    if log_probs.shape[-1] != 2307:
+        raise ValueError("Factorized entropy requires the 2307-action codec")
+    joint = torch.log_softmax(log_probs.float(), dim=-1)
+    tiles = joint[..., 1:2305].reshape(*joint.shape[:-1], 4, 576)
+    slot = tiles.logsumexp(-1)
+    card = torch.cat((joint[..., :1], slot, joint[..., 2305:2307]), -1)
+    card_entropy = -(card.exp() * card).sum(-1)
+    conditional = tiles - slot[..., None]
+    tile_entropy = -(conditional.exp() * conditional).sum(-1)
+    return card_entropy, (slot.exp().detach() * tile_entropy).sum(-1)
+
+
 def factorized_reverse_kl(new_log_probs, reference_log_probs):
     """Per-state reverse KL split by WAIT/card/ability and conditional tile.
 

@@ -178,7 +178,7 @@ def replay_rollout_metrics(path, telemetry):
 
 
 def rollout_value_diagnostics(path):
-    """Reconstruct the original pre-fit GAE targets from immutable rollout data.
+    """Reconstruct separate Actor and Critic targets from immutable rollout data.
 
     This is explained variance of the frozen rollout critic, not a post-fit value
     measurement. Nothing here changes training arrays, rewards or old values.
@@ -188,7 +188,7 @@ def rollout_value_diagnostics(path):
     import numpy as np
     import torch
 
-    from cr_rl.training.advantages import compute_gae
+    from cr_rl.training.advantages import compute_actor_critic_targets
 
     metadata = json.loads(path.with_suffix(path.suffix + ".json").read_text())
     if metadata.get("training_driver") != "persistent-v2":
@@ -205,18 +205,22 @@ def rollout_value_diagnostics(path):
     if not valid.any() or not all(np.isfinite(x).all() for x in (rewards, values, next_values)):
         raise ValueError("No finite valid value targets for diagnostics")
     shape = rewards.shape[0], -1
-    advantages, targets = compute_gae(
+    advantages, targets = compute_actor_critic_targets(
         torch.from_numpy(rewards.reshape(shape)),
         torch.from_numpy(values.reshape(shape)),
         torch.from_numpy(np.repeat(terminal[..., None], 2, axis=-1).reshape(shape)),
         torch.from_numpy(next_values[-1].reshape(-1)),
         gamma=metadata["gamma"],
         gae_lambda=metadata["gae_lambda"],
+        critic_gae_lambda=metadata.get("critic_gae_lambda"),
         next_values=torch.from_numpy(next_values.reshape(shape)),
         episode_ends=torch.from_numpy(np.repeat(ends[..., None], 2, axis=-1).reshape(shape)),
     )
     target = targets.numpy().reshape(rewards.shape)[valid]
     advantage = advantages.numpy().reshape(rewards.shape)[valid]
+    actor_target = advantage + values[valid]
+    critic_lambda = metadata.get("critic_gae_lambda")
+    critic_lambda = metadata["gae_lambda"] if critic_lambda is None else critic_lambda
     variance = float(target.var())
     result = dict(
         return_mean=float(target.mean()),
@@ -227,9 +231,20 @@ def rollout_value_diagnostics(path):
         value_std=float(values[valid].std()),
         target_count=int(valid.sum()),
         explained_variance_defined=variance > 1e-12,
+        actor_gae_lambda=metadata["gae_lambda"],
+        critic_gae_lambda=critic_lambda,
+        actor_return_mean=float(actor_target.mean()),
+        actor_return_std=float(actor_target.std()),
+        critic_target_mse=float(((target - values[valid]) ** 2).mean()),
+        critic_target_bias=float((values[valid] - target).mean()),
     )
     if variance > 1e-12:
         result["explained_variance"] = 1.0 - float((target - values[valid]).var()) / variance
+    actor_variance = float(actor_target.var())
+    if actor_variance > 1e-12:
+        result["actor_explained_variance"] = (
+            1.0 - float((actor_target - values[valid]).var()) / actor_variance
+        )
     return result
 
 

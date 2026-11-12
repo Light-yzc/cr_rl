@@ -72,7 +72,7 @@ def test_forced_wait_preserves_sampling_rng_history_wrap_reset_and_weight_change
         if step in normal_steps:
             legal[:, 1:6] = 1
 
-        def evaluate(engine):
+        def evaluate(engine, legal=legal, windows=windows, times=times):
             if incremental:
                 return engine.evaluate_incremental(history.request(), legal)
             return engine.evaluate(windows, times, legal)
@@ -164,3 +164,42 @@ def test_fastpath_is_disabled_by_default_and_keeps_mask_and_eval_guards():
     model.train()
     with pytest.raises(ValueError, match="eval mode"):
         fast.evaluate(windows, times, legal)
+
+
+@pytest.mark.parametrize("incremental", [False, True])
+@pytest.mark.parametrize("forced", [False, True])
+def test_optional_statistics_preserve_actions_logp_and_sampling_rng(
+    incremental, forced, monkeypatch
+):
+    model, adapter, trace = setup_model()
+    engine = FrozenInference(model, adapter, "cpu", forced_wait_fastpath=True)
+    history = IncrementalFrameHistory(2, 4, adapter.schema.seat_ints)
+    for raw in trace.observations[:4]:
+        history.append(raw, np.array([10, 20]))
+    windows = np.stack(trace.observations[:4]).transpose(1, 0, 2)
+    times = np.ones((2, 4), dtype=bool)
+    legal = np.zeros((2, 2307), dtype=np.uint8)
+    legal[:, 0] = 1
+    if not forced:
+        legal[:, 1:6] = 1
+
+    def sample(**kwargs):
+        if incremental:
+            return engine.sample_incremental(history.request(), legal, **kwargs)
+        return engine.sample(windows, times, legal, **kwargs)
+
+    before = torch.get_rng_state()
+    expected = sample()  # Existing callers still receive full statistics by default.
+    after = torch.get_rng_state()
+
+    def unused_entropy(_self):
+        raise AssertionError("Quiet sampling must not compute diagnostic entropy")
+
+    monkeypatch.setattr(torch.distributions.Categorical, "entropy", unused_entropy)
+    torch.set_rng_state(before)
+    actual = sample(collect_stats=False)
+    np.testing.assert_array_equal(actual[0], expected[0])
+    np.testing.assert_array_equal(actual[1], expected[1])
+    torch.testing.assert_close(torch.get_rng_state(), after, rtol=0, atol=0)
+    assert actual[2] == {}
+    assert set(expected[2]) == {"entropy", "max_action_probability"}

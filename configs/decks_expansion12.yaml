@@ -1,0 +1,275 @@
+version: 1
+purpose: Append-only3-to6-to12 training curriculum; ordinary slot forms; native champion
+  abilities retained
+decks:
+  giant_sparky_v1:
+  - Giant
+  - ZapMachine
+  - MiniPekka
+  - Musketeer
+  - Minions
+  - Knight
+  - Zap
+  - Arrows
+  hog_cycle_v1:
+  - HogRider
+  - Musketeer
+  - Cannon
+  - Fireball
+  - Skeletons
+  - IceSpirits
+  - Log
+  - Knight
+  graveyard_control_v1:
+  - Graveyard
+  - Poison
+  - BabyDragon
+  - Tombstone
+  - Knight
+  - BarbLog
+  - IceWizard
+  - Tornado
+  human_popular_04:
+  - InfernoDragon
+  - Tombstone
+  - MegaMinion
+  - Zap
+  - IceGolemite
+  - Balloon
+  - Fireball
+  - Miner
+  human_popular_07:
+  - GoblinBarrel
+  - Valkyrie
+  - SkeletonArmy
+  - Wallbreakers
+  - Princess
+  - BlowdartGoblin
+  - IceSpirits
+  - Cannon
+  human_popular_18:
+  - Tesla
+  - Knight
+  - Archer
+  - ElectroSpirit
+  - Xbow
+  - Fireball
+  - Skeletons
+  - Log
+  human_popular_01:
+  - SkeletonBalloon
+  - Berserker
+  - Mortar
+  - Fireball
+  - Rascals
+  - Minions
+  - MovingCannon
+  - BarbLog
+  human_popular_06:
+  - Cannon
+  - Berserker
+  - Snowball
+  - Rocket
+  - FireSpirits
+  - GoblinDrill
+  - Skeletons
+  - Bomber
+  human_popular_17:
+  - BattleRam
+  - SkeletonKing
+  - SkeletonArmy
+  - Arrows
+  - Fireball
+  - Bats
+  - Pekka
+  - GoblinGang
+  human_popular_22:
+  - Witch
+  - SkeletonKing
+  - RoyalGiant
+  - Lightning
+  - BarbLog
+  - Tombstone
+  - MiniSparkys
+  - Fisherman
+  royale_20261103_03:
+  - Arrows
+  - Bomber
+  - AngryBarbarians
+  - Golem
+  - MiniPekka
+  - DarkWitch
+  - Phoenix
+  - Zap
+  royale_20261103_12:
+  - ArcherQueen
+  - Cannon
+  - Earthquake
+  - IceSpirits
+  - RoyalDelivery
+  - RoyalHogs
+  - Skeletons
+  - Log
+slots:
+  giant_sparky_v1:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  hog_cycle_v1:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  graveyard_control_v1:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_04:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_07:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_18:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_01:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_06:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_17:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_22:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_03:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_12:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+split: train
+curriculum_groups:
+  original3:
+  - giant_sparky_v1
+  - hog_cycle_v1
+  - graveyard_control_v1
+  first_expansion3:
+  - human_popular_04
+  - human_popular_07
+  - human_popular_18
+  second_expansion6:
+  - human_popular_01
+  - human_popular_06
+  - human_popular_17
+  - human_popular_22
+  - royale_20261103_03
+  - royale_20261103_12
+provenance:
+  giant_sparky_v1:
+    source_config: configs/decks_expansion6.yaml
+    ordinary_slot_forms: true
+  hog_cycle_v1:
+    source_config: configs/decks_expansion6.yaml
+    ordinary_slot_forms: true
+  graveyard_control_v1:
+    source_config: configs/decks_expansion6.yaml
+    ordinary_slot_forms: true
+  human_popular_04:
+    source_config: configs/decks_expansion6.yaml
+    ordinary_slot_forms: true
+  human_popular_07:
+    source_config: configs/decks_expansion6.yaml
+    ordinary_slot_forms: true
+  human_popular_18:
+    source_config: configs/decks_expansion6.yaml
+    ordinary_slot_forms: true
+  human_popular_01:
+    source_config: configs/decks.yaml
+    ordinary_slot_forms: true
+  human_popular_06:
+    source_config: configs/decks.yaml
+    ordinary_slot_forms: true
+  human_popular_17:
+    source_config: configs/decks.yaml
+    ordinary_slot_forms: true
+  human_popular_22:
+    source_config: configs/decks.yaml
+    ordinary_slot_forms: true
+  royale_20261103_03:
+    source_config: configs/decks.yaml
+    ordinary_slot_forms: true
+  royale_20261103_12:
+    source_config: configs/decks.yaml
+    ordinary_slot_forms: true

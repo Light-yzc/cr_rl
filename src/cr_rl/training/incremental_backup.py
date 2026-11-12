@@ -8,7 +8,13 @@ No background serialization or mutation of live checkpoint tensors is involved.
 import json
 from pathlib import Path
 
-from cr_rl.training.persistence import atomic_json, copy_verified, file_sha256, sync_logs
+from cr_rl.training.persistence import (
+    atomic_json,
+    copy_verified,
+    file_sha256,
+    prune_backup,
+    sync_logs,
+)
 
 
 def signature(path):
@@ -24,10 +30,8 @@ def publish_incremental(local: Path, destination: Path, update: int, audit_every
     identity = str(destination.resolve())
     if prior and prior["destination"] != identity:
         raise ValueError("Publication receipt belongs to a different backup directory")
-    if prior and update != prior["update"] + 1:
-        raise ValueError(
-            "Incremental publication must advance one generation; audit recovery first"
-        )
+    if prior and update <= prior["update"]:
+        raise ValueError("Incremental publication update must advance monotonically")
     receipts = dict(prior["receipts"]) if prior else {}
 
     def immutable(source, relative):
@@ -70,6 +74,12 @@ def publish_incremental(local: Path, destination: Path, update: int, audit_every
     files.extend(
         receipts[name]["record"] for name in sorted(receipts) if name.startswith("rollouts/")
     )
+    prune_backup(destination, update)
+    files = [row for row in files if (destination / row["path"]).exists()]
+    receipts = {
+        name: record for name, record in receipts.items()
+        if (destination / name).exists()
+    }
     audited = update % audit_every == 0
     if audited:
         for row in files:

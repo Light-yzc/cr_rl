@@ -190,3 +190,23 @@ def test_v2_checks_both_effective_batch_minimums_before_starting_simulator(monke
     with pytest.raises(ValueError, match="at least 64"):
         training.run(args)
     assert not calls
+
+
+def test_dense_microbatches_preserve_order_and_effective_optimizer_groups():
+    from types import SimpleNamespace
+
+    from cr_rl.training.separate import bounded_microbatches
+
+    rows = np.arange(150)
+    prepared = SimpleNamespace(limits=np.full(150, 192))
+    batches = list(bounded_microbatches(rows, 16, 64, prepared, 16 * 64))
+    np.testing.assert_array_equal(np.concatenate([ids for ids, _ in batches]), rows)
+    assert all(len(ids) * 192 <= 1024 for ids, _ in batches)
+    assert [last for _, last in batches].count(True) == 1
+    committed, pending = [], 0
+    for ids, last in batches:
+        pending += len(ids)
+        if pending == 64 or last:
+            committed.append(pending)
+            pending = 0
+    assert committed == [64, 64, 22]

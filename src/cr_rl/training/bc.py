@@ -1,7 +1,42 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn.functional as F
+
+
+@dataclass(frozen=True)
+class BCBatchNormalization:
+    """CPU label counts for one effective batch, including all its microbatches.
+
+    ``act`` includes ordinary card plays and ability actions; ``play`` includes
+    only ordinary card plays. Counts are fixed before any microbatch forward so
+    each loss call can contribute to the same objective without a GPU sync.
+    """
+
+    rows: int
+    wait: int
+    act: int
+    play: int
+
+    def __post_init__(self):
+        if any(not isinstance(value, int) or isinstance(value, bool)
+               for value in (self.rows, self.wait, self.act, self.play)):
+            raise TypeError("BC normalization counts must be Python integers")
+        if self.rows <= 0 or min(self.wait, self.act, self.play) < 0:
+            raise ValueError("BC normalization requires positive rows and nonnegative counts")
+        if self.wait + self.act != self.rows or self.play > self.act:
+            raise ValueError("BC normalization requires wait + act == rows and play <= act")
+
+    @classmethod
+    def from_actions(cls, actions: torch.Tensor) -> BCBatchNormalization:
+        """Count CPU labels; do not transfer a GPU label tensor for accounting."""
+        if actions.device.type != "cpu":
+            raise ValueError("Build BC normalization from CPU labels before device transfer")
+        wait = int((actions == 0).sum())
+        play = int(((actions > 0) & (actions < 2305)).sum())
+        return cls(rows=actions.numel(), wait=wait, act=actions.numel() - wait, play=play)
 
 
 def hierarchical_action_predictions(joint_log_probs: torch.Tensor):
@@ -46,17 +81,27 @@ def hierarchical_bc_loss(
     conditional_card_loss: bool = False,
     timing_prior: float | None = None,
     sampled_action_prior: float | None = None,
+    normalization: BCBatchNormalization | None = None,
 ):
     """Separate card/WAIT supervision from the conditional tile decision.
 
     The policy still represents the exact joint distribution. This objective gives the
     strategically important decision to play or wait a clean gradient before asking the
     location head to explain a particular tile among 576 possibilities.
+
+    By default, return the original objective averaged within this call. If
+    ``normalization`` contains the whole effective batch's counts, both the loss
+    and every returned metric are this microbatch's additive contribution to that
+    whole-batch objective. Sum these contributions across microbatches; do not
+    divide the loss or the gradients by the accumulation count again. The
+    fractions also contribute local counts divided by effective-batch rows.
     """
     if joint_log_probs.shape[-1] != 2307 or legal_mask.shape != joint_log_probs.shape:
         raise ValueError("Expected crforge v4's 2307-action codec")
     if not torch.all(legal_mask.any(dim=-1)):
         raise ValueError("BC batch contains a state without a legal action")
+    if normalization is not None and actions.numel() > normalization.rows:
+        raise ValueError("BC microbatch is larger than its effective-batch normalization")
 
     slot_log_probs = [joint_log_probs[..., :1]]
     for slot in range(4):
@@ -76,15 +121,34 @@ def hierarchical_bc_loss(
     card_loss = -card_log_probs.gather(-1, card_target.unsqueeze(-1)).squeeze(-1)
     unweighted_card_loss = card_loss
     is_act = ~is_wait
+    wait_denominator = (
+        is_wait.sum().clamp_min(1) if normalization is None else max(normalization.wait, 1)
+    )
+    act_denominator = (
+        is_act.sum().clamp_min(1) if normalization is None else max(normalization.act, 1)
+    )
+    play_denominator = (
+        is_play.sum().clamp_min(1) if normalization is None else max(normalization.play, 1)
+    )
+
+    def row_mean(values: torch.Tensor) -> torch.Tensor:
+        if normalization is None:
+            return values.mean()
+        return values.sum() / normalization.rows
+
     act_logp = torch.logsumexp(card_log_probs[..., 1:], dim=-1)
     timing_loss = -torch.where(is_act, act_logp, card_log_probs[..., 0])
     conditional_loss = torch.where(is_act, unweighted_card_loss + act_logp, 0.0)
     if conditional_card_loss:
         # Rebalance the decision to act, but never suppress the conditional
         # card/ability gradient with the sparse natural action prior.
-        timing_wait = torch.where(is_wait, timing_loss, 0.0).sum() / is_wait.sum().clamp_min(1)
-        timing_act = torch.where(is_act, timing_loss, 0.0).sum() / is_act.sum().clamp_min(1)
-        present = (is_wait.any().float() + is_act.any().float()).clamp_min(1)
+        timing_wait = torch.where(is_wait, timing_loss, 0.0).sum() / wait_denominator
+        timing_act = torch.where(is_act, timing_loss, 0.0).sum() / act_denominator
+        present = (
+            (is_wait.any().float() + is_act.any().float()).clamp_min(1)
+            if normalization is None
+            else max(int(normalization.wait > 0) + int(normalization.act > 0), 1)
+        )
         timing = (timing_wait + timing_act) / present
         if timing_prior is not None:
             if not (
@@ -101,15 +165,15 @@ def hierarchical_bc_loss(
                 timing_prior / sampled_action_prior,
                 (1 - timing_prior) / (1 - sampled_action_prior),
             )
-            timing = (timing_loss * weights).mean()
-        slot_loss = conditional_loss.sum() / is_act.sum().clamp_min(1)
+            timing = row_mean(timing_loss * weights)
+        slot_loss = conditional_loss.sum() / act_denominator
         card_objective = timing + slot_loss
     elif card_class_weights is not None:
         groups = torch.where(is_wait, 0, torch.where(is_play, 1, 2))
         card_loss = card_loss * card_class_weights.to(card_loss)[groups]
-        card_objective = card_loss.mean()
+        card_objective = row_mean(card_loss)
     else:
-        card_objective = card_loss.mean()
+        card_objective = row_mean(card_loss)
 
     safe_slot = ((actions - 1) // 576).clamp(0, 3)
     safe_tile = ((actions - 1) % 576).clamp(0, 575)
@@ -138,14 +202,14 @@ def hierarchical_bc_loss(
     tile_loss = torch.where(is_play, tile_loss, torch.zeros_like(tile_loss))
 
     # WAIT and ability labels supervise only the card/action-type decision.
-    total = card_objective + position_coef * tile_loss.sum() / is_play.sum().clamp_min(1)
+    total = card_objective + position_coef * tile_loss.sum() / play_denominator
     return total, {
         "card_loss": card_objective.detach(),
-        "timing_loss": (timing if conditional_card_loss else timing_loss.mean()).detach(),
-        "conditional_slot_loss": (conditional_loss.sum() / is_act.sum().clamp_min(1)).detach(),
-        "unweighted_card_loss": unweighted_card_loss.mean().detach(),
-        "position_loss": (tile_loss.sum() / is_play.sum().clamp_min(1)).detach(),
-        "position_hard_loss": (hard_tile_loss.sum() / is_play.sum().clamp_min(1)).detach(),
-        "wait_fraction": is_wait.float().mean().detach(),
-        "play_fraction": is_play.float().mean().detach(),
+        "timing_loss": (timing if conditional_card_loss else row_mean(timing_loss)).detach(),
+        "conditional_slot_loss": (conditional_loss.sum() / act_denominator).detach(),
+        "unweighted_card_loss": row_mean(unweighted_card_loss).detach(),
+        "position_loss": (tile_loss.sum() / play_denominator).detach(),
+        "position_hard_loss": (hard_tile_loss.sum() / play_denominator).detach(),
+        "wait_fraction": row_mean(is_wait.float()).detach(),
+        "play_fraction": row_mean(is_play.float()).detach(),
     }

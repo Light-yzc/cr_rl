@@ -13,3 +13,6 @@ wandb/
 .netrc
 *.py[cod]
 .DS_Store
+
+.venv-v100/
+.tmp_*/

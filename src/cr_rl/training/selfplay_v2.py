@@ -6,11 +6,15 @@ until collection ends. Historical opponents stay fixed within each match.
 """
 
 import copy
+import gc
 import json
+import os
 import subprocess
 import sys
 import time
 from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,13 +34,22 @@ from cr_rl.opponents.role_sampling import (
     frozen_policy_version,
     next_history_snapshot_id,
 )
+from cr_rl.training.adaptive_kl import restore_actor_lr_controller
 from cr_rl.training.advantages import compute_actor_critic_targets
 from cr_rl.training.deck_expansion import expand_deck_pool
 from cr_rl.training.episode_trace import EpisodeTrace, on_policy_seats
+from cr_rl.training.fp16 import configure_optimizer_amp
 from cr_rl.training.game_budget import TrainingGameCounter
 from cr_rl.training.inference import FrozenInference
 from cr_rl.training.initialization import initialize_from_bc
-from cr_rl.training.persistence import atomic_json, copy_verified, file_sha256, publish_update
+from cr_rl.training.persistence import (
+    atomic_json,
+    copy_verified,
+    file_sha256,
+    prune_backup,
+    prune_local_opponents,
+    publish_update,
+)
 from cr_rl.training.prepared_history import PreparedHistoryBatches
 from cr_rl.training.resume_options import override_resume_rates
 from cr_rl.training.rewards import RewardConfig, shaped_rewards
@@ -49,16 +62,35 @@ class PersistentSelfplay:
         from cr_rl.envs.crforge import CrForgeVector
 
         self.args, self.device = args, args.device
+        if getattr(args, "async_publication", False) and (
+            not getattr(args, "backup_dir", None) or not getattr(args, "incremental_backup", False)
+        ):
+            raise ValueError("Async publication requires an incremental backup directory")
         if self.device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.critic_device = getattr(args, "critic_device", None) or self.device
+        if torch.device(self.critic_device) != torch.device(self.device) and not (
+            self.device.startswith("cuda") and self.critic_device.startswith("cuda")
+        ):
+            raise ValueError("Concurrent Actor/Critic requires two CUDA devices")
         torch.manual_seed(args.seed)
         self.rng = np.random.default_rng(args.seed)
         self.out = Path(args.out)
         self.out.mkdir(parents=True, exist_ok=True)
         if not args.resume and (self.out / "ppo_latest.pt").exists():
             raise ValueError("Use a new v2 output directory or --resume")
-        self.env = CrForgeVector(args.envs, min(args.envs, 8), independent=True)
+        self.env = CrForgeVector(
+            args.envs,
+            getattr(args, "env_threads", 1),
+            independent=True,
+            level_mixture=getattr(args, "level_mixture", None),
+            tower_level_mixture=getattr(args, "tower_level_mixture", None),
+            level_jitter_prob=getattr(args, "level_jitter_prob", None),
+            level_jitter=getattr(args, "level_jitter", 2),
+            level_jitter_seed=args.seed,
+        )
         self.env.set_autoreset(False)
+        self.level_profile = self.env.level_profile
         self.schema = self.env.vector.schema
         self.adapter = CrForgeObservationAdapter(
             self.schema, self.env.vector.vocabulary_size, entity_bucket=16
@@ -69,6 +101,12 @@ class PersistentSelfplay:
             if source
             else None
         )
+        self.level_profile_migrated = bool(
+            args.resume
+            and state is not None
+            and state.get("level_profile") is None
+            and getattr(args, "allow_level_profile_migration", False)
+        )
         self.cfg = (
             ModelConfig(**state["config"])
             if state
@@ -76,10 +114,30 @@ class PersistentSelfplay:
         )
         if getattr(args, "frame_encoder_fp32", False):
             self.cfg = replace(self.cfg, frame_encoder_fp32=True)
-        for name in ("elixir_wait_bias", "elixir_hold_min_cost"):
+        if getattr(args, "disable_holding_prior", False):
+            if any(getattr(args, name, None) is not None for name in (
+                "elixir_wait_bias", "elixir_hold_min_cost", "core_slot_bias",
+                "holding_prior_version", "holding_core_cards",
+            )):
+                raise ValueError("--disable-holding-prior conflicts with holding prior overrides")
+            self.cfg = self.cfg.without_holding_prior()
+        for name in ("elixir_wait_bias", "elixir_hold_min_cost", "core_slot_bias"):
             value = getattr(args, name, None)
             if value is not None:
                 self.cfg = replace(self.cfg, **{name: value})
+        prior_version = getattr(args, "holding_prior_version", None)
+        core_cards = getattr(args, "holding_core_cards", None)
+        if prior_version == 2 or core_cards:
+            self.cfg = replace(
+                self.cfg,
+                holding_prior_version=prior_version or self.cfg.holding_prior_version,
+                core_card_ids=tuple(self.env.vector.card_id(name) for name in core_cards)
+                if core_cards else self.cfg.core_card_ids,
+                tower_card_ids=tuple(self.env.vector.card_id(name)
+                                     for name in ("KingTower", "PrincessTower")),
+            )
+        elif prior_version is not None:
+            self.cfg = replace(self.cfg, holding_prior_version=prior_version)
         if self.cfg.representation_version != 2:
             raise ValueError("Persistent v2 training requires the clean-slate v2 representation")
         if self.cfg.header_fields != tuple(self.schema.header_fields) or (
@@ -106,7 +164,7 @@ class PersistentSelfplay:
                 critic_cfg = replace(critic_cfg, frame_encoder_fp32=True)
         if critic_cfg.context_len != self.cfg.context_len:
             raise ValueError("Independent actor/critic history lengths must match")
-        self.critic = HistoryValueNetwork(critic_cfg).to(self.device).eval()
+        self.critic = HistoryValueNetwork(critic_cfg).to(self.critic_device).eval()
         self.critic_initialization = self.critic.initialize_encoder(self.actor)
         self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(), lr=args.learning_rate)
         self.critic_optimizer = torch.optim.AdamW(
@@ -149,6 +207,10 @@ class PersistentSelfplay:
             self.critic.load_state_dict(state["critic"], strict=True)
             self.actor_optimizer.load_state_dict(state["optimizer"])
             self.critic_optimizer.load_state_dict(state["critic_optimizer"])
+            from cr_rl.training.host_memory import detach_optimizer_counters
+
+            detach_optimizer_counters(self.actor_optimizer)
+            detach_optimizer_counters(self.critic_optimizer)
             self.resume_learning_rates = override_resume_rates(
                 self.actor_optimizer,
                 self.critic_optimizer,
@@ -169,6 +231,24 @@ class PersistentSelfplay:
             }
             if any(state[key] != value for key, value in actual.items()):
                 raise ValueError("Resume simulator provenance mismatch")
+            saved_level_profile = state.get("level_profile")
+            if saved_level_profile is None and (
+                getattr(args, "level_mixture", None)
+                or getattr(args, "tower_level_mixture", None)
+                or getattr(args, "level_jitter_prob", None) is not None
+            ) and not getattr(args, "allow_level_profile_migration", False):
+                raise ValueError(
+                    "This checkpoint predates level profiles; pass --allow-level-profile-migration for an explicit curriculum migration"
+                )
+            if saved_level_profile is not None and saved_level_profile != self.level_profile:
+                raise ValueError("Resume level profile differs from the saved run")
+            if saved_level_profile is None and (
+                len(set(self.level_profile["card_levels"])) > 1
+                or len(set(self.level_profile["tower_levels"])) > 1
+            ) and not getattr(args, "allow_level_profile_migration", False):
+                raise ValueError(
+                    "An older checkpoint has no level profile; start a fresh level-mixture pilot"
+                )
             self.admission = SnapshotAdmission(**state["admission"])
             self.rng.bit_generator.state = state["numpy_rng_state"]
             torch.set_rng_state(state["torch_rng_state"].cpu())
@@ -185,6 +265,10 @@ class PersistentSelfplay:
             }
             if any(self.initialization[key] != value for key, value in actual.items()):
                 raise ValueError("BC/simulator provenance mismatch")
+        configure_optimizer_amp(self.actor_optimizer, self.device,
+                                state.get("actor_amp_scaler") if args.resume else None)
+        configure_optimizer_amp(self.critic_optimizer, self.critic_device,
+                                state.get("critic_amp_scaler") if args.resume else None)
         self.game_counter = TrainingGameCounter(
             state.get("training_game_counter") if args.resume else None,
             origin_update=self.update,
@@ -213,6 +297,34 @@ class PersistentSelfplay:
         self.deck_pool_transitions = (
             list(state.get("deck_pool_transitions", [])) if args.resume else []
         )
+        self.actor_lr_controller = restore_actor_lr_controller(
+            self.actor_optimizer,
+            state.get("adaptive_actor_lr") if args.resume else None,
+            enabled=getattr(args, "adaptive_actor_lr", False),
+            min_lr=getattr(args, "adaptive_actor_lr_min", 2.5e-6),
+            max_lr=getattr(args, "adaptive_actor_lr_max", None),
+        )
+        diversity_manifest = getattr(args, "league_diversity_manifest", None)
+        if diversity_manifest:
+            manifest = json.loads(Path(diversity_manifest).read_text())
+            if manifest["evaluated_against_version"] != self.update:
+                raise ValueError(
+                    "A new expert manifest must be evaluated against the resumed version"
+                )
+            candidate = Path(manifest.get("candidate_checkpoint", self.out / "actor_export.pt"))
+            if not candidate.is_absolute():
+                candidate = Path(diversity_manifest).resolve().parent / candidate
+            if file_sha256(candidate) != manifest["candidate_sha256"]:
+                raise ValueError("Expert evidence differs from the frozen learner export")
+            self.pool.configure_diverse_retention(
+                diversity_manifest, learner_version=self.update, verify_files=True
+            )
+        # The resume checkpoint contains CPU copies of the actor, critic and
+        # both optimizer states. They are loaded into the live CUDA modules
+        # above; retaining the deserialized dict would waste several GiB of
+        # host RAM for the entire run.
+        del state
+        gc.collect()
         expansion_path = getattr(args, "expand_decks", None)
         requested = yaml.safe_load(expansion_path.read_text()) if expansion_path else None
         if args.resume and args.decks:
@@ -251,13 +363,25 @@ class PersistentSelfplay:
                 args.envs * 2, self.cfg.context_len, self.schema.seat_ints
             )
         self.opponent_cache = OrderedDict()
-        self.critic_inference = FrozenInference(self.critic, self.adapter, self.device)
+        self.critic_inference = FrozenInference(self.critic, self.adapter, self.critic_device)
         self.actor_inference = FrozenInference(
             self.actor,
             self.adapter,
             self.device,
             forced_wait_fastpath=getattr(args, "forced_wait_fastpath", False),
         )
+        self._critic_executor = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="critic-inference")
+            if torch.device(self.critic_device) != torch.device(self.device) else None
+        )
+        self.critic_peer = None
+        if getattr(args, "balanced_critic", False):
+            from cr_rl.training.peer_critic import PeerCritic
+            self.critic_peer = PeerCritic(self.critic, self.device)
+        if getattr(args, "compact_host_memory", False):
+            from cr_rl.training.host_memory import release_host_memory
+
+            release_host_memory()
         self.completed = []
         if not self.pool.entries:
             path = self.save_opponent(0)
@@ -280,6 +404,12 @@ class PersistentSelfplay:
             )
         for env in range(args.envs):
             self.reset_match(env)
+        self._publisher = None
+        self.last_publication = None
+        if getattr(args, "async_publication", False):
+            from cr_rl.training.async_publication import BoundedAsyncPublisher
+
+            self._publisher = BoundedAsyncPublisher(self.out, Path(args.backup_dir))
         self.tracking = self.telemetry = None
         if getattr(args, "wandb", False):
             import wandb
@@ -332,26 +462,40 @@ class PersistentSelfplay:
             (entry for entry in self.pool.entries if entry.role == "anchor"), self.pool.entries[0]
         )
         script = Path(__file__).resolve().parents[3] / "scripts/evaluate_policy.py"
+        if self.device.startswith("cuda"):
+            # Parent is idle during this subprocess; return unused reservations
+            # so its two frozen policies can allocate their own CUDA context.
+            torch.cuda.synchronize(self.device)
+            torch.cuda.empty_cache()
         self.emit(phase="candidate_gate", candidate_policy_id=self.update)
+        eval_command = [
+            sys.executable,
+            str(script),
+            "--policy",
+            str(candidate),
+            "--opponent",
+            anchor.checkpoint,
+            "--decks",
+            str(league_path),
+            "--out",
+            str(evaluation),
+            "--pairs",
+            "1",
+            "--frame-cache",
+            "--device",
+            self.device,
+        ]
+        # The gate has only two lanes. Pass the realized profile rather than
+        # re-sampling jitter with a different lane count/seed.
+        eval_command.extend(
+            ["--level-mixture", *[str(value) for value in self.level_profile["card_levels"][:2]]]
+        )
+        eval_command.extend(
+            ["--tower-level-mixture", *[str(value) for value in self.level_profile["tower_levels"][:2]]]
+        )
         with (evaluation / "evaluation.log").open("w") as log:
             result = subprocess.run(
-                [
-                    sys.executable,
-                    str(script),
-                    "--policy",
-                    str(candidate),
-                    "--opponent",
-                    anchor.checkpoint,
-                    "--decks",
-                    str(league_path),
-                    "--out",
-                    str(evaluation),
-                    "--pairs",
-                    "1",
-                    "--frame-cache",
-                    "--device",
-                    self.device,
-                ],
+                eval_command,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 timeout=1200,
@@ -480,21 +624,47 @@ class PersistentSelfplay:
         return self.incremental_history.request(following=raw, episodes=episodes)
 
     @staticmethod
-    def infer(inference, history, rows=None, masks=None, sample=False):
+    def infer(inference, history, rows=None, masks=None, sample=False, collect_stats=True):
         if not isinstance(history, tuple):
             selected = history if rows is None else history.select(rows)
             method = inference.sample_incremental if sample else inference.evaluate_incremental
-            return method(selected, masks)
+            return (
+                method(selected, masks, collect_stats=collect_stats)
+                if sample
+                else method(selected, masks)
+            )
         windows, time_mask = history
         if rows is not None:
             windows, time_mask = windows[rows], time_mask[rows]
         method = inference.sample if sample else inference.evaluate
-        return method(windows, time_mask, masks)
+        return (
+            method(windows, time_mask, masks, collect_stats=collect_stats)
+            if sample
+            else method(windows, time_mask, masks)
+        )
 
     def close(self):
-        self.env.close()
-        if self.tracking:
-            self.tracking.finish()
+        peer = getattr(self, "critic_peer", None)
+        if peer:
+            peer.close()
+        executor = getattr(self, "_critic_executor", None)
+        if executor:
+            executor.shutdown(wait=True)
+        try:
+            self.wait_for_publication()
+        finally:
+            try:
+                if self._publisher is not None:
+                    self._publisher.close()
+            finally:
+                self.env.close()
+                if self.tracking:
+                    self.tracking.finish()
+
+    def wait_for_publication(self):
+        if self._publisher is not None:
+            return self._publisher.wait()
+        return None
 
     def collect(self):
         args = self.args
@@ -502,10 +672,30 @@ class PersistentSelfplay:
             raise ValueError("Current behavior version overlaps frozen policy namespace")
         snapshots, references, completed = [], [], []
         starts = [int(self.env.vector.info(i)["episode_step"]) for i in range(args.envs)]
+        from cr_rl.training.rollout_peer import actor_replica, actor_rows, merge_stats
+
+        dual_rollout = getattr(args, "dual_rollout", False)
+        if dual_rollout and self._critic_executor is None:
+            raise ValueError("Dual rollout requires separate Actor/Critic CUDA devices")
+        peer_actor = (
+            actor_replica(self.actor, self.adapter, self.critic_device,
+                          getattr(args, "forced_wait_fastpath", False))
+            if dual_rollout else None
+        )
+        self.rollout_parallel = {"enabled": dual_rollout, "primary_actor_rows": 0,
+                                 "peer_actor_rows": 0, "env_threads": self.env.vector.threads}
         collected = 0
         began = time.perf_counter()
+        done = np.ones(args.envs, dtype=bool)
+        following = next_masks = None
         for step in range(args.steps):
-            raw, masks = self.env.observations.copy(), self.env.masks.copy()
+            if step % 64 == 0 and self._publisher is not None:
+                self._publisher.check()
+            compact = getattr(args, "compact_host_memory", False)
+            if compact and step and not done.any():
+                raw, masks = following, next_masks
+            else:
+                raw, masks = self.env.observations.copy(), self.env.masks.copy()
             history = self.inference_history(raw, append=True)
             versions = np.full((args.envs, 2), self.update, dtype=np.int32)
             for env, entry in enumerate(self.opponents):
@@ -516,15 +706,40 @@ class PersistentSelfplay:
             actions = np.zeros((args.envs, 2), dtype=np.int32)
             logp = np.zeros((args.envs, 2), dtype=np.float32)
             actor_indices = np.flatnonzero(learners.reshape(-1))
+            own_indices, peer_indices = actor_rows(actor_indices, dual_rollout)
+            current_masks = masks.reshape(-1, self.schema.actions)
+            collect_stats = step % 64 == 0 or step == args.steps - 1
+
+            def critic_values(
+                history=history, peer_indices=peer_indices, current_masks=current_masks,
+                collect_stats=collect_stats,
+            ):
+                context = (torch.cuda.device(self.critic_device)
+                           if self._critic_executor else nullcontext())
+                with context:
+                    peer_result = (
+                        self.infer(peer_actor, history, peer_indices,
+                                   current_masks[peer_indices], sample=True,
+                                   collect_stats=collect_stats)
+                        if len(peer_indices) else None
+                    )
+                    return self.infer(self.critic_inference, history).cpu().numpy(), peer_result
+
+            value_future = (
+                self._critic_executor.submit(critic_values) if self._critic_executor else None
+            )
             selected, selected_logp, stats = self.infer(
                 self.actor_inference,
                 history,
-                actor_indices,
-                masks.reshape(-1, self.schema.actions)[actor_indices],
+                own_indices,
+                current_masks[own_indices],
                 sample=True,
+                collect_stats=collect_stats,
             )
-            actions.reshape(-1)[actor_indices] = selected
-            logp.reshape(-1)[actor_indices] = selected_logp
+            actions.reshape(-1)[own_indices] = selected
+            logp.reshape(-1)[own_indices] = selected_logp
+            self.rollout_parallel["primary_actor_rows"] += len(own_indices)
+            self.rollout_parallel["peer_actor_rows"] += len(peer_indices)
             for policy_id in sorted({e.policy_id for e in self.opponents if e is not None}):
                 indices = np.array(
                     [
@@ -543,9 +758,16 @@ class PersistentSelfplay:
                     indices,
                     masks.reshape(-1, self.schema.actions)[indices],
                     sample=True,
+                    collect_stats=False,
                 )
                 actions.reshape(-1)[indices], logp.reshape(-1)[indices] = selected, selected_logp
-            values = self.infer(self.critic_inference, history).cpu().numpy().reshape(args.envs, 2)
+            values, peer_result = value_future.result() if value_future else critic_values()
+            values = values.reshape(args.envs, 2)
+            if peer_result is not None:
+                selected, selected_logp, peer_stats = peer_result
+                actions.reshape(-1)[peer_indices] = selected
+                logp.reshape(-1)[peer_indices] = selected_logp
+                stats = merge_stats(stats, len(own_indices), peer_stats, len(peer_indices))
             if not np.take_along_axis(masks, actions[..., None], -1).all():
                 raise RuntimeError("v2 policy sampled an illegal action")
             self.env.step(actions)
@@ -582,7 +804,8 @@ class PersistentSelfplay:
                 [len(trace.observations) == 0 for trace in self.traces], dtype=np.uint8
             )
             for env, trace in enumerate(self.traces):
-                index = trace.append(raw[env], masks[env], training_reward[env], learners[env])
+                index = trace.append(raw[env], masks[env], training_reward[env], learners[env],
+                                     copy=not compact)
                 references.extend((trace, index, seat) for seat in range(2))
             snapshots.append(
                 {
@@ -686,10 +909,25 @@ class PersistentSelfplay:
                 next_values[index].copy(),
                 row["valid"].copy(),
             )
+        if peer_actor is not None:
+            self.rollout_parallel["peer_actor_frames_encoded"] = (
+                peer_actor.incremental_cache.encoded_frames
+                if peer_actor.incremental_cache is not None else peer_actor.cache.encoded_frames
+            )
         return snapshots, references, completed, next_values, starts
 
     def optimize(self, snapshots, refs, completed, next_values):
+        from cr_rl.training.rollout_peer import trim_opponent_cache
+
         args = self.args
+        removed = trim_opponent_cache(
+            self.opponent_cache, getattr(args, "training_opponent_cache_size", None)
+        )
+        if hasattr(self, "rollout_parallel"):
+            self.rollout_parallel["opponent_models_evicted_for_training"] = removed
+            self.rollout_parallel["opponent_models_retained_for_training"] = (
+                len(self.opponent_cache)
+            )
         actor_enabled = all(self.warmup[key] >= self.warmup_config[key] for key in self.warmup)
         reward = np.stack([row["training_rewards"] for row in snapshots])
         values = np.stack([row["old_values"] for row in snapshots])
@@ -741,7 +979,11 @@ class PersistentSelfplay:
 
         preparation_started = time.perf_counter()
         make_batch = (
-            PreparedHistoryBatches(refs, self.cfg.context_len, self.adapter, self.device)
+            PreparedHistoryBatches(
+                refs, self.cfg.context_len, self.adapter, self.device,
+                cuda_budget_gib=(0 if getattr(args, "stream_training_batches", False) else 2),
+                deduplicate_frames=getattr(args, "deduplicate_training_frames", False),
+            )
             if refs
             else None
         )
@@ -769,12 +1011,17 @@ class PersistentSelfplay:
             targets,
             rng=self.rng,
             device=self.device,
+            critic_device=self.critic_device,
+            critic_peer=self.critic_peer,
             batch_size=args.batch_size,
             accumulation=args.grad_accumulation,
             actor_epochs=args.epochs,
             critic_epochs=args.critic_epochs,
             clip_coef=args.clip_coef,
             entropy_coef=args.entropy_coef,
+            card_entropy_coef=getattr(args, "card_entropy_coef", None),
+            tile_entropy_coef=getattr(args, "tile_entropy_coef", None),
+            continue_after_kl_reject=getattr(args, "continue_after_kl_reject", False),
             reference_kl_coef=args.reference_kl_coef,
             target_kl=args.target_kl,
             max_grad_norm=args.max_grad_norm,
@@ -788,12 +1035,15 @@ class PersistentSelfplay:
             target_card_kl=getattr(args, "target_card_kl", None),
             target_tile_kl=getattr(args, "target_tile_kl", None),
             max_initial_logp_error=getattr(args, "max_initial_logp_error", None),
+            actor_lr_controller=self.actor_lr_controller,
         )
         result["actor_training_samples"] = len(actor_indices) if actor_enabled else 0
         result["critic_training_samples"] = len(critic_indices)
         result["metrics"]["input_preparation_seconds"] = preparation_seconds
         result["metrics"]["optimization_seconds"] = time.perf_counter() - optimization_started
         result["metrics"]["prepared_input_gib"] = preparation_metadata["bytes"] / 2**30
+        for name in ("frames_requested", "frames_encoded"):
+            result["metrics"][name] = preparation_metadata.get(name, 0)
         if not actor_enabled and result["critic_steps"]:
             self.warmup["rounds"] += 1
             self.warmup["games"] += len(completed)
@@ -811,6 +1061,14 @@ class PersistentSelfplay:
             "critic": self.critic.state_dict(),
             "optimizer": self.actor_optimizer.state_dict(),
             "critic_optimizer": self.critic_optimizer.state_dict(),
+            "adaptive_actor_lr": (
+                self.actor_lr_controller.state_dict() if self.actor_lr_controller else None
+            ),
+            "amp_dtype": os.environ.get("CRRL_AMP_DTYPE", "auto"),
+            "actor_device": self.device,
+            "critic_device": self.critic_device,
+            "actor_amp_scaler": self.actor_optimizer.amp_scaler.state_dict(),
+            "critic_amp_scaler": self.critic_optimizer.amp_scaler.state_dict(),
             "updates": self.update,
             "learner_samples_total": self.samples,
             "training_game_counter": self.game_counter.state_dict(),
@@ -820,6 +1078,14 @@ class PersistentSelfplay:
             "critic_warmup": self.warmup,
             "critic_warmup_config": self.warmup_config,
             "reward_config": self.rewards.metadata(),
+            "entropy_config": {
+                "joint_coef": self.args.entropy_coef,
+                "card_coef": getattr(self.args, "card_entropy_coef", None),
+                "tile_coef": getattr(self.args, "tile_entropy_coef", None),
+                "tile_card_mass_detached": (
+                    getattr(self.args, "card_entropy_coef", None) is not None
+                ),
+            },
             "gamma": self.args.gamma,
             "gae_lambda": self.args.gae_lambda,
             "critic_gae_lambda": getattr(self.args, "critic_gae_lambda", None),
@@ -828,6 +1094,11 @@ class PersistentSelfplay:
                 "target_card_kl": getattr(self.args, "target_card_kl", None),
                 "target_tile_kl": getattr(self.args, "target_tile_kl", None),
                 "max_initial_logp_error": getattr(self.args, "max_initial_logp_error", None),
+            },
+            "execution_config": {
+                name: bool(getattr(self.args, name, False))
+                for name in ("async_publication", "cache_reference", "defer_scalar_metrics",
+                             "deduplicate_training_frames", "balanced_critic", "dual_rollout")
             },
             "league_config": self.league,
             "deck_pool_transitions": self.deck_pool_transitions,
@@ -844,11 +1115,30 @@ class PersistentSelfplay:
             "backend_commit": self.env.metadata().get("commit"),
             "data_version": self.env.vector.data_version,
             "content_sha": self.env.vector.content_sha,
+            "level_profile": self.level_profile,
+            "level_profile_migrated": self.level_profile_migrated,
             "resume_semantics": "continuous_simulator_between_updates_reset_on_process_restart",
             "unfinished_episode_steps": [len(trace.observations) for trace in self.traces],
         }
         temporary = self.out / "ppo_latest.tmp.pt"
-        torch.save(state, temporary)
+        with temporary.open("wb") as stream:
+            torch.save(state, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Retain immutable local restore points without another multi-GB copy.
+        checkpoints = self.out / "checkpoints"
+        checkpoints.mkdir(exist_ok=True)
+        restore = checkpoints / f"update_{self.update:06d}.pt"
+        restore_temporary = restore.with_suffix(".pt.tmp")
+        restore_temporary.unlink(missing_ok=True)
+        os.link(temporary, restore_temporary)
+        restore_temporary.replace(restore)
+        restore_pool = json.loads((self.out / "opponent_pool.json").read_text())
+        for entry in restore_pool["entries"]:
+            source = Path(entry["checkpoint"])
+            if not source.is_absolute():
+                entry["checkpoint"] = str((self.out / source).resolve())
+        atomic_json(checkpoints / f"update_{self.update:06d}.pool.json", restore_pool)
         temporary.replace(self.out / "ppo_latest.pt")
         export = self.out / "actor_export.tmp.pt"
         torch.save(
@@ -863,6 +1153,7 @@ class PersistentSelfplay:
                     "backend_commit",
                     "data_version",
                     "content_sha",
+                    "level_profile",
                 )
             },
             export,
@@ -872,7 +1163,8 @@ class PersistentSelfplay:
     def run_update(self):
         started = time.perf_counter()
         if self.device.startswith("cuda"):
-            torch.cuda.reset_peak_memory_stats()
+            for device in {self.device, self.critic_device}:
+                torch.cuda.reset_peak_memory_stats(device)
         snapshots, refs, completed, next_values, starts = self.collect()
         collected_at = time.perf_counter()
         result, actor_enabled, valid_samples = self.optimize(
@@ -902,7 +1194,8 @@ class PersistentSelfplay:
                 path.unlink()
             admission_seconds = time.perf_counter() - admission_started
         evicted = self.pool.prune(
-            [entry.policy_id for entry in self.opponents if entry is not None]
+            [entry.policy_id for entry in self.opponents if entry is not None],
+            learner_version=self.update,
         )
         if evicted:
             path = self.out / "archived_opponents.jsonl"
@@ -914,6 +1207,7 @@ class PersistentSelfplay:
             {
                 **self.env.metadata(),
                 "training_driver": "persistent-v2",
+                "level_profile": self.level_profile,
                 "model_config": self.cfg.__dict__,
                 "gamma": self.args.gamma,
                 "gae_lambda": self.args.gae_lambda,
@@ -924,6 +1218,19 @@ class PersistentSelfplay:
                     "target_tile_kl": getattr(self.args, "target_tile_kl", None),
                 },
                 "training_reward_config": self.rewards.metadata(),
+                "entropy_config": {
+                    "joint_coef": self.args.entropy_coef,
+                    "card_coef": getattr(self.args, "card_entropy_coef", None),
+                    "tile_coef": getattr(self.args, "tile_entropy_coef", None),
+                    "tile_card_mass_detached": (
+                        getattr(self.args, "card_entropy_coef", None) is not None
+                    ),
+                },
+                "execution_config": {
+                    name: bool(getattr(self.args, name, False))
+                    for name in ("async_publication", "cache_reference", "defer_scalar_metrics",
+                                 "deduplicate_training_frames", "balanced_critic", "dual_rollout")
+                },
                 "behaviour_temperature": 1.0,
             }
         )
@@ -931,6 +1238,16 @@ class PersistentSelfplay:
             buffer.append(**{key: value for key, value in row.items() if not key.startswith("_")})
         rollout = buffer.save(self.out / "rollouts" / f"rollout_{self.update:06d}.npz")
         self.checkpoint()
+        retention = prune_backup(
+            self.out, self.update,
+            recent=getattr(self.args, "keep_checkpoints", 2),
+            max_periodic=getattr(self.args, "keep_periodic_checkpoints", 2),
+        )
+        retention.update(prune_local_opponents(
+            self.out,
+            active=[entry.checkpoint for entry in self.opponents if entry is not None],
+        ))
+        self.emit(update=self.update, phase="storage_retention", **retention)
         saved_at = time.perf_counter()
         terminal_results = np.concatenate(
             [row["rewards"][row["terminated"].astype(bool)].reshape(-1) for row in snapshots]
@@ -961,6 +1278,8 @@ class PersistentSelfplay:
             core_requests += int((play & (chosen_cost >= 5)).sum())
         summary = {
             "update": self.update,
+            "level_profile": self.level_profile,
+            "level_profile_migrated": self.level_profile_migrated,
             "learner_samples_total": self.samples,
             "valid_learner_samples": valid_samples,
             "actor_enabled": actor_enabled,
@@ -985,6 +1304,11 @@ class PersistentSelfplay:
             "actor_kl_stopped": result["actor_kl_stopped"],
             "critic_warmup": self.warmup.copy(),
             "metrics": result["metrics"],
+            "critic_parallel": result.get("critic_parallel", {}),
+            "rollout_parallel": getattr(self, "rollout_parallel", {}),
+            "sample_utilization": result["sample_utilization"],
+            "actor_lr_schedule": result.get("actor_lr_schedule", {"enabled": False}),
+            "rejected_policy_metrics": result["rejected_policy_metrics"],
             "reference_cache": result.get("reference_cache", {}),
             "optimization_batches": {
                 "effective": self.args.batch_size * self.args.grad_accumulation,
@@ -997,6 +1321,12 @@ class PersistentSelfplay:
                 or self.args.batch_size,
             },
             "seconds": time.perf_counter() - started,
+            "devices": {"actor": self.device, "critic": self.critic_device},
+            "amp_dtype": os.environ.get("CRRL_AMP_DTYPE", "auto"),
+            "peak_cuda_per_device_gib": {
+                str(device): torch.cuda.max_memory_allocated(device) / 2**30
+                for device in {self.device, self.critic_device}
+            } if self.device.startswith("cuda") else {},
             "peak_cuda_allocated_gib": torch.cuda.max_memory_allocated() / 2**30
             if self.device.startswith("cuda")
             else None,
@@ -1029,6 +1359,7 @@ class PersistentSelfplay:
             ],
             "initial_logp_max_error": max(result["initial_logp_errors"], default=0),
             "opponent_pool_size": len(self.pool.entries),
+            "opponent_retention": self.pool.diversity_metadata(self.update),
             "role_mixture": self.role_mixture.state_dict() if self.role_mixture else None,
             "role_draws": dict(self.role_draws),
             "learning_rates": {
@@ -1055,18 +1386,7 @@ class PersistentSelfplay:
         if self.telemetry:
             self.telemetry.log_summary(summary)
         publication_started = time.perf_counter()
-        if getattr(self.args, "backup_dir", None):
-            if getattr(self.args, "incremental_backup", False):
-                from cr_rl.training.incremental_backup import publish_incremental
-
-                publish_incremental(self.out, self.args.backup_dir, self.update)
-            else:
-                publish_update(self.out, self.args.backup_dir, self.update)
-            for name in ("archived_opponents.jsonl",):
-                if (self.out / name).exists():
-                    copy_verified(self.out / name, self.args.backup_dir / name)
-        published_at = time.perf_counter()
-        timing = dict(
+        timing_base = dict(
             update=self.update,
             learner_samples_total=self.samples,
             valid_learner_samples=valid_samples,
@@ -1075,18 +1395,57 @@ class PersistentSelfplay:
             admission_seconds=admission_seconds,
             serialization_seconds=saved_at - optimized_at - admission_seconds,
             prepublication_logging_seconds=publication_started - saved_at,
-            backup_seconds=published_at - publication_started,
-            update_wall_seconds=published_at - started,
-            effective_samples_per_second=valid_samples / (published_at - started),
             incremental_backup=getattr(self.args, "incremental_backup", False),
             incremental_inference=self.incremental_history is not None,
             cache_reference=getattr(self.args, "cache_reference", False),
             defer_scalar_metrics=getattr(self.args, "defer_scalar_metrics", False),
+            deduplicate_training_frames=getattr(self.args, "deduplicate_training_frames", False),
+            async_publication=self._publisher is not None,
         )
+        # Freeze generation values; the next collection may run while this callback publishes.
         timing_path = self.out / "timings" / f"update_{self.update:06d}.json"
-        atomic_json(timing_path, timing)
-        if getattr(self.args, "backup_dir", None):
-            copy_verified(timing_path, self.args.backup_dir / "timings" / timing_path.name)
+        backup_dir = Path(self.args.backup_dir) if getattr(self.args, "backup_dir", None) else None
+        publication_callback = getattr(self, "_publication_callback", None)
+
+        def finish_timing(manifest, backup_seconds, snapshot_seconds=0.0, backpressure_seconds=0.0):
+            elapsed = time.perf_counter() - started
+            foreground = publication_started - started + snapshot_seconds + backpressure_seconds
+            timing = dict(
+                timing_base, backup_seconds=backup_seconds, update_wall_seconds=elapsed,
+                effective_samples_per_second=valid_samples / elapsed,
+                foreground_update_seconds=foreground,
+                snapshot_seconds=snapshot_seconds,
+                publication_backpressure_seconds=backpressure_seconds,
+                timing_scope="Publication latency overlaps next update when async_publication=true",
+            )
+            atomic_json(timing_path, timing)
+            if backup_dir is not None:
+                copy_verified(timing_path, backup_dir / "timings" / timing_path.name)
+            if publication_callback is not None:
+                publication_callback(manifest)
+
+        publication_interval = max(1, int(getattr(self.args, "publication_interval", 1)))
+        should_publish = (
+            self.update % publication_interval == 0
+            or self.update >= int(getattr(self.args, "updates", self.update))
+        )
+        if self._publisher is not None and should_publish:
+            self.last_publication = self._publisher.submit(self.update, after_publish=finish_timing)
+        elif self._publisher is not None:
+            self._publisher.check()
+            finish_timing(None, 0.0)
+        else:
+            if backup_dir is not None and should_publish:
+                if getattr(self.args, "incremental_backup", False):
+                    from cr_rl.training.incremental_backup import publish_incremental
+
+                    publish_incremental(self.out, backup_dir, self.update)
+                else:
+                    publish_update(self.out, backup_dir, self.update)
+                for name in ("archived_opponents.jsonl",):
+                    if (self.out / name).exists():
+                        copy_verified(self.out / name, backup_dir / name)
+            finish_timing(None, time.perf_counter() - publication_started)
         print(json.dumps(summary), flush=True)
         return summary
 
@@ -1105,5 +1464,11 @@ def run(args):
             if target is not None and runner.game_counter.count >= target:
                 break
             runner.run_update()
+            if getattr(args, "compact_host_memory", False):
+                from cr_rl.training.host_memory import release_host_memory
+
+                for trace in runner.traces:
+                    trace.detach_views()
+                release_host_memory()
     finally:
         runner.close()

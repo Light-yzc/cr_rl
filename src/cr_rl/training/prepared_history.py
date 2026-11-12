@@ -11,11 +11,13 @@ import torch
 
 
 class PreparedHistoryBatches:
-    def __init__(self, refs, context_len, adapter, device, cuda_budget_gib=2):
+    def __init__(self, refs, context_len, adapter, device, cuda_budget_gib=2,
+                 deduplicate_frames=False):
         began = time.perf_counter()
         if not refs or context_len < 1:
             raise ValueError("Nonempty references and a positive context length are required")
         self.device = torch.device(device)
+        self.deduplicate_frames = deduplicate_frames
         self.adapter = adapter
         groups = {}
         for trace, position, seat in refs:
@@ -76,12 +78,16 @@ class PreparedHistoryBatches:
             use_cuda = free - nbytes >= 8 * 2**30
         self.storage_device = self.device if use_cuda else torch.device("cpu")
         self.arrays = tuple(torch.as_tensor(value, device=self.storage_device) for value in arrays)
+        self.windows_numpy = windows
         self.metadata = dict(
             unique_frames=total - 1,
             samples=len(refs),
             bytes=nbytes,
             storage_device=str(self.storage_device),
             seconds=time.perf_counter() - began,
+            deduplicate_frames=deduplicate_frames,
+            frames_requested=0,
+            frames_encoded=0,
         )
 
     def __call__(self, indices):
@@ -100,4 +106,19 @@ class PreparedHistoryBatches:
             deck[selected],
             seen[selected],
         )
-        return tuple(value.to(self.device, non_blocking=True) for value in values)
+        result = tuple(value.to(self.device, non_blocking=True) for value in values)
+        flat = self.windows_numpy[indices].reshape(-1)
+        self.metadata["frames_requested"] += len(flat)
+        if self.deduplicate_frames:
+            _, first, inverse = np.unique(flat, return_index=True, return_inverse=True)
+            # Keep first occurrence order instead of sorting by global frame ID.
+            order = first.argsort()
+            first = first[order]
+            inverse = order.argsort()[inverse]
+            self.metadata["frames_encoded"] += len(first)
+            if len(first) < len(flat):
+                layout = tuple(torch.as_tensor(v, device=self.device) for v in (first, inverse))
+                return (*result, layout)
+        else:
+            self.metadata["frames_encoded"] += len(flat)
+        return result

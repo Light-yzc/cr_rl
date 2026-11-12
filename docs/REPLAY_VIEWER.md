@@ -2,9 +2,25 @@
 
 crforge 自带 LibGDX 桌面调试可视化器。这里使用与训练一致的上游 commit `7ee59b39bf1d41d5c01645f01c47ed8c8d3355d6` 和数据表 `16.635.3`。默认打开最近一次准备好的回放集合；显式传入 `-Replay` 可以选择历史回放。
 
-## 当前默认：32局正式BC换边评估
+## 当前默认：8场PPO训练与评估回放（2026-11-05）
 
-根目录 `view-replay.cmd` 当前读取 `artifacts/replay_viewer/latest_replay.json`，指向
+根目录`view-replay.cmd`现在默认打开`artifacts/current_replays_20261105_update34/all_matches.jsonl`。
+前4场来自32–34轮已记录的训练轨迹，按最近完成顺序选取，没有按输赢筛选，覆盖飞桶、矿工气球、
+X连弩及原有卡组。它们可能跨Learner权重update，不是固定checkpoint测评。
+
+后4场是31号固定模型在累计79场训练时对generation10的留出卡组换边短测，结果2胜2负。
+训练部分与测评部分不合并计算胜率。窗口两侧标签明确标记`PPO TRAIN v32-33`、`BC5096 FROZEN`
+或`PPO U31 HOLDOUT`、`FROZEN PPO g10`，以标签识别身份。
+
+训练回放6088次原始观测比对全部一致，动作掩码、奖励、终局及独立原生重演均通过。
+补齐Arena_L仅解决回放导出所需元数据，逐步比对证明没有改变原始训练战斗状态。具体对局索引、
+源rollout SHA与导出核验在同目录README.md、index.json和training/export_report.json。
+
+空格暂停，`[`/`]`切换对局，`L`打开列表，`F`翻转视角，`+`/`-`调整速度。
+
+## 历史默认：32局正式BC换边评估
+
+当时根目录 `view-replay.cmd` 读取 `artifacts/replay_viewer/latest_replay.json`，指向
 `artifacts/v2_cycle_final_eval_20261103/all_matches.jsonl`。其中前16局为
 `BC CYCLE 1920 WAIT+1.5` 对 `BC EARLY 237 WAIT+0`，后16局对
 `BC CONDITIONAL 896 WAIT+0`。双方都是BC，本轮没有PPO对局。

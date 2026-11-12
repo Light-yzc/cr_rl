@@ -93,8 +93,12 @@ class FrozenInference:
             )[0].float()
 
     @torch.inference_mode()
-    def sample_incremental(self, batch, legal_masks):
+    def sample_incremental(self, batch, legal_masks, *, collect_stats=True):
         logits = self.evaluate_incremental(batch, legal_masks)
+        return self._sample_logits(logits, collect_stats=collect_stats)
+
+    @staticmethod
+    def _sample_logits(logits, *, collect_stats):
         distribution = torch.distributions.Categorical(logits=logits)
         actions = distribution.sample()
         return (
@@ -103,7 +107,9 @@ class FrozenInference:
             {
                 "entropy": float(distribution.entropy().mean()),
                 "max_action_probability": float(distribution.probs.max(-1).values.mean()),
-            },
+            }
+            if collect_stats
+            else {},
         )
 
     @torch.inference_mode()
@@ -139,15 +145,6 @@ class FrozenInference:
             )[0].float()
 
     @torch.inference_mode()
-    def sample(self, windows, time_mask, legal_masks):
+    def sample(self, windows, time_mask, legal_masks, *, collect_stats=True):
         logits = self.evaluate(windows, time_mask, legal_masks)
-        distribution = torch.distributions.Categorical(logits=logits)
-        actions = distribution.sample()
-        return (
-            actions.cpu().numpy().astype(np.int32),
-            distribution.log_prob(actions).cpu().numpy(),
-            {
-                "entropy": float(distribution.entropy().mean()),
-                "max_action_probability": float(distribution.probs.max(-1).values.mean()),
-            },
-        )
+        return self._sample_logits(logits, collect_stats=collect_stats)

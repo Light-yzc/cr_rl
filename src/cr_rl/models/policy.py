@@ -44,8 +44,30 @@ class ModelConfig:
     frame_encoder_fp32: bool = False
     elixir_wait_bias: float = 0.0
     elixir_hold_min_cost: float = 4.0
+    holding_prior_version: int = 1
+    core_card_ids: tuple[int, ...] = ()
+    tower_card_ids: tuple[int, ...] = ()
+    core_slot_bias: float = 0.7
+
+    def without_holding_prior(self):
+        """Disable tactical logit changes while retaining checkpoint weight compatibility."""
+        return replace(self, holding_prior_version=1, elixir_wait_bias=0.0,
+                       core_slot_bias=0.0, core_card_ids=(), tower_card_ids=())
 
     def __post_init__(self):
+        if self.holding_prior_version not in (1, 2):
+            raise ValueError("Unsupported holding prior version")
+        for name in ("core_card_ids", "tower_card_ids"):
+            ids = tuple(getattr(self, name))
+            if any(not isinstance(i, int) or not 0 <= i < self.vocab_size for i in ids):
+                raise ValueError(f"Invalid {name}")
+            object.__setattr__(self, name, ids)
+        if not math.isfinite(self.core_slot_bias) or not 0 <= self.core_slot_bias <= 2:
+            raise ValueError("Core slot exploration must be finite and in [0, 2]")
+        if self.holding_prior_version == 2 and (
+            not self.core_card_ids or not self.tower_card_ids or not self.elixir_wait_bias
+        ):
+            raise ValueError("Holding prior v2 requires explicit core/tower IDs and strength")
         if not math.isfinite(self.elixir_wait_bias) or self.elixir_wait_bias < 0:
             raise ValueError("Elixir WAIT bias must be finite and nonnegative")
         if not math.isfinite(self.elixir_hold_min_cost) or not 0 < self.elixir_hold_min_cost <= 10:
@@ -218,24 +240,29 @@ class EntityFrameEncoder(nn.Module):
 class HistoryEncoder(nn.Module):
     """History representation; inherited keys preserve architecture-v2 BC weights."""
 
-    def __init__(self, cfg: ModelConfig):
+    def __init__(self, cfg: ModelConfig, *, temporal_factory=None):
         super().__init__()
         self.cfg = cfg
         self.frame = EntityFrameEncoder(cfg)
         self.to_temporal = nn.Linear(cfg.entity_dim, cfg.temporal_dim)
-        layer = nn.TransformerEncoderLayer(
-            cfg.temporal_dim,
-            cfg.temporal_heads,
-            4 * cfg.temporal_dim,
-            batch_first=True,
-            norm_first=True,
-            activation="gelu",
-            dropout=0.0,
-        )
-        self.temporal = nn.TransformerEncoder(
-            layer, cfg.temporal_layers, enable_nested_tensor=False
-        )
-        self.position = nn.Parameter(torch.zeros(1, cfg.context_len, cfg.temporal_dim))
+        if temporal_factory is None:
+            layer = nn.TransformerEncoderLayer(
+                cfg.temporal_dim,
+                cfg.temporal_heads,
+                4 * cfg.temporal_dim,
+                batch_first=True,
+                norm_first=True,
+                activation="gelu",
+                dropout=0.0,
+            )
+            self.temporal = nn.TransformerEncoder(
+                layer, cfg.temporal_layers, enable_nested_tensor=False
+            )
+            self.position = nn.Parameter(torch.zeros(1, cfg.context_len, cfg.temporal_dim))
+        else:
+            # Architecture-v3 supplies an episode-state core directly. Do not
+            # allocate the legacy 16-layer trunk just to replace it afterwards.
+            self.temporal = temporal_factory()
         # Hierarchical policy: select WAIT/card slot/ability, then a legal tile.
         self.card_embedding = nn.Embedding(cfg.vocab_size + 1, cfg.entity_dim)
         if cfg.representation_version == 1:
@@ -280,7 +307,10 @@ class HistoryEncoder(nn.Module):
                         self.ordered_card_context[name] = projection
 
     def encode_frames(self, header, entities, entity_mask):
-        if self.cfg.frame_encoder_fp32:
+        # A native-FP16 probe intentionally converts the whole module.  Do
+        # not feed FP32 activations into FP16 weights just because the config
+        # was trained with the optional FP32 encoder path.
+        if self.cfg.frame_encoder_fp32 and self.frame.entity_in.weight.dtype != torch.float16:
             with torch.autocast(header.device.type, enabled=False):
                 return self._encode_frames(header.float(), entities.float(), entity_mask)
         return self._encode_frames(header, entities, entity_mask)
@@ -327,13 +357,25 @@ class HistoryEncoder(nn.Module):
         target_index=-1,
         deck_card_ids=None,
         enemy_seen_card_ids=None,
+        frame_indices=None,
     ):
         batch, steps, count, features = entities.shape
-        frame, entity_tokens = self.encode_frames(
-            header.reshape(batch * steps, -1),
-            entities.reshape(batch * steps, count, features),
-            entity_mask.reshape(batch * steps, count),
-        )
+        target_index %= steps
+        flat_header = header.reshape(batch * steps, -1)
+        flat_entities = entities.reshape(batch * steps, count, features)
+        flat_mask = entity_mask.reshape(batch * steps, count)
+        if frame_indices is None:
+            frame, entity_tokens = self.encode_frames(flat_header, flat_entities, flat_mask)
+            current_entities = entity_tokens.reshape(batch, steps, count, -1)[:, target_index]
+        else:
+            # Reuse only inside this forward graph. Gather backward sums every
+            # occurrence's gradient; nothing survives a parameter update.
+            first, inverse = frame_indices
+            frame, entity_tokens = self.encode_frames(
+                flat_header[first], flat_entities[first], flat_mask[first]
+            )
+            frame = frame[inverse]
+            current_entities = entity_tokens[inverse.reshape(batch, steps)[:, target_index]]
         context = self.encode_temporal(
             frame.reshape(batch, steps, -1),
             time_mask,
@@ -344,7 +386,7 @@ class HistoryEncoder(nn.Module):
         target_index %= steps
         return (
             context,
-            entity_tokens.reshape(batch, steps, count, -1)[:, target_index],
+            current_entities,
             entity_mask[:, target_index].bool(),
         )
 
@@ -389,8 +431,8 @@ class HistoryEncoder(nn.Module):
 class ActorCritic(HistoryEncoder):
     """Architecture-v2 shared model, retained for BC and legacy PPO checkpoints."""
 
-    def __init__(self, cfg: ModelConfig):
-        super().__init__(cfg)
+    def __init__(self, cfg: ModelConfig, *, temporal_factory=None):
+        super().__init__(cfg, temporal_factory=temporal_factory)
         self.card_slot_embedding = nn.Parameter(torch.randn(1, 4, cfg.entity_dim) * 0.02)
         self.wait_actor = nn.Linear(cfg.temporal_dim, 1)
         self.slot_actor = nn.Sequential(
@@ -449,10 +491,13 @@ class ActorCritic(HistoryEncoder):
         enemy_seen_card_ids=None,
         compute_value=True,
         encoded_history=None,
+        frame_indices=None,
     ):
         """Encode a history window and emit one action distribution for its final frame."""
         batch = entities.shape[0]
         if encoded_history is not None:
+            if frame_indices is not None:
+                raise ValueError("Frozen history and training frame indices are mutually exclusive")
             if self.training or torch.is_grad_enabled():
                 raise ValueError("Cached history is only valid for frozen inference")
             context, current_entities, current_entity_mask = encoded_history
@@ -465,6 +510,7 @@ class ActorCritic(HistoryEncoder):
                 target_index,
                 deck_card_ids,
                 enemy_seen_card_ids,
+                frame_indices,
             )
         if hand_card_ids is None:
             hand_card_ids = torch.full((batch, 4), -1, dtype=torch.long, device=context.device)
@@ -487,10 +533,15 @@ class ActorCritic(HistoryEncoder):
                 if entity_mask.ndim == 2
                 else entity_mask[:, target_index % entity_mask.shape[1]]
             )
-            bias = self.holding_prior(current_header, raw_current_entities, current_mask)
-            card_logits = torch.cat(
-                (card_logits[..., :1].float() + bias[:, None], card_logits[..., 1:].float()), -1
-            )
+            if self.cfg.holding_prior_version == 2:
+                card_logits = card_logits.float() + self.holding_prior.action_bias(
+                    current_header, raw_current_entities, current_mask, legal_action_mask
+                )
+            else:
+                bias = self.holding_prior(current_header, raw_current_entities, current_mask)
+                card_logits = torch.cat(
+                    (card_logits[..., :1].float() + bias[:, None], card_logits[..., 1:].float()), -1
+                )
         tile_logits = self.placement_logits(
             context, current_entities, current_entity_mask, card_features
         )
@@ -503,7 +554,9 @@ class ActorCritic(HistoryEncoder):
         return joint_log_probs, value
 
     def placement_logits(self, context, entities, entity_mask, card_features):
-        if self.cfg.tile_head_fp32:
+        # Keep the explicit FP32 tile path for mixed precision, but allow a
+        # genuinely converted FP16 module to execute the head in FP16.
+        if self.cfg.tile_head_fp32 and self.tile_context.weight.dtype != torch.float16:
             with torch.autocast(device_type=context.device.type, enabled=False):
                 return self._placement_logits(
                     context.float(), entities.float(), entity_mask, card_features.float()
@@ -548,6 +601,13 @@ class ActorCritic(HistoryEncoder):
         card_logits: torch.Tensor, tile_logits: torch.Tensor, legal: torch.Tensor
     ) -> torch.Tensor:
         """Compose log p(slot) + log p(tile|slot) in the simulator's flat action codec."""
+        # The policy body may run in native FP16 on Volta.  Keep the
+        # probability boundary in FP32: ``-1e9`` is not representable in
+        # FP16, and masked log-softmax/ratio/KL calculations are numerically
+        # sensitive.  This does not move the model back to FP32; it only
+        # protects the action distribution and PPO scalar calculations.
+        card_logits = card_logits.float()
+        tile_logits = tile_logits.float()
         if legal.shape[-1] < 2307:
             raise ValueError("Action mask is shorter than WAIT + four tile grids + two abilities")
         tile_legal = legal[..., 1:2305].reshape(*legal.shape[:-1], 4, 576)
@@ -633,6 +693,7 @@ class HistoryValueNetwork(HistoryEncoder):
         hand_card_ids=None,
         deck_card_ids=None,
         enemy_seen_card_ids=None,
+        frame_indices=None,
     ):
         context, _, _ = self.encode_history(
             header,
@@ -642,5 +703,6 @@ class HistoryValueNetwork(HistoryEncoder):
             target_index,
             deck_card_ids,
             enemy_seen_card_ids,
+            frame_indices,
         )
         return self.critic(context).squeeze(-1)

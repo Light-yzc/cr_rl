@@ -16,16 +16,22 @@ class EpisodeTrace:
     valid: bool = True
     completed: bool = False
 
-    def append(self, observations, masks, rewards, learners=None):
-        self.observations.append(np.array(observations, copy=True))
-        self.masks.append(np.array(masks, copy=True))
-        self.rewards.append(np.array(rewards, dtype=np.float32, copy=True))
+    def append(self, observations, masks, rewards, learners=None, *, copy=True):
+        array = np.array if copy else np.asarray
+        self.observations.append(array(observations))
+        self.masks.append(array(masks))
+        self.rewards.append(array(rewards, dtype=np.float32))
         self.learners.append(
-            np.ones(2, dtype=np.uint8)
-            if learners is None
-            else np.array(learners, dtype=np.uint8, copy=True)
+            np.ones(2, dtype=np.uint8) if learners is None else array(learners, dtype=np.uint8)
         )
         return len(self.observations) - 1
+
+    def detach_views(self):
+        """Keep unfinished history without retaining full multi-lane rollout arrays."""
+        for values in (self.observations, self.masks, self.rewards, self.learners):
+            for index, value in enumerate(values):
+                if value.base is not None:
+                    values[index] = value.copy()
 
     def window(self, index, seat, context_len):
         if not 0 <= index < len(self.observations):

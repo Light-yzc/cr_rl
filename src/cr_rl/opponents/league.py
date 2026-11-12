@@ -4,6 +4,8 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from cr_rl.opponents.diversity import DiversityRetention
+
 import numpy as np
 
 
@@ -37,6 +39,7 @@ class OpponentPool:
         max_entries: int | None = None,
         ema_decay: float | None = None,
         version_decay: float = 0.99,
+        diversity_retention: DiversityRetention | None = None,
     ):
         if not 0.0 <= uniform_mix <= 1.0:
             raise ValueError("uniform_mix must be in [0, 1]")
@@ -49,6 +52,28 @@ class OpponentPool:
         if not 0 < version_decay <= 1:
             raise ValueError("version_decay must be in (0, 1]")
         self.max_entries, self.ema_decay, self.version_decay = max_entries, ema_decay, version_decay
+        self.diversity_retention = diversity_retention
+
+    def configure_diverse_retention(self, manifest, *, learner_version, verify_files=True):
+        """Enable bounded expert retention only after validating independent results."""
+        retention = DiversityRetention.from_manifest(
+            manifest, self.entries, learner_version=learner_version, verify_files=verify_files
+        )
+        self.diversity_retention = retention
+        return retention.state_dict()
+
+    def diversity_metadata(self, learner_version):
+        retention = self.diversity_retention
+        if retention is None:
+            return {"enabled": False}
+        experts = retention.active_experts(self.entries, learner_version)
+        return dict(
+            enabled=True,
+            evaluated_against_version=retention.evaluated_against_version,
+            confirmed_expert_ids=[expert.policy_id for expert in experts],
+            specialties=[expert.specialty for expert in experts],
+            max_age_versions=retention.max_age_versions,
+        )
 
     def add(self, entry: OpponentEntry) -> None:
         if any(item.policy_id == entry.policy_id for item in self.entries):
@@ -96,10 +121,19 @@ class OpponentPool:
             score = 0.5 + (score - 0.5) * self.version_decay ** max(0, learner_version - version)
         return score
 
-    def prune(self, protected_ids=()):
+    def prune(self, protected_ids=(), *, learner_version=None):
         """Return evicted records; checkpoint deletion requires the caller's live-match check."""
         evicted = []
         if self.max_entries is None:
+            return evicted
+        if self.diversity_retention is not None:
+            if learner_version is None:
+                learner_version = max((entry.generation for entry in self.entries), default=0)
+            selected = self.diversity_retention.select(
+                self.entries, self.max_entries, protected_ids, learner_version
+            )
+            evicted = [entry for entry in self.entries if entry.policy_id not in selected]
+            self.entries = [entry for entry in self.entries if entry.policy_id in selected]
             return evicted
         protected = set(protected_ids)
         if self.entries:
@@ -199,6 +233,8 @@ class OpponentPool:
                     "max_entries": self.max_entries,
                     "ema_decay": self.ema_decay,
                     "version_decay": self.version_decay,
+                    **({"diversity_retention": self.diversity_retention.state_dict()}
+                       if self.diversity_retention is not None else {}),
                 },
                 indent=2,
             ),
@@ -219,6 +255,8 @@ class OpponentPool:
             max_entries=raw.get("max_entries"),
             ema_decay=raw.get("ema_decay"),
             version_decay=raw.get("version_decay", 0.99),
+            diversity_retention=DiversityRetention.from_state(raw["diversity_retention"])
+            if raw.get("diversity_retention") is not None else None,
         )
 
 
