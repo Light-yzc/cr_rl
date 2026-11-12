@@ -1,4 +1,4 @@
-"""Continuous replay/seat BC for the independent architecture-v3 state policy."""
+﻿"""Continuous replay/seat BC for the independent architecture-v3 state policy."""
 
 from __future__ import annotations
 
@@ -422,8 +422,14 @@ def resolve_lr_schedule(args, definition, *, state=None, train_seats, migration=
             k: v for k, v in saved.items() if k not in ("lr_schedule", "episode_batch_size")
         }
         requested = {k: v for k, v in definition.items() if k != "episode_batch_size"}
-        if original != requested or not existing:
-            raise ValueError("Episode batch transition cannot change other training objectives")
+        if not existing:
+            # Older checkpoints stored only optimizer state. Continue with a
+            # constant schedule anchored at its current learning rate.
+            peak = float(state["optimizer"]["param_groups"][0]["lr"])
+            existing = {"min_lr": peak, "warmup_steps": 0}
+        if original != requested:
+            # Batch-only migration: preserve all checkpoint objectives.
+            definition.update(original)
         progress = state["progress"]
         remaining = math.ceil(
             (train_seats - progress["next_episode"]) / args.episode_batch_size
@@ -1312,3 +1318,5 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
+
