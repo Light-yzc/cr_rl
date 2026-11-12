@@ -23,6 +23,7 @@ from cr_rl.training.state_ppo import StatePPOConfig, state_ppo_update
 
 
 def _save(path, model, optimizer, scaler, update, args):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     state = {
         "format": "crrl-state-ppo-v1",
         "training_driver": "persistent-state-v3",
