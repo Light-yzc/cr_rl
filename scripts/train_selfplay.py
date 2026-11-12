@@ -1350,6 +1350,8 @@ def main() -> None:
     parser.add_argument("--torch-threads", type=int)
     parser.add_argument("--torch-interop-threads", type=int)
     parser.add_argument("--v2", action="store_true")
+    parser.add_argument("--v3", action="store_true",
+                        help="Use the explicit-memory architecture-v3 recurrent PPO driver")
     parser.add_argument("--backup-dir", type=Path)
     parser.add_argument("--incremental-backup", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--async-publication", action="store_true",
@@ -1502,6 +1504,10 @@ def main() -> None:
     parser.add_argument("--balanced-critic", action="store_true",
                         help="Use the Actor GPU for Critic data parallel after Actor updates")
     parser.add_argument("--amp-dtype", choices=("auto", "fp32", "fp16"), default="auto")
+    parser.add_argument("--precision", choices=("fp32", "fp16"), default=None,
+                        help="v3 PPO autocast precision; V100 uses fp16")
+    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--frame-microbatch", type=int, default=32)
     parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--critic-device",
@@ -1565,9 +1571,16 @@ def main() -> None:
         if reference
         else {}
     )
-    args.v2 |= saved.get("config", {}).get("representation_version", 1) == 2
-    if not args.v2 and (args.critic_device or args.amp_dtype == "fp16"):
+    args.v3 |= saved.get("model_architecture_version") == 3
+    args.v2 |= (not args.v3) and saved.get("config", {}).get("representation_version", 1) == 2
+    if not args.v2 and not args.v3 and (args.critic_device or args.amp_dtype == "fp16"):
         parser.error("Separate devices and FP16 AMP currently require --v2")
+    if args.v3:
+        args.precision = args.precision or ("fp16" if args.amp_dtype in ("auto", "fp16") else "fp32")
+        if args.decks is None:
+            args.decks = Path("configs/decks.yaml")
+        if args.weight_decay < 0 or args.frame_microbatch < 1:
+            parser.error("v3 weight decay must be nonnegative and frame microbatch positive")
     previous = saved.get("training_args", {})
     defaults = {
         "gamma": saved.get("gamma", previous.get("gamma", 0.9995 if args.v2 else 0.999)),
@@ -1607,7 +1620,7 @@ def main() -> None:
         parser.error(
             "updates, grad-accumulation, steps, envs, epochs and batch-size must be positive"
         )
-    if not args.v2 and any(
+    if not args.v3 and not args.v2 and any(
         value is not None
         for value in (
             args.actor_batch_size,
@@ -1655,7 +1668,7 @@ def main() -> None:
         for v in (args.target_card_kl, args.target_tile_kl, args.max_initial_logp_error)
     ):
         parser.error("Actor KL and initial log-prob limits must be finite and positive")
-    if not args.v2 and (
+    if not args.v3 and not args.v2 and (
         args.actor_choice_only
         or args.target_card_kl is not None
         or args.max_initial_logp_error is not None
@@ -1696,6 +1709,11 @@ def main() -> None:
         parser.error("--expand-decks requires a v2 checkpoint resume")
     if args.forced_wait_fastpath and not args.v2:
         parser.error("--forced-wait-fastpath requires v2")
+    if args.v3:
+        from cr_rl.training.state_selfplay import run
+
+        run(args)
+        return
     if args.v2:
         gc.collect()
         from cr_rl.training.selfplay_v2 import run

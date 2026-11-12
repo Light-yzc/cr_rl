@@ -150,13 +150,58 @@ def run_v2_training(args):
         raise RuntimeError(f"Persistent v2 worker exited with code {child.returncode}")
 
 
+def run_v3_training(args):
+    """Launch the explicit-memory v3 driver on a GPU runtime."""
+    import torch
+
+    local = ROOT / "artifacts" / args.run_name
+    destination = Path("/content/drive/MyDrive/cr_rl/runs") / args.run_name
+    if " /content/drive " not in Path("/proc/mounts").read_text():
+        raise RuntimeError("Google Drive must be mounted for formal v3 PPO")
+    local.mkdir(parents=True, exist_ok=True)
+    checkpoint = local / "ppo_latest.pt"
+    completed = 0
+    if checkpoint.exists():
+        header = torch.load(checkpoint, map_location="cpu", weights_only=False, mmap=True)
+        if header.get("model_architecture_version") != 3:
+            raise ValueError("Existing v3 run has a non-v3 checkpoint")
+        completed = int(header.get("progress", {}).get("update", 0))
+        del header
+    elif not args.init_from_bc:
+        raise ValueError("v3 PPO starts from a v3 BC checkpoint")
+    command = [sys.executable, "scripts/train_selfplay.py", "--v3", "--device", "cuda",
+               "--precision", args.precision, "--envs", str(args.envs), "--steps", str(args.steps),
+               "--epochs", str(args.epochs), "--updates", str(args.updates - completed),
+               "--learning-rate", str(args.learning_rate or 1e-6), "--weight-decay", str(args.weight_decay),
+               "--out", str(local), "--decks", str(args.decks or (ROOT / "configs/decks.yaml")),
+               "--tower-shaping" if args.tower_shaping else "--no-tower-shaping"]
+    if checkpoint.exists(): command.extend(["--resume", str(checkpoint)])
+    else: command.extend(["--init-from-bc", str(args.init_from_bc)])
+    atomic_json(local / "run_config.json", {"driver": "persistent-state-v3", "command": command,
+                                             "planned_updates": args.updates})
+    status = {"phase": "starting", "completed_updates": completed, "planned_updates": args.updates}
+    with (local / "train.log").open("a") as log:
+        child = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        while child.poll() is None:
+            status.update(phase="running", training_pid=child.pid, heartbeat_unix=time.time())
+            atomic_json(local / "job_status.json", status)
+            time.sleep(5)
+    status["phase"] = "completed" if child.returncode == 0 else "failed"
+    atomic_json(local / "job_status.json", status)
+    if child.returncode:
+        raise RuntimeError(f"Persistent v3 worker exited with code {child.returncode}")
+
+
 def run_training(args):
-    if args.init_from_bc and not args.v2:
+    if args.init_from_bc and not args.v2 and not args.v3:
         import torch
 
         header = torch.load(args.init_from_bc, map_location="cpu", weights_only=False, mmap=True)
-        args.v2 = header.get("config", {}).get("representation_version", 1) == 2
+        args.v3 = header.get("model_architecture_version") == 3
+        args.v2 = (not args.v3) and header.get("config", {}).get("representation_version", 1) == 2
         del header
+    if args.v3:
+        return run_v3_training(args)
     if args.v2:
         return run_v2_training(args)
     for name, default in (
@@ -503,6 +548,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", action="store_true")
     parser.add_argument("--v2", action="store_true")
+    parser.add_argument("--v3", action="store_true")
     parser.add_argument("--model", default="production")
     parser.add_argument("--updates", type=int, default=5)
     parser.add_argument(
@@ -525,6 +571,11 @@ def main():
     parser.add_argument("--critic-warmup-updates", type=int)
     parser.add_argument("--critic-warmup-games", type=int)
     parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--precision", choices=("fp16", "fp32"), default="fp16")
+    parser.add_argument("--steps", type=int, default=1024)
+    parser.add_argument("--envs", type=int, default=2)
+    parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--card-entropy-coef", type=float)
     parser.add_argument("--tile-entropy-coef", type=float)
     args = parser.parse_args()
@@ -558,6 +609,11 @@ def main():
         command.extend(reward_arguments(args))
         if args.v2:
             command.append("--v2")
+        if args.v3:
+            command.append("--v3")
+        command.extend(["--precision", args.precision, "--steps", str(args.steps),
+                        "--envs", str(args.envs), "--epochs", str(args.epochs),
+                        "--weight-decay", str(args.weight_decay)])
         with (output / "supervisor.log").open("a") as log:
             child = subprocess.Popen(
                 command,
