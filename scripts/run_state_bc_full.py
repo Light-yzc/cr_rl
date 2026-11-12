@@ -441,6 +441,10 @@ def training_argv(args, snapshot, local_stage, registry, *, resume, parent, pare
     if not args.upgrade_placement:
         argv += ["--warmup-steps", str(args.warmup_steps),
                  "--min-learning-rate", str(args.min_learning_rate)]
+    elif resume:
+        # Resuming the post-unfreeze cosine schedule must not fall back to
+        # train_state_bc's new-run warmup default (350).
+        argv += ["--warmup-steps", "0", "--min-learning-rate", "1e-5"]
     if resume:
         argv += ["--resume", str(local_stage / "training/latest.pt")]
     else:
