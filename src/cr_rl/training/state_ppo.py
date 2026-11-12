@@ -53,7 +53,13 @@ def _sequence_forward(model, sequence, device, precision):
         )
     actions = tensor("actions").long()
     chosen = logp.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
-    entropy = -(logp.exp().clamp_min(1e-8) * logp).sum(-1)
+    # Joint v3 log-probs contain sentinel values for illegal flat actions.
+    # Entropy must be evaluated only on the legal categorical support; using
+    # exp(-1e9) or an all-masked tile conditional can otherwise create a huge
+    # finite scalar and dominate PPO.
+    legal_logp = logp.masked_fill(~legal, float("-inf"))
+    probabilities = legal_logp.exp()
+    entropy = -(probabilities * legal_logp.nan_to_num(0.0, neginf=0.0)).sum(-1)
     return chosen, values, entropy, tensor("old_logp").float(), tensor("advantages").float(), tensor("returns").float()
 
 
