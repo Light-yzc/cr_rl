@@ -53,6 +53,12 @@ def _sequence_forward(model, sequence, device, precision):
         if state is None:
             state = model.initial_state(1, device=device)
         else:
+            # PPO may run several epochs over the same rollout.  Each optimizer
+            # step advances the model generation, but the rollout h0 remains a
+            # valid fixed conditioning tensor for the next epoch.  Rebind only
+            # same-model state; a state owned by another policy is still rejected.
+            if getattr(state, "owner", None) == id(model):
+                state = type(state)(state.temporal, id(model), model.memory_generation)
             state = model.detach_state(state)
         logp, values, _ = model.forward_state(
             header, entities, entity_mask, legal_action_mask=legal,
