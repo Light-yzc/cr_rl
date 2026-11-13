@@ -46,7 +46,14 @@ def _sequence_forward(model, sequence, device, precision):
     hand = tensor("hand_card_ids").long()
     # A sequence is [T,...]; StateActorCritic returns [T,A], [T] and next memory.
     with _autocast(device, precision):
-        state = model.initial_state(1, device=device)
+        # Recompute from the rollout-time h0 snapshot.  This keeps old_logp and
+        # new_logp conditioned on the same recurrent prefix, as required by
+        # recurrent PPO (and avoids silently replacing h0 with zeros).
+        state = sequence.get("initial_state")
+        if state is None:
+            state = model.initial_state(1, device=device)
+        else:
+            state = model.detach_state(state)
         logp, values, _ = model.forward_state(
             header, entities, entity_mask, legal_action_mask=legal,
             state=state, hand_card_ids=hand, compute_value=True,
@@ -61,6 +68,24 @@ def _sequence_forward(model, sequence, device, precision):
     probabilities = legal_logp.exp()
     entropy = -(probabilities * legal_logp.nan_to_num(0.0, neginf=0.0)).sum(-1)
     return chosen, values, entropy, tensor("old_logp").float(), tensor("advantages").float(), tensor("returns").float()
+
+
+def _average_distributed_gradients(model):
+    """Synchronize v3 PPO gradients when launched with torchrun.
+
+    Rollouts stay independent per rank; averaging before the optimizer step makes
+    the resulting update equivalent to one larger dual-GPU batch.  Single-GPU
+    runs take the zero-cost fast path.
+    """
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return
+    world = torch.distributed.get_world_size()
+    if world <= 1:
+        return
+    for parameter in model.parameters():
+        if parameter.grad is not None:
+            torch.distributed.all_reduce(parameter.grad, op=torch.distributed.ReduceOp.SUM)
+            parameter.grad.div_(world)
 
 
 def state_ppo_update(model, optimizer, sequences: Iterable[dict], *, config=None, scaler=None):
@@ -118,14 +143,27 @@ def state_ppo_update(model, optimizer, sequences: Iterable[dict], *, config=None
         raise FloatingPointError("Non-finite state PPO loss")
     if scaler is None:
         total.backward()
+        _average_distributed_gradients(model)
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
-        optimizer.step()
+        if torch.isfinite(torch.as_tensor(grad_norm, device=device)):
+            optimizer.step()
+        else:
+            # Keep a single numerically bad batch from poisoning the recurrent
+            # policy (and from cascading into a NCCL failure on the next step).
+            optimizer.zero_grad(set_to_none=True)
     else:
         scaler.scale(total).backward()
         scaler.unscale_(optimizer)
+        _average_distributed_gradients(model)
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
-        scaler.step(optimizer)
-        scaler.update()
+        if torch.isfinite(torch.as_tensor(grad_norm, device=device)):
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.zero_grad(set_to_none=True)
+            # unscale_ marks the scaler as consumed; advance it even when the
+            # update is discarded so the next PPO batch can unscale normally.
+            scaler.update()
     if hasattr(model, "mark_weights_updated"):
         model.mark_weights_updated()
     return {"loss": float(total.detach().cpu()), "policy_loss": float(policy_loss.detach().cpu()),

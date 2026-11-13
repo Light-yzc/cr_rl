@@ -173,8 +173,9 @@ def run_v3_training(args):
                "--precision", args.precision, "--envs", str(args.envs), "--steps", str(args.steps),
                "--epochs", str(args.epochs), "--updates", str(args.updates - completed),
                "--learning-rate", str(args.learning_rate or 1e-6), "--weight-decay", str(args.weight_decay),
-               "--out", str(local), "--decks", str(args.decks or (ROOT / "configs/decks.yaml")),
+               "--out", str(local), "--decks", str(args.decks or (ROOT / "configs/decks_ppo46.yaml")),
                "--backup-dir", str(destination), "--progress-jsonl", str(local / "progress.jsonl"),
+               "--tensorboard-dir", str(local / "tensorboard"),
                "--tower-shaping" if args.tower_shaping else "--no-tower-shaping"]
     if os.environ.get("WANDB_API_KEY"):
         command.append("--wandb")

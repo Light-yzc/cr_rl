@@ -1493,6 +1493,10 @@ def main() -> None:
     parser.add_argument("--current-opponent-fraction", type=float)
     parser.add_argument("--historical-pfsp-fraction", type=float)
     parser.add_argument("--forgotten-opponent-fraction", type=float)
+    parser.add_argument("--historical-opponent-fraction", type=float,
+                        help="v3 role-league historical frozen-policy fraction")
+    parser.add_argument("--anchor-opponent-fraction", type=float,
+                        help="v3 role-league fixed BC-anchor fraction")
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=20261102)
     parser.add_argument("--keep-checkpoints", type=int, default=2)
@@ -1515,6 +1519,8 @@ def main() -> None:
     )
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--init-from-bc", type=Path)
+    parser.add_argument("--bc-anchor", type=Path,
+                        help="v3 fixed BC opponent anchor (defaults to the v3 best.pt)")
     parser.add_argument("--decks", type=Path)
     parser.add_argument(
         "--expand-decks", type=Path, help="Explicit append-only v2 resume curriculum"
@@ -1527,6 +1533,18 @@ def main() -> None:
         help="v2: stop at a checkpoint after this many complete games in the saved counter scope",
     )
     parser.add_argument("--progress-jsonl", type=Path)
+    parser.add_argument("--checkpoint-interval", type=int, default=10,
+                        help="v3: save the single latest checkpoint every N updates")
+    parser.add_argument("--validation-interval", type=int, default=5600,
+                        help="v3: run fixed validation every N updates (0 disables; default 5600)")
+    parser.add_argument("--validation-pairs", type=int, default=5,
+                        help="v3: paired games per validation opponent (5 gives 10 games)")
+    parser.add_argument("--validation-decks", type=Path,
+                        help="v3: fixed deck manifest for sparse validation")
+    parser.add_argument(
+        "--tensorboard-dir", type=Path,
+        help="Write v3 PPO scalars to TensorBoard event files in this directory",
+    )
     args = parser.parse_args()
     if args.league_diversity_manifest is not None and not args.league_diversity_manifest.is_file():
         parser.error("League diversity manifest must be an existing file")
@@ -1539,6 +1557,10 @@ def main() -> None:
         parser.error("Adaptive Actor LR maximum must be finite and at least the minimum")
     if args.training_opponent_cache_size is not None and args.training_opponent_cache_size < 1:
         parser.error("Training opponent cache size must be positive")
+    if args.validation_interval < 0 or args.validation_pairs < 1:
+        parser.error("Validation interval must be nonnegative and validation pairs must be positive")
+    if args.validation_decks is not None and not args.validation_decks.is_file():
+        parser.error("Validation deck manifest must be an existing file")
     if args.env_threads < 1:
         parser.error("Environment threads must be positive")
     for name in ("level_mixture", "tower_level_mixture"):
@@ -1578,7 +1600,7 @@ def main() -> None:
     if args.v3:
         args.precision = args.precision or ("fp16" if args.amp_dtype in ("auto", "fp16") else "fp32")
         if args.decks is None:
-            args.decks = Path("configs/decks.yaml")
+            args.decks = Path("configs/decks_ppo46.yaml")
         if args.weight_decay < 0 or args.frame_microbatch < 1:
             parser.error("v3 weight decay must be nonnegative and frame microbatch positive")
     previous = saved.get("training_args", {})
@@ -1604,6 +1626,11 @@ def main() -> None:
     for name, value in defaults.items():
         if getattr(args, name) is None:
             setattr(args, name, value)
+    if args.v3:
+        if args.historical_opponent_fraction is None:
+            args.historical_opponent_fraction = 0.50
+        if args.anchor_opponent_fraction is None:
+            args.anchor_opponent_fraction = 0.20
     del saved
     if (
         min(
@@ -1710,6 +1737,14 @@ def main() -> None:
     if args.forced_wait_fastpath and not args.v2:
         parser.error("--forced-wait-fastpath requires v2")
     if args.v3:
+        import os
+        if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+            import torch.distributed as dist
+            if not dist.is_initialized():
+                dist.init_process_group(backend="nccl")
+            local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+            if args.device == "cuda":
+                args.device = f"cuda:{local_rank}"
         from cr_rl.training.state_selfplay import run
 
         run(args)
