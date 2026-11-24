@@ -3,13 +3,15 @@
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--run-dir", type=Path, default=root / "artifacts/local_dual_v100")
+parser.add_argument("--run-dir", type=Path, default=root / "artifacts/ppo_v3_v100")
 parser.add_argument("--port", type=int, default=6006)
 args = parser.parse_args()
 run = args.run_dir.resolve()
@@ -47,15 +49,30 @@ commands = {
         "5",
     ],
 }
+bridge_src = root / "src/cr_rl/monitoring/tensorboard_bridge.py"
 result = {}
 for name, command in commands.items():
     pidfile = logdir / f"{name}.pid"
     if pidfile.exists():
-        pid = int(pidfile.read_text())
-        proc = Path(f"/proc/{pid}/cmdline")
-        if proc.exists() and str(logdir).encode() in proc.read_bytes():
-            result[name] = {"pid": pid, "already_running": True}
-            continue
+        raw = pidfile.read_text().strip()
+        if raw.isdigit():
+            pid = int(raw)
+            proc = Path(f"/proc/{pid}")
+            cmdline = proc / "cmdline"
+            if cmdline.exists() and str(logdir).encode() in cmdline.read_bytes():
+                stale = (
+                    name == "bridge"
+                    and bridge_src.exists()
+                    and proc.stat().st_mtime < bridge_src.stat().st_mtime
+                )
+                if not stale:
+                    result[name] = {"pid": pid, "already_running": True}
+                    continue
+                os.kill(pid, signal.SIGTERM)
+                for _ in range(30):
+                    if not proc.exists():
+                        break
+                    time.sleep(0.1)
     with (logdir / f"{name}.log").open("ab") as log:
         process = subprocess.Popen(
             command,

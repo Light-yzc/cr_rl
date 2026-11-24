@@ -46,3 +46,12 @@ def test_gc_preserves_current_rollback_active_and_external_opponents(tmp_path):
     with pytest.raises(json.JSONDecodeError):
         prune_local_opponents(local)
     assert files[0].exists()
+
+
+def test_sparse_checkpoint_cadence_keeps_two_actual_restore_points(tmp_path):
+    root=tmp_path/"checkpoints"
+    root.mkdir()
+    for update in (640,697,800,1600):
+        (root/f"update_{update:06d}.pt").write_bytes(b"checkpoint")
+    prune_backup(tmp_path,1600,recent=2,max_periodic=1)
+    assert sorted(p.name for p in root.glob("*.pt")) == ["update_000800.pt","update_001600.pt"]

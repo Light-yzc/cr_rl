@@ -1,0 +1,148 @@
+version: 2
+decks:
+  user_giant_sparky_pump_horde_plain:
+  - ZapMachine
+  - Elixir Collector
+  - Wizard
+  - Rage
+  - Giant
+  - DarkPrince
+  - MiniPekka
+  - MinionHorde
+  user_giant_sparky_pump_plain:
+  - Wizard
+  - DarkPrince
+  - ZapMachine
+  - Elixir Collector
+  - Fireball
+  - Giant
+  - Rage
+  - MiniPekka
+  human_popular_08:
+  - AngryBarbarians
+  - Giant
+  - Zap
+  - ElectroWizard
+  - ZapMachine
+  - Heal
+  - Rage
+  - DarkPrince
+  human_popular_02:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - Log
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - Skeletons
+  hog_cycle_v1:
+  - HogRider
+  - Musketeer
+  - Cannon
+  - Fireball
+  - Skeletons
+  - IceSpirits
+  - Log
+  - Knight
+  royale_20261103_06:
+  - BlowdartGoblin
+  - GoblinBarrel
+  - IceSpirits
+  - InfernoTower
+  - Knight
+  - Princess
+  - SkeletonArmy
+  - Log
+  human_popular_09:
+  - ElectroDragon
+  - Berserker
+  - AngryBarbarians
+  - Golem
+  - SkeletonDragons
+  - Tornado
+  - BarbLog
+  - Elixir Collector
+  human_popular_17:
+  - BattleRam
+  - SkeletonKing
+  - SkeletonArmy
+  - Arrows
+  - Fireball
+  - Bats
+  - Pekka
+  - GoblinGang
+slots:
+  user_giant_sparky_pump_horde_plain:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  user_giant_sparky_pump_plain:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_08:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_02:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  hog_cycle_v1:
+  - 0
+  - 0
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 2
+  royale_20261103_06:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 1
+  - 0
+  human_popular_09:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_17:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+split: eval_focal

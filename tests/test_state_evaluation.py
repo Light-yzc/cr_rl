@@ -101,6 +101,46 @@ class StateEvaluationTests(unittest.TestCase):
         cls.temp_root=Path(__file__).resolve().parents[1]/'artifacts/state_evaluation_tests'
         cls.temp_root.mkdir(parents=True,exist_ok=True)
 
+    def test_argmax_uses_highest_legal_action_and_advances_memory(self):
+        class RankedPolicy(MockStatePolicy):
+            def step(self, *tensors, state, **kwargs):
+                logp, value, new_state = super().step(*tensors, state=state, **kwargs)
+                logp[:, 1] = 9.0
+                logp[:, 2] = 2.0
+                return logp, value, new_state
+
+        raw, legal = raw_values()
+        legal[2] = True
+        stream = evaluation.PolicyStream(RankedPolicy(), CrForgeObservationAdapter(schema(), 16),
+                                         'cpu', precision='fp32', action_mode='argmax')
+        self.assertEqual([stream.sample(raw, legal)[0] for _ in range(2)], [2, 2])
+        self.assertEqual(stream.state, 2)
+
+    def test_batched_argmax_matches_single_streams_after_lanes_finish(self):
+        torch.manual_seed(7)
+        temporal = StateTemporalConfig(width=8, heads=2, kv_heads=1, head_dim=4,
+            pattern=('kda', 'gqa'), ffn_multiplier=1, cache_initial_capacity=2)
+        model = StateActorCritic(configuration(), temporal, decision_ticks=8).eval()
+        adapter = CrForgeObservationAdapter(schema(), 16)
+        batch = evaluation.BatchedArgmaxStream(model, adapter, 'cpu', precision='fp32')
+        streams = [evaluation.PolicyStream(model, adapter, 'cpu', precision='fp32',
+            action_mode='argmax') for _ in range(3)]
+        raw, legal = raw_values()
+        observations = np.stack([raw.copy() for _ in streams])
+        observations[:, schema().header['elixir'][0]] = [100000, 45000, 70000]
+        masks = np.stack([legal.copy() for _ in streams])
+        masks[1, 4] = True
+        masks[2, 8] = True
+        for step, ids in enumerate(([0, 1, 2], [0, 1, 2], [0, 2], [2])):
+            lanes = np.array(ids)
+            actions, _ = batch.sample(observations[lanes], masks[lanes], lanes)
+            expected = [streams[i].sample(observations[i], masks[i])[0] for i in lanes]
+            self.assertEqual(actions.tolist(), expected)
+            self.assertEqual(batch.state.temporal.positions.tolist(), [step + 1] * len(ids))
+            for j, lane in enumerate(lanes):
+                torch.testing.assert_close(batch.state.temporal.layers[0].matrix[j],
+                    streams[lane].state.temporal.layers[0].matrix[0], atol=1e-5, rtol=1e-5)
+
     def test_contract_does_not_require_equal_temporal_architectures(self):
         a=configuration();b=replace(a,temporal_dim=16,temporal_layers=3,context_len=128)
         evaluation.check_policy_compatibility(a,b)

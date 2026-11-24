@@ -13,6 +13,7 @@ import math
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 @dataclass(frozen=True)
@@ -151,7 +152,7 @@ def _kda_recurrent_fp32(q, k, v, log_decay, beta, state, time_mask):
     return output, state
 
 
-def kda_chunk(q, k, v, log_decay, beta, state=None, time_mask=None, chunk_size=32):
+def kda_chunk(q, k, v, log_decay, beta, state=None, time_mask=None, chunk_size=32, checkpoint_chunks=False):
     """Exact block-parallel delta rule using a lower-triangular solve.
 
     Within a chunk, residual writes solve (I + C) e = beta (v - k A S0),
@@ -161,10 +162,10 @@ def kda_chunk(q, k, v, log_decay, beta, state=None, time_mask=None, chunk_size=3
     graph; callers can explicitly detach the returned state for truncated BPTT.
     """
     with torch.autocast(device_type=q.device.type, enabled=False):
-        return _kda_chunk_fp32(q, k, v, log_decay, beta, state, time_mask, chunk_size)
+        return _kda_chunk_fp32(q, k, v, log_decay, beta, state, time_mask, chunk_size, checkpoint_chunks)
 
 
-def _kda_chunk_fp32(q, k, v, log_decay, beta, state, time_mask, chunk_size):
+def _kda_chunk_fp32(q, k, v, log_decay, beta, state, time_mask, chunk_size, checkpoint_chunks=False):
     if chunk_size <= 0:
         raise ValueError("KDA chunk_size must be positive")
     q, k, v, log_decay, beta, state = _prepare_kda(
@@ -175,26 +176,35 @@ def _kda_chunk_fp32(q, k, v, log_decay, beta, state, time_mask, chunk_size):
         stop = min(start + chunk_size, q.shape[2])
         qc, kc, vc = q[:, :, start:stop], k[:, :, start:stop], v[:, :, start:stop]
         bc = beta[:, :, start:stop]
-        cumulative = log_decay[:, :, start:stop].cumsum(dim=2)
-        length = stop - start
-        causal = torch.ones(length, length, dtype=torch.bool, device=q.device).tril()
-        # [batch, heads, query_time, write_time, key_dim]. Upper triangle
-        # is explicitly zero; clamp prevents overflow before applying its mask.
-        ratio = (cumulative.unsqueeze(-2) - cumulative.unsqueeze(-3)).clamp_max(0).exp()
-        ratio = ratio * causal[None, None, :, :, None]
-        key_interaction = (kc.unsqueeze(-2) * kc.unsqueeze(-3) * ratio).sum(-1)
-        lower = (bc.unsqueeze(-1) * key_interaction).tril(diagonal=-1)
-        identity = torch.eye(length, dtype=torch.float32, device=q.device)
-        initial_prediction = torch.matmul(kc * cumulative.exp(), state)
-        rhs = bc.unsqueeze(-1) * (vc - initial_prediction)
-        writes = torch.linalg.solve_triangular(identity + lower, rhs, upper=False, unitriangular=True)
-        read_weights = (qc.unsqueeze(-2) * kc.unsqueeze(-3) * ratio).sum(-1)
-        output = torch.matmul(qc * cumulative.exp(), state) + torch.matmul(read_weights, writes)
-        final_decay = cumulative[:, :, -1]
-        decayed_keys = kc * (final_decay.unsqueeze(-2) - cumulative).clamp_max(0).exp()
-        state = state * final_decay.exp().unsqueeze(-1) + torch.matmul(decayed_keys.transpose(-1, -2), writes)
+        if checkpoint_chunks and torch.is_grad_enabled():
+            output, state = checkpoint(_kda_block, qc, kc, vc,
+                log_decay[:, :, start:stop], bc, state, use_reentrant=False)
+        else:
+            output, state = _kda_block(qc, kc, vc, log_decay[:, :, start:stop], bc, state)
         outputs.append(output)
     return (torch.cat(outputs, dim=2) if outputs else v[:, :, :0]), state
+
+
+def _kda_block(qc, kc, vc, decay, bc, state):
+    cumulative = decay.cumsum(dim=2)
+    length = qc.shape[2]
+    causal = torch.ones(length, length, dtype=torch.bool, device=qc.device).tril()
+    # [batch, heads, query_time, write_time, key_dim]. Upper triangle
+    # is explicitly zero; clamp prevents overflow before applying its mask.
+    ratio = (cumulative.unsqueeze(-2) - cumulative.unsqueeze(-3)).clamp_max(0).exp()
+    ratio = ratio * causal[None, None, :, :, None]
+    key_interaction = (kc.unsqueeze(-2) * kc.unsqueeze(-3) * ratio).sum(-1)
+    lower = (bc.unsqueeze(-1) * key_interaction).tril(diagonal=-1)
+    identity = torch.eye(length, dtype=torch.float32, device=qc.device)
+    initial_prediction = torch.matmul(kc * cumulative.exp(), state)
+    rhs = bc.unsqueeze(-1) * (vc - initial_prediction)
+    writes = torch.linalg.solve_triangular(identity + lower, rhs, upper=False, unitriangular=True)
+    read_weights = (qc.unsqueeze(-2) * kc.unsqueeze(-3) * ratio).sum(-1)
+    output = torch.matmul(qc * cumulative.exp(), state) + torch.matmul(read_weights, writes)
+    final_decay = cumulative[:, :, -1]
+    decayed_keys = kc * (final_decay.unsqueeze(-2) - cumulative).clamp_max(0).exp()
+    state = state * final_decay.exp().unsqueeze(-1) + torch.matmul(decayed_keys.transpose(-1, -2), writes)
+    return output, state
 
 
 class _RMSNorm(nn.Module):
@@ -222,7 +232,7 @@ class _KDALayer(nn.Module):
         nn.init.constant_(self.decay.bias, -4.0)
         nn.init.zeros_(self.beta.bias)
 
-    def forward(self, x, state, positions, time_mask, capacity, reference=False):
+    def forward(self, x, state, positions, time_mask, capacity, reference=False, fresh_prefix=False):
         batch, length, _ = x.shape
         q, k, v = self.qkv(x).reshape(batch, length, 3, self.cfg.heads, self.cfg.head_dim).unbind(2)
         q = F.normalize(q.float(), dim=-1, eps=self.cfg.norm_eps).transpose(1, 2)
@@ -236,7 +246,8 @@ class _KDALayer(nn.Module):
         # one-by-one triangular solve would add unnecessary kernel launches.
         recurrent = reference or length == 1
         function = kda_recurrent if recurrent else kda_chunk
-        kwargs = {} if recurrent else {"chunk_size": self.cfg.chunk_size}
+        kwargs = {} if recurrent else {"chunk_size": self.cfg.chunk_size,
+            "checkpoint_chunks": bool(getattr(self, "gradient_checkpointing", False))}
         output, matrix = function(q, k, v, log_decay, beta, state.matrix, time_mask, **kwargs)
         output = self.output_norm(output.transpose(1, 2)).reshape(batch, length, self.cfg.width)
         output = output * self.gate(x).float().sigmoid()
@@ -270,6 +281,8 @@ class _GQALayer(nn.Module):
 
     @staticmethod
     def _append(old, new, positions, mask, capacity):
+        if old.dtype != new.dtype:
+            old = old.to(dtype=new.dtype)
         if old.shape[2] < capacity:
             old = F.pad(old, (0, 0, 0, capacity - old.shape[2]))
         slots = torch.arange(capacity, device=old.device)
@@ -281,7 +294,7 @@ class _GQALayer(nn.Module):
         values = new * mask[:, None, :, None]
         return old.scatter_add(2, indices, values)
 
-    def forward(self, x, state, positions, time_mask, capacity, reference=False):
+    def forward(self, x, state, positions, time_mask, capacity, reference=False, fresh_prefix=False):
         batch, length, _ = x.shape
         q = self.query(x).reshape(batch, length, self.cfg.heads, self.cfg.head_dim).transpose(1, 2)
         k, v = self.key_value(x).reshape(batch, length, 2, self.cfg.kv_heads, self.cfg.head_dim).unbind(2)
@@ -293,11 +306,19 @@ class _GQALayer(nn.Module):
         value = self._append(state.value, v, positions, time_mask, capacity)
         slots = torch.arange(capacity, device=x.device)
         allowed = (slots[None, None, :] <= token_positions[:, :, None]) & time_mask[:, :, None]
+        attention_key, attention_value = key, value
+        if fresh_prefix and length > 1:
+            # Whole-game prefill attends to actual tokens, not the power-of-two
+            # streaming cache allocation. Keep the cache output for step parity.
+            indices = torch.arange(length, device=x.device)
+            allowed = ((indices[None, :] <= indices[:, None])[None]
+                       & time_mask[:, :, None] & time_mask[:, None, :])
+            attention_key, attention_value = k, v
         # This explicit KV-head expansion works on CPU, V100 and 4090 without
         # assuming availability of a newer fused GQA kernel.
         repeats = self.cfg.heads // self.cfg.kv_heads
         output = F.scaled_dot_product_attention(
-            q, key.repeat_interleave(repeats, dim=1), value.repeat_interleave(repeats, dim=1),
+            q, attention_key.repeat_interleave(repeats, dim=1), attention_value.repeat_interleave(repeats, dim=1),
             attn_mask=allowed[:, None], dropout_p=0.0,
         )
         output = output.transpose(1, 2).reshape(batch, length, self.cfg.width)
@@ -314,8 +335,8 @@ class _TemporalBlock(nn.Module):
         self.ffn_in = nn.Linear(cfg.width, 2 * hidden, bias=False)
         self.ffn_out = nn.Linear(hidden, cfg.width, bias=False)
 
-    def forward(self, x, state, positions, time_mask, capacity, reference=False):
-        mixed, state = self.mixer(self.norm(x), state, positions, time_mask, capacity, reference)
+    def forward(self, x, state, positions, time_mask, capacity, reference=False, fresh_prefix=False):
+        mixed, state = self.mixer(self.norm(x), state, positions, time_mask, capacity, reference, fresh_prefix)
         x = x + mixed
         gate, value = self.ffn_in(self.ffn_norm(x)).chunk(2, dim=-1)
         x = x + self.ffn_out(F.silu(gate) * value)
@@ -390,7 +411,14 @@ class StateTemporalCore(nn.Module):
         x = x * time_mask[:, :, None]
         layers = []
         for block, memory in zip(self.blocks, state.layers):
-            x, memory = block(x, memory, state.positions, time_mask, capacity, reference)
+            block.mixer.gradient_checkpointing = (bool(getattr(self, "gradient_checkpointing", False))
+                and bool(getattr(self, "checkpoint_kda_chunks", True)))
+            if self.training and torch.is_grad_enabled() and getattr(self, "gradient_checkpointing", False):
+                # Non-reentrant checkpoint supports our explicit dataclass memory outputs.
+                x, memory = checkpoint(block, x, memory, state.positions, time_mask,
+                                       capacity, reference, state.length_bound == 0, use_reentrant=False)
+            else:
+                x, memory = block(x, memory, state.positions, time_mask, capacity, reference, state.length_bound == 0)
             layers.append(memory)
         output = self.final_norm(x) * time_mask[:, :, None]
         result = TemporalState(layers, new_positions, bound)

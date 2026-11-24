@@ -14,6 +14,14 @@ class FakeRun:
         self.logs.append(values)
 
 
+def test_awbc_metrics_are_logged_on_the_learner_sample_axis():
+    run=FakeRun();telemetry=TrainingTelemetry(run,64)
+    telemetry.log(dict(phase='awbc_playbuffer',update=50,accepted=True,batch_games=24,
+                       reference_forward_kl=.003,ppo_critic_updated=False))
+    assert run.logs[-1]['awbc/batch_games']==24
+    assert run.logs[-1]['awbc/ppo_critic_updated'] is False
+
+
 def test_independent_value_updates_have_their_own_optimizer_axis():
     run = FakeRun()
     telemetry = TrainingTelemetry(run, 64)

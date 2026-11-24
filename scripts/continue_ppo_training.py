@@ -64,9 +64,10 @@ def continuation_command(
             raise ValueError(f"Missing required original resume option: {option}")
         command[command.index(option) + 1] = value
     command[0] = sys.executable
+    has_v2_or_v3 = "--v2" in command or "--v3" in command
     if actor_effective_batch_size is not None:
-        if actor_effective_batch_size < 64 or "--v2" not in command:
-            raise ValueError("Actor effective batch transitions require v2 and at least 64")
+        if actor_effective_batch_size < 64 or not has_v2_or_v3:
+            raise ValueError("Actor effective batch transitions require v2 or v3 and at least 64")
         microbatch_option = (
             "--actor-batch-size" if "--actor-batch-size" in command else "--batch-size"
         )
@@ -79,8 +80,8 @@ def continuation_command(
         else:
             command.extend([option, str(actor_effective_batch_size)])
     if gae_lambda is not None:
-        if "--v2" not in command or not math.isfinite(gae_lambda) or not 0 <= gae_lambda <= 1:
-            raise ValueError("GAE lambda transitions require v2 and a finite value in [0, 1]")
+        if not has_v2_or_v3 or not math.isfinite(gae_lambda) or not 0 <= gae_lambda <= 1:
+            raise ValueError("GAE lambda transitions require v2 or v3 and a finite value in [0, 1]")
         option = "--gae-lambda"
         if command.count(option) > 1:
             raise ValueError("Ambiguous duplicate GAE lambda options")
@@ -90,11 +91,13 @@ def continuation_command(
             command.extend([option, str(gae_lambda)])
     if critic_gae_lambda is not None:
         if (
-            "--v2" not in command
+            not has_v2_or_v3
             or not math.isfinite(critic_gae_lambda)
             or not (0 <= critic_gae_lambda <= 1)
         ):
-            raise ValueError("Critic GAE lambda requires v2 and a finite value in [0, 1]")
+            raise ValueError(
+                "Critic GAE lambda requires v2 or v3 and a finite value in [0, 1]"
+            )
         option = "--critic-gae-lambda"
         if command.count(option) > 1:
             raise ValueError("Ambiguous duplicate Critic GAE lambda options")

@@ -461,7 +461,7 @@ def train(args) -> None:
         old_values = np.zeros_like(old_log_probs)
         raw_rewards = np.zeros((args.steps, args.envs, 2), np.float32)
         reward_components = {
-            name: np.zeros_like(raw_rewards) for name in ("hp", "crown", "overflow")
+            name: np.zeros_like(raw_rewards) for name in ("hp", "crown", "army", "overflow")
         }
         action_consumed = np.ones((args.steps, args.envs, 2), np.uint8)
         action_refusals = np.full((args.steps, args.envs, 2), -1, np.int32)
@@ -1306,6 +1306,25 @@ def train(args) -> None:
         print(json.dumps(summary, indent=2), flush=True)
 
 
+def restore_league_options(args, saved, argv):
+    """Restore audited league settings unless a CLI option explicitly overrides them."""
+    if not getattr(args, 'resume', None) or not getattr(args, 'v3', False):
+        return
+    previous = saved.get('training_args', {})
+    mixture = saved.get('role_mixture', {})
+    options = saved.get('league_options', {})
+    values = {name: options.get(name, previous.get(name)) for name in (
+        'role_league', 'pool_capacity', 'history_snapshot_interval', 'snapshot_interval')}
+    for role in ('current', 'historical', 'anchor'):
+        name = role + '_opponent_fraction'
+        values[name] = mixture.get(role, previous.get(name))
+    for name, value in values.items():
+        option = '--' + name.replace('_', '-')
+        explicit = any(item == option or item.startswith(option + '=') for item in argv)
+        if not explicit and value is not None:
+            setattr(args, name, value)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Symmetric frozen-opponent self-play PPO trainer")
     parser.add_argument(
@@ -1347,6 +1366,11 @@ def main() -> None:
         action="store_true",
         help="Resume an older single-level checkpoint while explicitly changing the simulator level profile.",
     )
+    parser.add_argument(
+        "--allow-reward-migration",
+        action="store_true",
+        help="Resume a v3 checkpoint while explicitly changing reward shaping coefficients.",
+    )
     parser.add_argument("--torch-threads", type=int)
     parser.add_argument("--torch-interop-threads", type=int)
     parser.add_argument("--v2", action="store_true")
@@ -1354,6 +1378,8 @@ def main() -> None:
                         help="Use the explicit-memory architecture-v3 recurrent PPO driver")
     parser.add_argument("--backup-dir", type=Path)
     parser.add_argument("--incremental-backup", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--async-checkpoint", action="store_true",
+                        help="Freeze independent CPU state, then write local checkpoints in the background")
     parser.add_argument("--async-publication", action="store_true",
                         help="Publish immutable snapshots while collecting the next update")
     parser.add_argument("--publication-interval", type=int, default=1,
@@ -1421,6 +1447,11 @@ def main() -> None:
         type=float,
         help="Actor LR ceiling; defaults to the restored or initial Actor LR",
     )
+    parser.add_argument(
+        "--override-adaptive-actor-lr",
+        action="store_true",
+        help="Allow --adaptive-actor-lr-min/max overrides when resuming a checkpoint",
+    )
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--gae-lambda", type=float)
     parser.add_argument(
@@ -1429,6 +1460,31 @@ def main() -> None:
         help="v2 Critic TD(lambda) target; defaults to the Actor GAE lambda",
     )
     parser.add_argument("--tower-shaping", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--reserve-to-wait", action="store_true")
+    parser.add_argument("--ppo-actor-fp32", action="store_true",
+                        help="Match streaming and sequence learner policy arithmetic in FP32")
+    parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument("--temporal-checkpoint-mode", choices=("block", "nested"), default="nested",
+                        help="v3: block recomputes temporal layers; nested also recomputes KDA solve chunks for lower memory")
+    parser.add_argument("--cache-state-frames", action="store_true",
+                        help="v3: cache normalized rollout observations on training GPUs for one update")
+    parser.add_argument("--full-episode-bptt", action="store_true",
+                        help="v3: collect whole games under one policy version and backpropagate without temporal truncation")
+    parser.add_argument("--army-reward", type=float, default=None)
+    parser.add_argument('--army-reward-mode',choices=('uniform','elixir_potential'),default=None)
+    parser.add_argument('--army-elixir-beta',type=float,default=None)
+    parser.add_argument('--army-elixir-bar-factor', type=float, default=None)
+    parser.add_argument('--army-elixir-config',type=Path,default=None)
+    parser.add_argument("--focal-decks", default="")
+    parser.add_argument("--focal-deck-prob", type=float, default=0.5)
+    parser.add_argument("--sparky-wait-fraction", type=float, default=0.0,
+                        help="v3: fraction of learner Sparky games eligible for one reserve window")
+    parser.add_argument("--sparky-wait-max-steps", type=int, choices=(1, 2, 3), default=3,
+                        help="v3: maximum 400 ms decisions in a Sparky reserve window")
+    parser.add_argument("--sparky-play-fraction", type=float, default=0.0,
+                        help="v3: disjoint fraction eligible for one forced Sparky card choice")
+    parser.add_argument("--historical-cohort-size", type=int, default=2)
+    parser.add_argument("--historical-cohort-updates", type=int, default=2)
     parser.add_argument("--princess-reward", type=float, default=0.15)
     parser.add_argument("--king-reward", type=float, default=0.20)
     parser.add_argument("--crown-reward", type=float, default=0.15)
@@ -1473,6 +1529,12 @@ def main() -> None:
     parser.add_argument("--card-entropy-coef", type=float)
     parser.add_argument("--tile-entropy-coef", type=float)
     parser.add_argument("--reference-kl-coef", type=float, default=0.01)
+    parser.add_argument(
+        "--anchor-kl-coef",
+        type=float,
+        default=0.0,
+        help="KL penalty coefficient toward the frozen BC anchor model",
+    )
     parser.add_argument("--target-kl", type=float, default=0.02)
     parser.add_argument("--actor-choice-only", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--target-card-kl", type=float)
@@ -1515,7 +1577,38 @@ def main() -> None:
     parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--critic-device",
-        help="v2 Critic device; a different CUDA device enables concurrent optimization",
+        help="v2/v3 Critic device; a different CUDA device enables concurrent optimization",
+    )
+    parser.add_argument(
+        "--critic-peer-device",
+        help="v3 optional peer CUDA device (e.g. cuda:2 NVLink) for data-parallel Critic optimization",
+    )
+    parser.add_argument(
+        "--opponent-device",
+        help="v3 optional CUDA device (e.g. cuda:1) to overlap frozen opponent rollout inference",
+    )
+    parser.add_argument(
+        "--critic-effective-batch-size",
+        type=int,
+        help="v3 Critic target eligible samples per optimizer step (defaults to batch-size * grad-accumulation)",
+    )
+    parser.add_argument(
+        "--tbptt-chunk",
+        type=int,
+        default=64,
+        help="v3 truncated BPTT chunk length during Actor/Critic updates",
+    )
+    parser.add_argument(
+        "--rollout-save-interval",
+        type=int,
+        default=0,
+        help="v3: save compressed TrajectoryBuffer .npz rollouts every N updates (0 disables for peak speed)",
+    )
+    parser.add_argument(
+        "--keep-rollouts",
+        type=int,
+        default=2,
+        help="v3: number of recent compressed .npz rollouts to retain when --rollout-save-interval > 0",
     )
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--init-from-bc", type=Path)
@@ -1535,17 +1628,121 @@ def main() -> None:
     parser.add_argument("--progress-jsonl", type=Path)
     parser.add_argument("--checkpoint-interval", type=int, default=10,
                         help="v3: save the single latest checkpoint every N updates")
+    parser.add_argument("--checkpoint-first-update", action="store_true",
+                        help="v3: also save the first update of this process")
+    parser.add_argument("--critic-fp16-resume-scale-cap", type=float,
+                        help="v3: cap restored Critic loss scale for a fresh FP16 comparison")
     parser.add_argument("--validation-interval", type=int, default=5600,
                         help="v3: run fixed validation every N updates (0 disables; default 5600)")
     parser.add_argument("--validation-pairs", type=int, default=5,
                         help="v3: paired games per validation opponent (5 gives 10 games)")
+    parser.add_argument("--validation-argmax-lanes", type=int, default=0,
+                        help="Batch deterministic validation across this many lanes (0 keeps the default evaluator)")
     parser.add_argument("--validation-decks", type=Path,
                         help="v3: fixed deck manifest for sparse validation")
     parser.add_argument(
         "--tensorboard-dir", type=Path,
         help="Write v3 PPO scalars to TensorBoard event files in this directory",
     )
+    parser.add_argument('--awbc-sessions', type=Path, help='Optional finalized real-game replay source')
+    parser.add_argument('--awbc-interval', type=int, default=50)
+    parser.add_argument('--awbc-min-new-games', type=int, default=12)
+    parser.add_argument('--awbc-batch-games', type=int, default=24)
+    parser.add_argument('--awbc-max-reuse', type=int, default=2)
+    parser.add_argument('--awbc-epochs', type=int, default=2)
+    parser.add_argument('--awbc-value-epochs', type=int, default=20)
+    parser.add_argument('--awbc-learning-rate', type=float, default=1e-6)
+    parser.add_argument('--awbc-max-kl', type=float, default=.01)
+    parser.add_argument('--require-awbc-smoke', action='store_true',
+                        help='Fail unless AWBC actually optimizes Actor, then a subsequent PPO update succeeds')
+    parser.add_argument('--no-backup-hash', action='store_true',
+                        help='Async immutable snapshot copy with size-only completion checks')
+    parser.add_argument('--expert-bc-dataset', type=Path)
+    parser.add_argument('--ppo-only', action='store_true',
+                        help='Skip BC and AWBC options saved in a resumed checkpoint')
+    parser.add_argument('--expert-bc-plan-b', action='store_true',
+                        help='Run weighted specialist BC with held-out and PPO health gates')
+    parser.add_argument('--expert-bc-experimental', action='store_true')
+    parser.add_argument('--expert-bc-interval', type=int, default=100)
+    parser.add_argument('--expert-bc-sequences', type=int, default=8)
+    parser.add_argument('--expert-bc-learning-rate', type=float, default=1e-6)
+    parser.add_argument('--expert-bc-max-kl', type=float, default=.01)
+    parser.add_argument('--macro-search', action='store_true',
+                        help='Run universal 4x4 two-card sequence rollout search and gated distillation')
+    parser.add_argument('--macro-search-interval', type=int, default=10)
+    parser.add_argument('--macro-search-offset', type=int, default=0,
+                        help='Update residue for macro search, to stagger it from other phases')
+    parser.add_argument('--macro-search-candidates', type=int, default=2)
+    parser.add_argument('--macro-search-win-margin', type=float, default=0.30)
+    parser.add_argument('--macro-search-max-buffer', type=int, default=128)
+    parser.add_argument('--macro-search-batch-episodes', type=int, default=8)
+    parser.add_argument('--macro-search-learning-rate', type=float, default=1e-6)
+    parser.add_argument('--macro-search-max-kl', type=float, default=0.005)
+    parser.add_argument('--lookahead-distill', action='store_true',
+                        help='Run online Critic-bootstrapped lookahead search and gated readout distillation')
+    parser.add_argument('--lookahead-distill-interval', type=int, default=3)
+    parser.add_argument('--lookahead-distill-offset', type=int, default=1)
+    parser.add_argument('--lookahead-distill-games', type=int, default=3)
+    parser.add_argument('--lookahead-distill-parallel-games', type=int, default=12)
+    parser.add_argument('--lookahead-distill-parallel-searches', type=int, default=4)
+    parser.add_argument('--lookahead-distill-threads', type=int, default=0)
+    parser.add_argument('--lookahead-distill-max-buffer', type=int, default=192)
+    parser.add_argument('--lookahead-distill-candidates', type=int, default=4)
+    parser.add_argument('--lookahead-distill-rollouts', type=int, default=3)
+    parser.add_argument('--lookahead-distill-horizon', type=int, default=10)
+    parser.add_argument('--lookahead-distill-trigger-elixir', type=float, default=6.0)
+    parser.add_argument('--lookahead-distill-max-searches', type=int, default=16)
+    parser.add_argument('--lookahead-distill-batch-episodes', type=int, default=4)
+    parser.add_argument('--lookahead-distill-steps', type=int, default=1)
+    parser.add_argument('--lookahead-distill-margin', type=float, default=0.008)
+    parser.add_argument('--lookahead-distill-learning-rate', type=float, default=1e-6)
+    parser.add_argument('--lookahead-distill-max-kl', type=float, default=0.005)
     args = parser.parse_args()
+    if (args.critic_fp16_resume_scale_cap is not None and
+            not (np.isfinite(args.critic_fp16_resume_scale_cap) and args.critic_fp16_resume_scale_cap>=1)):
+        parser.error("Critic FP16 resume scale cap must be finite and at least 1")
+    if args.army_reward_mode=='elixir_potential' and not args.v3:
+        parser.error('Elixir army shaping is supported only by persistent v3 PPO')
+    if (args.expert_bc_interval < 1 or args.expert_bc_sequences < 1
+            or not np.isfinite(args.expert_bc_learning_rate) or args.expert_bc_learning_rate <= 0
+            or not np.isfinite(args.expert_bc_max_kl) or args.expert_bc_max_kl <= 0):
+        parser.error('Invalid auxiliary BC settings')
+    if args.expert_bc_dataset and not args.v3:
+        parser.error('Auxiliary BC requires architecture-v3 PPO')
+    if (args.macro_search_interval < 1 or args.macro_search_candidates < 1
+            or not 0 <= args.macro_search_offset < args.macro_search_interval
+            or not np.isfinite(args.macro_search_win_margin) or args.macro_search_win_margin < 0
+            or not np.isfinite(args.macro_search_learning_rate) or not (0 < args.macro_search_learning_rate <= 1e-5)
+            or not np.isfinite(args.macro_search_max_kl) or not (0 < args.macro_search_max_kl <= 0.005)):
+        parser.error('Invalid macro-search settings')
+    if args.macro_search and not args.v3:
+        parser.error('--macro-search requires architecture-v3 PPO')
+    if (args.lookahead_distill_interval < 1 or args.lookahead_distill_games < 1 or args.lookahead_distill_horizon < 2
+            or args.lookahead_distill_parallel_games < 1 or args.lookahead_distill_parallel_searches < 1
+            or args.lookahead_distill_candidates < 2 or args.lookahead_distill_rollouts < 1
+            or args.lookahead_distill_max_searches < 1 or args.lookahead_distill_batch_episodes < 1
+            or args.lookahead_distill_steps < 1
+            or not 0 <= args.lookahead_distill_offset < args.lookahead_distill_interval
+            or not np.isfinite(args.lookahead_distill_trigger_elixir) or not (1.0 <= args.lookahead_distill_trigger_elixir <= 10.0)
+            or not np.isfinite(args.lookahead_distill_margin) or args.lookahead_distill_margin < 0
+            or not np.isfinite(args.lookahead_distill_learning_rate) or not (0 < args.lookahead_distill_learning_rate <= 2e-5)
+            or not np.isfinite(args.lookahead_distill_max_kl) or not (0 < args.lookahead_distill_max_kl <= 0.005)):
+        parser.error('Invalid lookahead-distill settings')
+    if args.lookahead_distill and not args.v3:
+        parser.error('--lookahead-distill requires architecture-v3 PPO')
+    if (min(args.awbc_interval,args.awbc_min_new_games,args.awbc_max_reuse,
+            args.awbc_epochs,args.awbc_value_epochs)<1 or args.awbc_batch_games<12
+            or args.awbc_min_new_games>args.awbc_batch_games-2
+            or not np.isfinite(args.awbc_learning_rate) or args.awbc_learning_rate<=0
+            or not np.isfinite(args.awbc_max_kl) or args.awbc_max_kl<=0):
+        parser.error('Invalid AWBC playbuffer settings')
+    if not 0 <= args.focal_deck_prob <= 1 or args.historical_cohort_updates < 1:
+        parser.error("Invalid focal probability or historical cohort interval")
+    if (not 0 <= args.sparky_wait_fraction <= 1 or not 0 <= args.sparky_play_fraction <= 1
+            or args.sparky_wait_fraction + args.sparky_play_fraction > 1):
+        parser.error("Sparky curriculum fractions must be nonnegative and sum to at most one")
+    if (args.sparky_wait_fraction or args.sparky_play_fraction) and args.rollout_save_interval:
+        parser.error("Sparky curriculum is incompatible with on-policy rollout export")
     if args.league_diversity_manifest is not None and not args.league_diversity_manifest.is_file():
         parser.error("League diversity manifest must be an existing file")
     if not np.isfinite(args.adaptive_actor_lr_min) or args.adaptive_actor_lr_min <= 0:
@@ -1559,6 +1756,8 @@ def main() -> None:
         parser.error("Training opponent cache size must be positive")
     if args.validation_interval < 0 or args.validation_pairs < 1:
         parser.error("Validation interval must be nonnegative and validation pairs must be positive")
+    if not 0 <= args.validation_argmax_lanes <= 32:
+        parser.error("Validation argmax lanes must be between 0 and 32")
     if args.validation_decks is not None and not args.validation_decks.is_file():
         parser.error("Validation deck manifest must be an existing file")
     if args.env_threads < 1:
@@ -1595,42 +1794,99 @@ def main() -> None:
     )
     args.v3 |= saved.get("model_architecture_version") == 3
     args.v2 |= (not args.v3) and saved.get("config", {}).get("representation_version", 1) == 2
-    if not args.v2 and not args.v3 and (args.critic_device or args.amp_dtype == "fp16"):
-        parser.error("Separate devices and FP16 AMP currently require --v2")
+    if not args.v2 and not args.v3 and (
+        args.critic_device
+        or args.critic_peer_device
+        or args.opponent_device
+        or args.amp_dtype == "fp16"
+    ):
+        parser.error("Separate devices and FP16 AMP require --v2 or --v3")
+    if not args.v3 and (
+        args.critic_peer_device
+        or args.opponent_device
+        or args.critic_effective_batch_size is not None
+        or args.rollout_save_interval != 0
+        or args.sparky_wait_fraction
+        or args.sparky_play_fraction
+    ):
+        parser.error("Peer critic, opponent device offload, and v3 rollout options require --v3")
     if args.v3:
         args.precision = args.precision or ("fp16" if args.amp_dtype in ("auto", "fp16") else "fp32")
         if args.decks is None:
             args.decks = Path("configs/decks_ppo46.yaml")
-        if args.weight_decay < 0 or args.frame_microbatch < 1:
-            parser.error("v3 weight decay must be nonnegative and frame microbatch positive")
+        if (
+            args.weight_decay < 0
+            or args.frame_microbatch < 1
+            or args.tbptt_chunk < 1
+            or args.rollout_save_interval < 0
+            or args.keep_rollouts < 0
+        ):
+            parser.error("Invalid v3 weight_decay, frame_microbatch, tbptt_chunk, or rollout interval")
     previous = saved.get("training_args", {})
+    if args.army_reward_mode is None:
+        args.army_reward_mode=saved.get('reward_config',{}).get('army_reward_mode','uniform')
+    if args.army_reward is None:
+        args.army_reward=(saved.get('reward_config',{}).get('army_potential_weight',0.)
+                          if args.army_reward_mode=='uniform' else 0.)
+    if args.army_elixir_beta is None:
+        args.army_elixir_beta=saved.get('reward_config',{}).get('army_elixir_beta',.004)
+    if args.army_elixir_bar_factor is None:
+        args.army_elixir_bar_factor = saved.get('reward_config', {}).get('army_elixir_bar_factor', 0.)
+    if args.army_elixir_config is None:
+        args.army_elixir_config=Path(previous.get('army_elixir_config') or 'configs/army_elixir_values.yaml')
+    if args.resume:
+        import sys
+        from cr_rl.training.awbc_playbuffer import restore_options
+        if not (args.ppo_only or args.expert_bc_plan_b):
+            restore_options(args,previous,sys.argv[1:])
+        restore_league_options(args,saved,sys.argv[1:])
+    if args.pool_capacity < 2 or min(args.history_snapshot_interval,args.snapshot_interval) < 1:
+        parser.error('Invalid resumed league capacity or snapshot interval')
+    if args.require_awbc_smoke and (
+            not args.v3 or not args.awbc_sessions or args.awbc_interval != 1 or args.updates < 2):
+        parser.error('--require-awbc-smoke requires v3, --awbc-sessions, --awbc-interval 1 and at least 2 updates')
+    if args.awbc_sessions and not args.v3:
+        parser.error('--awbc-sessions requires architecture-v3 PPO')
+    if args.ppo_only and (args.expert_bc_dataset or args.awbc_sessions or args.macro_search or args.lookahead_distill):
+        parser.error('--ppo-only cannot be combined with BC, AWBC, macro-search, or lookahead-distill')
+    if args.expert_bc_plan_b and (not args.expert_bc_dataset or args.awbc_sessions or args.ppo_only):
+        parser.error('--expert-bc-plan-b requires its expert dataset and an exclusive auxiliary phase')
+    v2_or_v3 = bool(args.v2 or args.v3)
     defaults = {
-        "gamma": saved.get("gamma", previous.get("gamma", 0.9995 if args.v2 else 0.999)),
+        "gamma": saved.get("gamma", previous.get("gamma", 0.9995 if v2_or_v3 else 0.999)),
         "gae_lambda": saved.get(
-            "gae_lambda", previous.get("gae_lambda", 0.98 if args.v2 else 0.95)
+            "gae_lambda", previous.get("gae_lambda", 0.98 if v2_or_v3 else 0.95)
         ),
         "critic_gae_lambda": saved.get("critic_gae_lambda", previous.get("critic_gae_lambda")),
-        "actor_choice_only": saved.get("actor_update_config", {}).get("choice_only", False),
+        "actor_choice_only": saved.get("actor_update_config", {}).get("choice_only", args.v3),
         "target_card_kl": saved.get("actor_update_config", {}).get("target_card_kl"),
         "target_tile_kl": saved.get("actor_update_config", {}).get("target_tile_kl"),
         "max_initial_logp_error": saved.get("actor_update_config", {}).get(
             "max_initial_logp_error"
         ),
         "min_training_games": saved.get("min_training_games"),
-        "tower_shaping": saved.get("reward_config", {}).get("enabled", args.v2),
-        "overflow_penalty": saved.get("reward_config", {}).get("overflow", 0.001 if args.v2 else 0),
-        "current_opponent_fraction": 0.5 if args.v2 else 0.35,
-        "historical_pfsp_fraction": 0.3 if args.v2 else 0.5,
-        "forgotten_opponent_fraction": 0.2 if args.v2 else 0.15,
+        "tower_shaping": saved.get("reward_config", {}).get("enabled", v2_or_v3),
+        "overflow_penalty": saved.get("reward_config", {}).get("overflow", 0.001 if v2_or_v3 else 0),
+        "current_opponent_fraction": (
+            0.5
+            if args.v2
+            else ((0.30 if args.role_league else 1.0) if args.v3 else 0.35)
+        ),
+        "historical_pfsp_fraction": (
+            0.3 if args.v2 else ((0.50 if args.role_league else 0.0) if args.v3 else 0.5)
+        ),
+        "forgotten_opponent_fraction": (
+            0.2 if args.v2 else ((0.20 if args.role_league else 0.0) if args.v3 else 0.15)
+        ),
     }
     for name, value in defaults.items():
         if getattr(args, name) is None:
             setattr(args, name, value)
     if args.v3:
         if args.historical_opponent_fraction is None:
-            args.historical_opponent_fraction = 0.50
+            args.historical_opponent_fraction = 0.50 if args.role_league else 0.0
         if args.anchor_opponent_fraction is None:
-            args.anchor_opponent_fraction = 0.20
+            args.anchor_opponent_fraction = 0.20 if args.role_league else 0.0
     del saved
     if (
         min(
@@ -1647,7 +1903,7 @@ def main() -> None:
         parser.error(
             "updates, grad-accumulation, steps, envs, epochs and batch-size must be positive"
         )
-    if not args.v3 and not args.v2 and any(
+    if not v2_or_v3 and any(
         value is not None
         for value in (
             args.actor_batch_size,
@@ -1655,14 +1911,18 @@ def main() -> None:
             args.actor_effective_batch_size,
         )
     ):
-        parser.error("Separate Actor/Critic batch overrides currently require --v2")
-    if args.min_training_games is not None and (not args.v2 or args.min_training_games < 1):
-        parser.error("--min-training-games requires v2 and a positive completed-game target")
+        parser.error("Separate Actor/Critic batch overrides currently require --v2 or --v3")
+    if args.min_training_games is not None and (not v2_or_v3 or args.min_training_games < 1):
+        parser.error("--min-training-games requires v2 or v3 and a positive completed-game target")
     if any(
         v is not None for v in (args.resume_actor_learning_rate, args.resume_critic_learning_rate)
-    ) and (not args.resume or not args.v2):
-        parser.error("Explicit resume LR transitions require a v2 checkpoint resume")
-    critic_effective = args.batch_size * args.grad_accumulation
+    ) and (not args.resume or not v2_or_v3):
+        parser.error("Explicit resume LR transitions require a v2 or v3 checkpoint resume")
+    critic_effective = (
+        args.batch_size * args.grad_accumulation
+        if args.critic_effective_batch_size is None
+        else args.critic_effective_batch_size
+    )
     actor_effective = (
         critic_effective
         if args.actor_effective_batch_size is None
@@ -1672,8 +1932,9 @@ def main() -> None:
     critic_microbatch = (
         args.batch_size if args.critic_batch_size is None else args.critic_batch_size
     )
-    if min(actor_effective, actor_microbatch, critic_microbatch) < 1 or (
-        actor_effective % actor_microbatch or critic_effective % critic_microbatch
+    if min(critic_effective, actor_effective, actor_microbatch, critic_microbatch) < 1 or (
+        not args.v3
+        and (actor_effective % actor_microbatch or critic_effective % critic_microbatch)
     ):
         parser.error("Actor/Critic microbatches must divide their effective batch")
     if any(
@@ -1685,9 +1946,14 @@ def main() -> None:
         parser.error("Learning rates and target KL must be positive")
     entropy_pair = (args.card_entropy_coef, args.tile_entropy_coef)
     if any(c is not None for c in entropy_pair) and (
-        not args.v2 or any(c is None or not np.isfinite(c) or c < 0 for c in entropy_pair)
+        not v2_or_v3
+        or any(c is None or not np.isfinite(c) for c in entropy_pair)
+        or args.card_entropy_coef < 0
+        or (not args.v3 and args.tile_entropy_coef < 0)
     ):
-        parser.error("v2 split entropy requires two finite nonnegative coefficients")
+        parser.error(
+            "Split entropy requires v2 or v3, nonnegative card entropy, and finite tile entropy (nonnegative for v2)"
+        )
     if (args.target_card_kl is None) != (args.target_tile_kl is None):
         parser.error("Provide both card and tile KL limits")
     if any(
@@ -1695,16 +1961,18 @@ def main() -> None:
         for v in (args.target_card_kl, args.target_tile_kl, args.max_initial_logp_error)
     ):
         parser.error("Actor KL and initial log-prob limits must be finite and positive")
-    if not args.v3 and not args.v2 and (
+    if not np.isfinite(args.anchor_kl_coef) or args.anchor_kl_coef < 0:
+        parser.error("--anchor-kl-coef must be finite and nonnegative")
+    if not v2_or_v3 and (
         args.actor_choice_only
         or args.target_card_kl is not None
         or args.max_initial_logp_error is not None
     ):
-        parser.error("Choice sampling and split KL require v2")
-    if args.adaptive_actor_lr and (not args.v2 or args.target_card_kl is None):
-        parser.error("Adaptive Actor LR requires v2 and both Card/Tile KL limits")
-    if args.league_diversity_manifest is not None and not args.v2:
-        parser.error("League diversity manifest requires v2")
+        parser.error("Choice sampling and split KL require v2 or v3")
+    if args.adaptive_actor_lr and (not v2_or_v3 or args.target_card_kl is None):
+        parser.error("Adaptive Actor LR requires v2 or v3 and both Card/Tile KL limits")
+    if args.league_diversity_manifest is not None and not v2_or_v3:
+        parser.error("League diversity manifest requires v2 or v3")
     if args.elixir_wait_bias is not None and (
         not args.v2 or not np.isfinite(args.elixir_wait_bias) or args.elixir_wait_bias < 0
     ):
@@ -1716,26 +1984,34 @@ def main() -> None:
     ):
         parser.error("Elixir hold minimum cost must be in (0, 10]")
     fractions = (
-        args.current_opponent_fraction,
-        args.historical_pfsp_fraction,
-        args.forgotten_opponent_fraction,
+        (
+            args.current_opponent_fraction,
+            args.historical_opponent_fraction,
+            args.anchor_opponent_fraction,
+        )
+        if args.v3
+        else (
+            args.current_opponent_fraction,
+            args.historical_pfsp_fraction,
+            args.forgotten_opponent_fraction,
+        )
     )
     if min(fractions) < 0 or not np.isclose(sum(fractions), 1):
         parser.error("Opponent fractions must be nonnegative and sum to one")
     if not 0 < args.gamma <= 1 or not 0 <= args.gae_lambda <= 1:
         parser.error("Invalid gamma/lambda")
     if args.critic_gae_lambda is not None and (
-        not args.v2
+        not v2_or_v3
         or not np.isfinite(args.critic_gae_lambda)
         or not 0 <= args.critic_gae_lambda <= 1
     ):
-        parser.error("Independent Critic GAE lambda requires v2 and a finite value in [0, 1]")
+        parser.error("Independent Critic GAE lambda requires v2 or v3 and a finite value in [0, 1]")
     if args.resume and args.init_from_bc:
         parser.error("Choose --resume or --init-from-bc")
-    if args.expand_decks and (not args.resume or not args.v2):
-        parser.error("--expand-decks requires a v2 checkpoint resume")
-    if args.forced_wait_fastpath and not args.v2:
-        parser.error("--forced-wait-fastpath requires v2")
+    if args.expand_decks and (not args.resume or not v2_or_v3):
+        parser.error("--expand-decks requires a v2 or v3 checkpoint resume")
+    if args.forced_wait_fastpath and not v2_or_v3:
+        parser.error("--forced-wait-fastpath requires v2 or v3")
     if args.v3:
         import os
         if int(os.environ.get("WORLD_SIZE", "1")) > 1:

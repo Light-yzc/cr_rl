@@ -1,4 +1,6 @@
+import json
 from threading import Barrier, Event
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -53,6 +55,46 @@ def test_failed_lane_joins_other_workers_before_return():
         env.close()
 
 
+def test_slow_lane_diagnostic_records_pending_call_and_still_joins(monkeypatch, capsys):
+    monkeypatch.setenv("CRRL_NATIVE_STEP_DIAGNOSTIC_SECONDS", "0.05")
+    release = Event()
+    finished = Event()
+
+    class DiagnosticLane(Lane):
+        schema = SimpleNamespace(info={"tick": 0})
+
+        def reset_env(self, index, seed):
+            self.infos[index, 0] = 8
+
+    def slow_step(lane):
+        assert release.wait(5)
+        finished.set()
+
+    callbacks = iter((lambda lane: None, slow_step))
+    env = IndependentBattles(2, lambda n, t: DiagnosticLane(next(callbacks)), threads=2)
+    report = env._report_slow_step
+
+    def record_and_release(pending_lanes):
+        try:
+            report(pending_lanes)
+        finally:
+            release.set()
+
+    monkeypatch.setattr(env, "_report_slow_step", record_and_release)
+    try:
+        env.reset_env(1, 873)
+        env.actions[1] = [215, 0]
+        env.step()
+        assert finished.is_set()
+        row = json.loads(capsys.readouterr().err)
+        assert row["event"] == "native_step_slow"
+        assert dict(lane=1, reset_seed=873, last_synced_tick=8, actions=[215, 0]) in row["pending_lanes"]
+        worker = next(stack for stack in row["python_stacks"] if stack["lane"] == 1)
+        assert worker["native_id"] > 0 and 0 < len(worker["stack"]) <= 12
+    finally:
+        env.close()
+
+
 def test_level_mixture_factory_receives_stable_lane_index():
     indices = []
 
@@ -80,3 +122,19 @@ def test_level_jitter_is_seeded_and_preserves_base_for_most_lanes():
     assert first == second
     assert all(abs(value - original) in (0, 2) for value, original in zip(first, base))
     assert any(value != original for value, original in zip(first, base))
+
+
+def test_step_lanes_steps_only_requested_indices():
+    calls = []
+
+    def make_lane(idx):
+        return Lane(lambda lane: calls.append(idx))
+
+    counter = iter(range(3))
+    env = IndependentBattles(3, lambda n, t: make_lane(next(counter)), threads=2)
+    try:
+        env.actions[:] = 1
+        env.step_lanes([0, 2])
+        assert sorted(calls) == [0, 2]
+    finally:
+        env.close()

@@ -112,8 +112,11 @@ def test_core_chunk_gradients_match_reference_with_full_history_gqa():
     expected = expected_model.prefill(x2, reference=True)[0]
     _, state = actual_model.prefill(x1[:, :3])
     actual = actual_model.prefill(x1[:, 3:], state)[0]
-    expected[:, 3:].square().sum().backward()
-    actual.square().sum().backward()
+    # RMSNorm makes an unweighted squared norm almost constant, leaving
+    # cancellation-sized gradients. Unequal channel weights exercise the mixer.
+    channel_weights = torch.linspace(0.5, 1.5, 32)
+    (expected[:, 3:].square() * channel_weights).sum().backward()
+    (actual.square() * channel_weights).sum().backward()
     torch.testing.assert_close(x1.grad, x2.grad, atol=3e-6, rtol=3e-4)
     for (name1, p1), (name2, p2) in zip(actual_model.named_parameters(), expected_model.named_parameters()):
         assert name1 == name2

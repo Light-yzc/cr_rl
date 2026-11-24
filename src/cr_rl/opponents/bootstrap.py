@@ -6,12 +6,13 @@ from pathlib import Path
 import torch
 
 from cr_rl.models import ActorPolicy, ModelConfig
+from cr_rl.models.state_policy import StateTemporalConfig, state_model_from_checkpoint
 from cr_rl.opponents.league import OpponentEntry
 from cr_rl.opponents.role_sampling import historical_policy_id
 from cr_rl.training.persistence import atomic_json, copy_verified, file_sha256
 
 
-def seed_history(pool, manifest_path, output, config, provenance):
+def seed_history(pool, manifest_path, output, config, provenance, temporal_config=None):
     manifest_path, output = Path(manifest_path), Path(output)
     manifest = json.loads(manifest_path.read_text())
     rows = manifest["policies"]
@@ -35,14 +36,26 @@ def seed_history(pool, manifest_path, output, config, provenance):
         )
         expected = dict(ModelConfig(**config).__dict__, **behavior_defaults)
         actual = dict(seed_config.__dict__, **behavior_defaults)
-        if actual != expected or state.get("updates") != row["generation"]:
+        seed_gen = state.get("updates", state.get("progress", {}).get("update"))
+        if actual != expected or seed_gen != row["generation"]:
             raise ValueError("History seed architecture/generation mismatch")
         if any(state.get(k) != value for k, value in provenance.items()):
             raise ValueError("History seed simulator provenance mismatch")
         with torch.random.fork_rng(devices=[]):
-            model = ActorPolicy(seed_config)
-        model.load_state_dict(state["model"], strict=True)
-        if not all(torch.isfinite(t).all() for t in model.state_dict().values()):
+            if state.get("model_architecture_version") == 3:
+                if temporal_config is not None and (
+                    StateTemporalConfig(**state["temporal_config"]) != StateTemporalConfig(**temporal_config)
+                ):
+                    raise ValueError("History seed temporal configuration mismatch")
+                model = state_model_from_checkpoint(state, device="cpu")
+            else:
+                model = ActorPolicy(seed_config)
+                model.load_state_dict(state["model"], strict=True)
+        if not all(
+            torch.isfinite(t).all()
+            for t in model.state_dict().values()
+            if isinstance(t, torch.Tensor)
+        ):
             raise ValueError("Nonfinite history seed")
         checked.append((row, path))
         del state, model

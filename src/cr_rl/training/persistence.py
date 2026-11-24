@@ -83,8 +83,15 @@ def prune_backup(
     ``rollout_recent`` updates. Opponent snapshots remain because retained pool
     manifests may reference older snapshots.
     """
-    keep_updates = {update - i for i in range(recent)}
-    periodic = list(range(keep_every, update + 1, keep_every)) if keep_every else []
+    # Checkpoint cadence can be sparse (e.g. every 800 updates). Retain the
+    # latest actual restore files, rather than looking for nonexistent u-1.
+    existing = sorted({int(match.group(1)) for path in (destination / "checkpoints").glob("update_*.pt")
+                       if (match := re.fullmatch(r"update_(\d+)\.pt", path.name))
+                       and int(match.group(1)) <= update})
+    keep_updates = {update-i for i in range(recent)}
+    if recent:
+        keep_updates.update(existing[-recent:])
+    periodic = [u for u in existing if u % keep_every == 0] if keep_every else []
     if max_periodic is not None:
         periodic = periodic[-max_periodic:] if max_periodic else []
     keep_updates.update(periodic)

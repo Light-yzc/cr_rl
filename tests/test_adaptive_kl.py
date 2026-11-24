@@ -158,3 +158,46 @@ def test_resume_conflicting_rate_or_bounds_fails_before_feedback():
         restore_actor_lr_controller(optimizer(), saved, enabled=True, max_lr=2e-5)
     with pytest.raises(ValueError, match='outside'):
         restore_actor_lr_controller(optimizer(), enabled=True, max_lr=5e-6)
+
+
+def test_minor_amp_overflow_does_not_block_low_kl_increase():
+    controller = AdaptiveActorLearningRate()
+    opt = optimizer(5e-6)
+    for step_idx in range(2):
+        controller.begin_update(opt)
+        observe(controller)
+        observe(controller)
+        event = controller.finish_update(
+            opt, actor_enabled=True, committed_steps=32, overflow_steps=3
+        )
+        expected_reason = 'low_kl_wait' if step_idx == 0 else 'low_kl_increase'
+        assert event['reason'] == expected_reason
+    assert event['next_lr'] == pytest.approx(6.25e-6)
+
+    controller.begin_update(opt)
+    observe(controller)
+    observe(controller)
+    severe = controller.finish_update(
+        opt, actor_enabled=True, committed_steps=16, overflow_steps=5
+    )
+    assert severe['reason'] == 'amp_overflow'
+    assert severe['low_kl_updates'] == 0
+
+
+def test_restore_with_bound_override_clamps_lr_into_new_bounds():
+    saved_ctrl = restore_actor_lr_controller(
+        optimizer(1.875e-6), enabled=True, min_lr=1.5e-6, max_lr=5e-6
+    )
+    saved = saved_ctrl.state_dict()
+    opt = optimizer(1.875e-6)
+    restored = restore_actor_lr_controller(
+        opt,
+        saved,
+        enabled=True,
+        min_lr=2.5e-6,
+        max_lr=5e-6,
+        allow_bound_override=True,
+    )
+    assert restored.config.min_lr == pytest.approx(2.5e-6)
+    assert restored.current_lr == pytest.approx(2.5e-6)
+    assert opt.param_groups[0]['lr'] == pytest.approx(2.5e-6)

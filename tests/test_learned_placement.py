@@ -159,6 +159,60 @@ def test_all_slot_inference_preserves_card_wait_mass_and_legality(monkeypatch):
     assert after.exp()[~legal].sum()==0 and after[0,0].exp()==1
 
 
+@pytest.mark.parametrize("variant", ["spatial_cnn", "card_prior_cnn_001"])
+def test_sparse_placement_preserves_legal_probabilities_and_gradients(variant, monkeypatch):
+    monkeypatch.setenv("CRRL_SPARSE_PLACEMENT", "1")
+    model = source_model().train()
+    assert model.sparse_placement
+    adapter = PlacementAdapter(model, definition_for(model, variant, cnn_channels=32))
+    spatial = adapter.decoder.spatial if variant == "card_prior_cnn_001" else adapter.decoder
+    with torch.no_grad():
+        spatial.output.weight.normal_(0., .02)
+        for block in spatial.blocks:
+            block.film.weight.normal_(0., .02)
+    model.add_module("learned_placement", adapter)
+    header = torch.zeros(1, 4, model.cfg.header_dim)
+    entities = torch.zeros(1, 4, 4, model.cfg.entity_feature_dim)
+    entities[..., 4:6] = torch.rand(1, 4, 4, 2)
+    entity_mask = torch.ones(1, 4, 4, dtype=torch.bool)
+    hand = torch.tensor([[[0, 1, 2, 3], [4, 7, 9, 12], [4, 2, 3, 1], [3, 2, 7, 1]]])
+    legal = torch.zeros(1, 4, 2307, dtype=torch.bool)
+    legal[..., 0] = True
+    legal[0, 0, 1:25] = True
+    legal[0, 0, 577:592] = True
+    legal[0, 1, 1729:1800] = True
+    legal[0, 2, 2305] = True  # Ability-only row still advances memory.
+    legal[0, 3, 590:610] = True
+    conv_batch_sizes = []
+    hook = spatial.blocks[0].register_forward_pre_hook(
+        lambda _, inputs: conv_batch_sizes.append(len(inputs[0]))
+    )
+
+    def forward_and_backward(sparse):
+        model.sparse_placement = sparse
+        model.zero_grad(set_to_none=True)
+        conv_batch_sizes.clear()
+        output = model.forward_state(
+            header, entities, entity_mask, legal, hand_card_ids=hand, compute_value=False
+        )[0]
+        (-output[legal].mean()).backward()
+        gradients = {name: param.grad.clone() for name, param in model.named_parameters()
+                     if param.grad is not None}
+        return output.detach(), gradients, conv_batch_sizes.copy()
+
+    try:
+        expected, reference_grads, dense_batches = forward_and_backward(False)
+        actual, sparse_grads, sparse_batches = forward_and_backward(True)
+    finally:
+        hook.remove()
+    assert dense_batches == [3, 3, 3, 3]
+    assert sparse_batches == [3, 1]
+    torch.testing.assert_close(actual, expected, atol=2e-6, rtol=1e-6)
+    assert sparse_grads.keys() == reference_grads.keys()
+    for name, grad in sparse_grads.items():
+        torch.testing.assert_close(grad, reference_grads[name], atol=2e-6, rtol=2e-5, msg=name)
+
+
 @pytest.mark.parametrize('corruption',['source','config','shape','missing','extra','nonfinite','version','count','heldout'])
 def test_strict_loading_rejects_mismatch_without_mutating_model(corruption,monkeypatch):
     source=source_model()

@@ -105,7 +105,8 @@ def _optimizer_step(model, optimizer, samples, max_grad_norm):
             raise FloatingPointError("Non-finite optimizer gradient norm")
         # unscale_ already recorded overflow before clipping touched the gradients.
         # Never apply an invalid update, including a finite-gradient norm overflow.
-        scaler.update(new_scale=scaler.get_scale() * scaler.get_backoff_factor())
+        next_scale = max(1.0, float(scaler.get_scale()) * float(scaler.get_backoff_factor()))
+        scaler.update(new_scale=next_scale)
         optimizer.zero_grad(set_to_none=True)
         return None
     if scaler is not None:

@@ -1,0 +1,38 @@
+version: army-elixir-direct-v1
+backend_commit: 7ee59b39bf1d41d5c01645f01c47ed8c8d3355d6
+data_version: '16.635.3'
+health: alive_0.3_plus_0.7_hp_fraction
+unknown: zero_and_report
+category_factors:
+  troop: 1.0
+  building: 0.4
+  spawner: 0.6
+  spell_summon: 1.0
+# Only base direct deployments; dynamic/variant mechanisms are refused as a whole.
+cards:
+  Knight: troop
+  Archer: troop
+  MinionHorde: troop
+  Minions: troop
+  Giant: troop
+  ZapMachine: troop
+  MiniPekka: troop
+  Musketeer: troop
+  Skeletons: troop
+  SkeletonArmy: troop
+  Goblins: troop
+  SpearGoblins: troop
+  HogRider: troop
+  Pekka: troop
+  Cannon: building
+  Tesla: building
+  InfernoTower: building
+unsupported:
+  - death_split
+  - continuous_spawn
+  - spell_summon
+  - evolution
+  - hero
+  - mirror
+  - clone
+  - transformation

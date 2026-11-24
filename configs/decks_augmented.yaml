@@ -1,0 +1,4579 @@
+version: 2
+decks:
+  human_popular_01:
+  - SkeletonBalloon
+  - Berserker
+  - Mortar
+  - Fireball
+  - Rascals
+  - Minions
+  - MovingCannon
+  - BarbLog
+  human_popular_03:
+  - InfernoDragon
+  - Knight
+  - BabyDragon
+  - Bowler
+  - Balloon
+  - BarbLog
+  - Tornado
+  - Freeze
+  human_popular_04:
+  - InfernoDragon
+  - Tombstone
+  - MegaMinion
+  - Zap
+  - IceGolemite
+  - Balloon
+  - Fireball
+  - Miner
+  human_popular_06:
+  - Cannon
+  - Berserker
+  - Snowball
+  - Rocket
+  - FireSpirits
+  - GoblinDrill
+  - Skeletons
+  - Bomber
+  human_popular_07:
+  - GoblinBarrel
+  - Valkyrie
+  - SkeletonArmy
+  - Wallbreakers
+  - Princess
+  - BlowdartGoblin
+  - IceSpirits
+  - Cannon
+  human_popular_11:
+  - Mortar
+  - Berserker
+  - SkeletonBalloon
+  - BlowdartGoblin
+  - Skeletons
+  - Minions
+  - Fireball
+  - BarbLog
+  human_popular_12:
+  - BattleRam
+  - Wizard
+  - AngryBarbarians
+  - GiantSkeleton
+  - WitchMother
+  - MiniSparkys
+  - Vines
+  - BarbLog
+  human_popular_13:
+  - Zap
+  - MiniPekka
+  - Wizard
+  - Heal
+  - Giant
+  - Tornado
+  - ZapMachine
+  - Vines
+  human_popular_14:
+  - Mortar
+  - Goblinstein
+  - MinionHorde
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - BarbLog
+  human_popular_15:
+  - Princess
+  - MightyMiner
+  - Cannon
+  - Goblins
+  - Log
+  - Rocket
+  - GoblinBarrel
+  - IceSpirits
+  human_popular_16:
+  - Snowball
+  - Berserker
+  - GoblinDrill
+  - Tesla
+  - Poison
+  - Bomber
+  - IceSpirits
+  - RoyalDelivery
+  human_popular_17:
+  - BattleRam
+  - SkeletonKing
+  - SkeletonArmy
+  - Arrows
+  - Fireball
+  - Bats
+  - Pekka
+  - GoblinGang
+  human_popular_18:
+  - Tesla
+  - Knight
+  - Archer
+  - ElectroSpirit
+  - Xbow
+  - Fireball
+  - Skeletons
+  - Log
+  human_popular_19:
+  - BattleRam
+  - GoldenKnight
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - ElectroWizard
+  - Assassin
+  - Heal
+  human_popular_20:
+  - Cannon
+  - IceGolemite
+  - Skeletons
+  - Musketeer
+  - Fireball
+  - IceSpirits
+  - Log
+  - HogRider
+  human_popular_21:
+  - Tesla
+  - Knight
+  - Princess
+  - Skeletons
+  - GoblinBarrel
+  - Rocket
+  - Log
+  - ElectroSpirit
+  human_popular_22:
+  - Witch
+  - SkeletonKing
+  - RoyalGiant
+  - Lightning
+  - BarbLog
+  - Tombstone
+  - MiniSparkys
+  - Fisherman
+  human_popular_24:
+  - BattleRam
+  - Wizard
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - Vines
+  - MiniSparkys
+  - BarbLog
+  human_popular_25:
+  - Knight
+  - Monk
+  - AngryBarbarians
+  - ThreeMusketeers
+  - Heal
+  - Elixir Collector
+  - Archer
+  - Rage
+  human_popular_26:
+  - Zap
+  - Giant
+  - MegaMinion
+  - Prince
+  - DarkPrince
+  - Bomber
+  - Lightning
+  - Rage
+  human_popular_27:
+  - FirespiritHut
+  - Valkyrie
+  - Berserker
+  - IceSpirits
+  - GoblinHut
+  - BarbLog
+  - Poison
+  - Graveyard
+  human_popular_28:
+  - Skeletons
+  - Berserker
+  - Wizard
+  - FireSpirits
+  - Xbow
+  - ElectroSpirit
+  - Elixir Collector
+  - IceSpirits
+  human_popular_29:
+  - Knight
+  - Bowler
+  - BabyDragon
+  - Tornado
+  - ElectroGiant
+  - Lightning
+  - BarbLog
+  - GoblinHut
+  human_popular_31:
+  - ElectroDragon
+  - Balloon
+  - InfernoDragon
+  - RageBarbarian
+  - Bowler
+  - Freeze
+  - Tornado
+  - BarbLog
+  human_popular_32:
+  - FirespiritHut
+  - Berserker
+  - Snowball
+  - GoblinDrill
+  - Poison
+  - Skeletons
+  - RoyalDelivery
+  - Cannon
+  royale_20261103_02:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - Mortar
+  - Rascals
+  - SkeletonBalloon
+  royale_20261103_03:
+  - Arrows
+  - Bomber
+  - AngryBarbarians
+  - Golem
+  - MiniPekka
+  - DarkWitch
+  - Phoenix
+  - Zap
+  royale_20261103_04:
+  - ElectroWizard
+  - AngryBarbarians
+  - Giant
+  - Heal
+  - MiniPekka
+  - Rage
+  - ZapMachine
+  - Zap
+  royale_20261103_08:
+  - BarbLog
+  - FirespiritHut
+  - GoblinHut
+  - Graveyard
+  - IceWizard
+  - Knight
+  - Poison
+  - Skeletons
+  royale_20261103_09:
+  - BarbLog
+  - FirespiritHut
+  - GoblinHut
+  - Graveyard
+  - IceWizard
+  - Knight
+  - Poison
+  - Skeletons
+  royale_20261103_10:
+  - BarbLog
+  - Bats
+  - Cannon
+  - IceWizard
+  - Knight
+  - Lightning
+  - MinionGiant
+  - Skeletons
+  royale_20261103_12:
+  - ArcherQueen
+  - Cannon
+  - Earthquake
+  - IceSpirits
+  - RoyalDelivery
+  - RoyalHogs
+  - Skeletons
+  - Log
+  royale_20261103_13:
+  - Cannon
+  - Fireball
+  - HogRider
+  - IceGolemite
+  - IceSpirits
+  - Musketeer
+  - Skeletons
+  - Log
+  royale_20261103_14:
+  - Arrows
+  - Bowler
+  - Giant
+  - Snowball
+  - Graveyard
+  - SkeletonWarriors
+  - Witch
+  - MiniSparkys
+  royale_20261103_15:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - Ghost
+  royale_20261103_16:
+  - Archer
+  - BarbLog
+  - ElectroSpirit
+  - GoblinHut
+  - IceWizard
+  - Knight
+  - Lightning
+  - RoyalHogs
+  royale_20261103_17:
+  - BabyDragon
+  - BarbLog
+  - Bowler
+  - ElectroGiant
+  - ElectroWizard
+  - GoblinHut
+  - Lightning
+  - Tornado
+  royale_20261103_18:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - Goblinstein
+  - MinionHorde
+  - Mortar
+  - WitchMother
+  giant_sparky_v1:
+  - Giant
+  - ZapMachine
+  - MiniPekka
+  - Musketeer
+  - Minions
+  - Knight
+  - Zap
+  - Arrows
+  hog_cycle_v1:
+  - HogRider
+  - Musketeer
+  - Cannon
+  - Fireball
+  - Skeletons
+  - IceSpirits
+  - Log
+  - Knight
+  graveyard_control_v1:
+  - Graveyard
+  - Poison
+  - BabyDragon
+  - Tombstone
+  - Knight
+  - BarbLog
+  - IceWizard
+  - Tornado
+  human_popular_05:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - BarbLog
+  - Skeletons
+  human_popular_09:
+  - ElectroDragon
+  - Berserker
+  - AngryBarbarians
+  - Golem
+  - SkeletonDragons
+  - Tornado
+  - BarbLog
+  - Elixir Collector
+  human_popular_23:
+  - Zap
+  - Giant
+  - Bowler
+  - DarkWitch
+  - GoblinGang
+  - InfernoTower
+  - Miner
+  - Fireball
+  human_popular_30:
+  - Snowball
+  - Balloon
+  - Musketeer
+  - BombTower
+  - Skeletons
+  - IceGolemite
+  - BarbLog
+  - Miner
+  royale_20261103_07:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - RageBarbarian
+  human_popular_02:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - Log
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - Skeletons
+  human_popular_08:
+  - AngryBarbarians
+  - Giant
+  - Zap
+  - ElectroWizard
+  - ZapMachine
+  - Heal
+  - Rage
+  - DarkPrince
+  human_popular_10:
+  - AngryBarbarians
+  - GoldenKnight
+  - FirespiritHut
+  - ThreeMusketeers
+  - IceGolemite
+  - Zap
+  - Heal
+  - Elixir Collector
+  royale_20261103_01:
+  - BarbLog
+  - Berserker
+  - MovingCannon
+  - ElectroWizard
+  - AngryBarbarians
+  - FirespiritHut
+  - Golem
+  - Zap
+  royale_20261103_06:
+  - BlowdartGoblin
+  - GoblinBarrel
+  - IceSpirits
+  - InfernoTower
+  - Knight
+  - Princess
+  - SkeletonArmy
+  - Log
+  user_giant_sparky_pump_plain:
+  - Wizard
+  - DarkPrince
+  - ZapMachine
+  - Elixir Collector
+  - Fireball
+  - Giant
+  - Rage
+  - MiniPekka
+  human_popular_01__ordinary:
+  - SkeletonBalloon
+  - Berserker
+  - Mortar
+  - Fireball
+  - Rascals
+  - Minions
+  - MovingCannon
+  - BarbLog
+  human_popular_01__evo:
+  - SkeletonBalloon
+  - Berserker
+  - Mortar
+  - Fireball
+  - Rascals
+  - Minions
+  - MovingCannon
+  - BarbLog
+  human_popular_01__hero:
+  - SkeletonBalloon
+  - Berserker
+  - Mortar
+  - Fireball
+  - Rascals
+  - Minions
+  - MovingCannon
+  - BarbLog
+  human_popular_01__evo_hero:
+  - SkeletonBalloon
+  - Berserker
+  - Mortar
+  - Fireball
+  - Rascals
+  - Minions
+  - MovingCannon
+  - BarbLog
+  human_popular_03__ordinary:
+  - InfernoDragon
+  - Knight
+  - BabyDragon
+  - Bowler
+  - Balloon
+  - BarbLog
+  - Tornado
+  - Freeze
+  human_popular_03__evo:
+  - InfernoDragon
+  - Knight
+  - BabyDragon
+  - Bowler
+  - Balloon
+  - BarbLog
+  - Tornado
+  - Freeze
+  human_popular_03__hero:
+  - InfernoDragon
+  - Knight
+  - BabyDragon
+  - Bowler
+  - Balloon
+  - BarbLog
+  - Tornado
+  - Freeze
+  human_popular_03__evo_hero:
+  - InfernoDragon
+  - Knight
+  - BabyDragon
+  - Bowler
+  - Balloon
+  - BarbLog
+  - Tornado
+  - Freeze
+  human_popular_04__ordinary:
+  - InfernoDragon
+  - Tombstone
+  - MegaMinion
+  - Zap
+  - IceGolemite
+  - Balloon
+  - Fireball
+  - Miner
+  human_popular_04__evo:
+  - InfernoDragon
+  - Tombstone
+  - MegaMinion
+  - Zap
+  - IceGolemite
+  - Balloon
+  - Fireball
+  - Miner
+  human_popular_04__hero:
+  - InfernoDragon
+  - Tombstone
+  - MegaMinion
+  - Zap
+  - IceGolemite
+  - Balloon
+  - Fireball
+  - Miner
+  human_popular_04__evo_hero:
+  - InfernoDragon
+  - Tombstone
+  - MegaMinion
+  - Zap
+  - IceGolemite
+  - Balloon
+  - Fireball
+  - Miner
+  human_popular_06__ordinary:
+  - Cannon
+  - Berserker
+  - Snowball
+  - Rocket
+  - FireSpirits
+  - GoblinDrill
+  - Skeletons
+  - Bomber
+  human_popular_06__evo:
+  - Cannon
+  - Berserker
+  - Snowball
+  - Rocket
+  - FireSpirits
+  - GoblinDrill
+  - Skeletons
+  - Bomber
+  human_popular_06__hero:
+  - Cannon
+  - Berserker
+  - Snowball
+  - Rocket
+  - FireSpirits
+  - GoblinDrill
+  - Skeletons
+  - Bomber
+  human_popular_06__evo_hero:
+  - Cannon
+  - Berserker
+  - Snowball
+  - Rocket
+  - FireSpirits
+  - GoblinDrill
+  - Skeletons
+  - Bomber
+  human_popular_07__ordinary:
+  - GoblinBarrel
+  - Valkyrie
+  - SkeletonArmy
+  - Wallbreakers
+  - Princess
+  - BlowdartGoblin
+  - IceSpirits
+  - Cannon
+  human_popular_07__evo:
+  - GoblinBarrel
+  - Valkyrie
+  - SkeletonArmy
+  - Wallbreakers
+  - Princess
+  - BlowdartGoblin
+  - IceSpirits
+  - Cannon
+  human_popular_07__hero:
+  - GoblinBarrel
+  - Valkyrie
+  - SkeletonArmy
+  - Wallbreakers
+  - Princess
+  - BlowdartGoblin
+  - IceSpirits
+  - Cannon
+  human_popular_07__evo_hero:
+  - GoblinBarrel
+  - Valkyrie
+  - SkeletonArmy
+  - Wallbreakers
+  - Princess
+  - BlowdartGoblin
+  - IceSpirits
+  - Cannon
+  human_popular_11__ordinary:
+  - Mortar
+  - Berserker
+  - SkeletonBalloon
+  - BlowdartGoblin
+  - Skeletons
+  - Minions
+  - Fireball
+  - BarbLog
+  human_popular_11__evo:
+  - Mortar
+  - Berserker
+  - SkeletonBalloon
+  - BlowdartGoblin
+  - Skeletons
+  - Minions
+  - Fireball
+  - BarbLog
+  human_popular_11__hero:
+  - Mortar
+  - Berserker
+  - SkeletonBalloon
+  - BlowdartGoblin
+  - Skeletons
+  - Minions
+  - Fireball
+  - BarbLog
+  human_popular_11__evo_hero:
+  - Mortar
+  - Berserker
+  - SkeletonBalloon
+  - BlowdartGoblin
+  - Skeletons
+  - Minions
+  - Fireball
+  - BarbLog
+  human_popular_12__ordinary:
+  - BattleRam
+  - Wizard
+  - AngryBarbarians
+  - GiantSkeleton
+  - WitchMother
+  - MiniSparkys
+  - Vines
+  - BarbLog
+  human_popular_12__evo:
+  - BattleRam
+  - Wizard
+  - AngryBarbarians
+  - GiantSkeleton
+  - WitchMother
+  - MiniSparkys
+  - Vines
+  - BarbLog
+  human_popular_12__hero:
+  - BattleRam
+  - Wizard
+  - AngryBarbarians
+  - GiantSkeleton
+  - WitchMother
+  - MiniSparkys
+  - Vines
+  - BarbLog
+  human_popular_12__evo_hero:
+  - BattleRam
+  - Wizard
+  - AngryBarbarians
+  - GiantSkeleton
+  - WitchMother
+  - MiniSparkys
+  - Vines
+  - BarbLog
+  human_popular_13__ordinary:
+  - Zap
+  - MiniPekka
+  - Wizard
+  - Heal
+  - Giant
+  - Tornado
+  - ZapMachine
+  - Vines
+  human_popular_13__evo:
+  - Zap
+  - MiniPekka
+  - Wizard
+  - Heal
+  - Giant
+  - Tornado
+  - ZapMachine
+  - Vines
+  human_popular_13__hero:
+  - Zap
+  - MiniPekka
+  - Wizard
+  - Heal
+  - Giant
+  - Tornado
+  - ZapMachine
+  - Vines
+  human_popular_13__evo_hero:
+  - Zap
+  - MiniPekka
+  - Wizard
+  - Heal
+  - Giant
+  - Tornado
+  - ZapMachine
+  - Vines
+  human_popular_14__ordinary:
+  - Mortar
+  - Goblinstein
+  - MinionHorde
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - BarbLog
+  human_popular_14__evo:
+  - Mortar
+  - Goblinstein
+  - MinionHorde
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - BarbLog
+  human_popular_14__hero:
+  - Mortar
+  - Goblinstein
+  - MinionHorde
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - BarbLog
+  human_popular_14__evo_hero:
+  - Mortar
+  - Goblinstein
+  - MinionHorde
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - BarbLog
+  human_popular_15__ordinary:
+  - Princess
+  - MightyMiner
+  - Cannon
+  - Goblins
+  - Log
+  - Rocket
+  - GoblinBarrel
+  - IceSpirits
+  human_popular_15__evo:
+  - Princess
+  - MightyMiner
+  - Cannon
+  - Goblins
+  - Log
+  - Rocket
+  - GoblinBarrel
+  - IceSpirits
+  human_popular_15__hero:
+  - Princess
+  - MightyMiner
+  - Cannon
+  - Goblins
+  - Log
+  - Rocket
+  - GoblinBarrel
+  - IceSpirits
+  human_popular_15__evo_hero:
+  - Princess
+  - MightyMiner
+  - Cannon
+  - Goblins
+  - Log
+  - Rocket
+  - GoblinBarrel
+  - IceSpirits
+  human_popular_16__ordinary:
+  - Snowball
+  - Berserker
+  - GoblinDrill
+  - Tesla
+  - Poison
+  - Bomber
+  - IceSpirits
+  - RoyalDelivery
+  human_popular_16__evo:
+  - Snowball
+  - Berserker
+  - GoblinDrill
+  - Tesla
+  - Poison
+  - Bomber
+  - IceSpirits
+  - RoyalDelivery
+  human_popular_16__hero:
+  - Snowball
+  - Berserker
+  - GoblinDrill
+  - Tesla
+  - Poison
+  - Bomber
+  - IceSpirits
+  - RoyalDelivery
+  human_popular_16__evo_hero:
+  - Snowball
+  - Berserker
+  - GoblinDrill
+  - Tesla
+  - Poison
+  - Bomber
+  - IceSpirits
+  - RoyalDelivery
+  human_popular_17__ordinary:
+  - BattleRam
+  - SkeletonKing
+  - SkeletonArmy
+  - Arrows
+  - Fireball
+  - Bats
+  - Pekka
+  - GoblinGang
+  human_popular_17__evo:
+  - BattleRam
+  - SkeletonKing
+  - SkeletonArmy
+  - Arrows
+  - Fireball
+  - Bats
+  - Pekka
+  - GoblinGang
+  human_popular_18__ordinary:
+  - Tesla
+  - Knight
+  - Archer
+  - ElectroSpirit
+  - Xbow
+  - Fireball
+  - Skeletons
+  - Log
+  human_popular_18__evo:
+  - Tesla
+  - Knight
+  - Archer
+  - ElectroSpirit
+  - Xbow
+  - Fireball
+  - Skeletons
+  - Log
+  human_popular_18__hero:
+  - Tesla
+  - Knight
+  - Archer
+  - ElectroSpirit
+  - Xbow
+  - Fireball
+  - Skeletons
+  - Log
+  human_popular_18__evo_hero:
+  - Tesla
+  - Knight
+  - Archer
+  - ElectroSpirit
+  - Xbow
+  - Fireball
+  - Skeletons
+  - Log
+  human_popular_19__ordinary:
+  - BattleRam
+  - GoldenKnight
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - ElectroWizard
+  - Assassin
+  - Heal
+  human_popular_19__evo:
+  - BattleRam
+  - GoldenKnight
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - ElectroWizard
+  - Assassin
+  - Heal
+  human_popular_19__hero:
+  - BattleRam
+  - GoldenKnight
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - ElectroWizard
+  - Assassin
+  - Heal
+  human_popular_19__evo_hero:
+  - BattleRam
+  - GoldenKnight
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - ElectroWizard
+  - Assassin
+  - Heal
+  human_popular_20__ordinary:
+  - Cannon
+  - IceGolemite
+  - Skeletons
+  - Musketeer
+  - Fireball
+  - IceSpirits
+  - Log
+  - HogRider
+  human_popular_20__evo:
+  - Cannon
+  - IceGolemite
+  - Skeletons
+  - Musketeer
+  - Fireball
+  - IceSpirits
+  - Log
+  - HogRider
+  human_popular_20__hero:
+  - Cannon
+  - IceGolemite
+  - Skeletons
+  - Musketeer
+  - Fireball
+  - IceSpirits
+  - Log
+  - HogRider
+  human_popular_20__evo_hero:
+  - Cannon
+  - IceGolemite
+  - Skeletons
+  - Musketeer
+  - Fireball
+  - IceSpirits
+  - Log
+  - HogRider
+  human_popular_21__ordinary:
+  - Tesla
+  - Knight
+  - Princess
+  - Skeletons
+  - GoblinBarrel
+  - Rocket
+  - Log
+  - ElectroSpirit
+  human_popular_21__evo:
+  - Tesla
+  - Knight
+  - Princess
+  - Skeletons
+  - GoblinBarrel
+  - Rocket
+  - Log
+  - ElectroSpirit
+  human_popular_21__hero:
+  - Tesla
+  - Knight
+  - Princess
+  - Skeletons
+  - GoblinBarrel
+  - Rocket
+  - Log
+  - ElectroSpirit
+  human_popular_21__evo_hero:
+  - Tesla
+  - Knight
+  - Princess
+  - Skeletons
+  - GoblinBarrel
+  - Rocket
+  - Log
+  - ElectroSpirit
+  human_popular_22__ordinary:
+  - Witch
+  - SkeletonKing
+  - RoyalGiant
+  - Lightning
+  - BarbLog
+  - Tombstone
+  - MiniSparkys
+  - Fisherman
+  human_popular_22__evo:
+  - Witch
+  - SkeletonKing
+  - RoyalGiant
+  - Lightning
+  - BarbLog
+  - Tombstone
+  - MiniSparkys
+  - Fisherman
+  human_popular_22__hero:
+  - Witch
+  - SkeletonKing
+  - RoyalGiant
+  - Lightning
+  - BarbLog
+  - Tombstone
+  - MiniSparkys
+  - Fisherman
+  human_popular_22__evo_hero:
+  - Witch
+  - SkeletonKing
+  - RoyalGiant
+  - Lightning
+  - BarbLog
+  - Tombstone
+  - MiniSparkys
+  - Fisherman
+  human_popular_24__ordinary:
+  - BattleRam
+  - Wizard
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - Vines
+  - MiniSparkys
+  - BarbLog
+  human_popular_24__evo:
+  - BattleRam
+  - Wizard
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - Vines
+  - MiniSparkys
+  - BarbLog
+  human_popular_24__hero:
+  - BattleRam
+  - Wizard
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - Vines
+  - MiniSparkys
+  - BarbLog
+  human_popular_24__evo_hero:
+  - BattleRam
+  - Wizard
+  - Ghost
+  - GiantSkeleton
+  - WitchMother
+  - Vines
+  - MiniSparkys
+  - BarbLog
+  human_popular_25__ordinary:
+  - Knight
+  - Monk
+  - AngryBarbarians
+  - ThreeMusketeers
+  - Heal
+  - Elixir Collector
+  - Archer
+  - Rage
+  human_popular_25__evo:
+  - Knight
+  - Monk
+  - AngryBarbarians
+  - ThreeMusketeers
+  - Heal
+  - Elixir Collector
+  - Archer
+  - Rage
+  human_popular_25__hero:
+  - Knight
+  - Monk
+  - AngryBarbarians
+  - ThreeMusketeers
+  - Heal
+  - Elixir Collector
+  - Archer
+  - Rage
+  human_popular_25__evo_hero:
+  - Knight
+  - Monk
+  - AngryBarbarians
+  - ThreeMusketeers
+  - Heal
+  - Elixir Collector
+  - Archer
+  - Rage
+  human_popular_26__ordinary:
+  - Zap
+  - Giant
+  - MegaMinion
+  - Prince
+  - DarkPrince
+  - Bomber
+  - Lightning
+  - Rage
+  human_popular_26__evo:
+  - Zap
+  - Giant
+  - MegaMinion
+  - Prince
+  - DarkPrince
+  - Bomber
+  - Lightning
+  - Rage
+  human_popular_26__hero:
+  - Zap
+  - Giant
+  - MegaMinion
+  - Prince
+  - DarkPrince
+  - Bomber
+  - Lightning
+  - Rage
+  human_popular_26__evo_hero:
+  - Zap
+  - Giant
+  - MegaMinion
+  - Prince
+  - DarkPrince
+  - Bomber
+  - Lightning
+  - Rage
+  human_popular_27__ordinary:
+  - FirespiritHut
+  - Valkyrie
+  - Berserker
+  - IceSpirits
+  - GoblinHut
+  - BarbLog
+  - Poison
+  - Graveyard
+  human_popular_27__evo:
+  - FirespiritHut
+  - Valkyrie
+  - Berserker
+  - IceSpirits
+  - GoblinHut
+  - BarbLog
+  - Poison
+  - Graveyard
+  human_popular_27__hero:
+  - FirespiritHut
+  - Valkyrie
+  - Berserker
+  - IceSpirits
+  - GoblinHut
+  - BarbLog
+  - Poison
+  - Graveyard
+  human_popular_27__evo_hero:
+  - FirespiritHut
+  - Valkyrie
+  - Berserker
+  - IceSpirits
+  - GoblinHut
+  - BarbLog
+  - Poison
+  - Graveyard
+  human_popular_28__ordinary:
+  - Skeletons
+  - Berserker
+  - Wizard
+  - FireSpirits
+  - Xbow
+  - ElectroSpirit
+  - Elixir Collector
+  - IceSpirits
+  human_popular_28__evo:
+  - Skeletons
+  - Berserker
+  - Wizard
+  - FireSpirits
+  - Xbow
+  - ElectroSpirit
+  - Elixir Collector
+  - IceSpirits
+  human_popular_28__hero:
+  - Skeletons
+  - Berserker
+  - Wizard
+  - FireSpirits
+  - Xbow
+  - ElectroSpirit
+  - Elixir Collector
+  - IceSpirits
+  human_popular_28__evo_hero:
+  - Skeletons
+  - Berserker
+  - Wizard
+  - FireSpirits
+  - Xbow
+  - ElectroSpirit
+  - Elixir Collector
+  - IceSpirits
+  human_popular_29__ordinary:
+  - Knight
+  - Bowler
+  - BabyDragon
+  - Tornado
+  - ElectroGiant
+  - Lightning
+  - BarbLog
+  - GoblinHut
+  human_popular_29__evo:
+  - Knight
+  - Bowler
+  - BabyDragon
+  - Tornado
+  - ElectroGiant
+  - Lightning
+  - BarbLog
+  - GoblinHut
+  human_popular_29__hero:
+  - Knight
+  - Bowler
+  - BabyDragon
+  - Tornado
+  - ElectroGiant
+  - Lightning
+  - BarbLog
+  - GoblinHut
+  human_popular_29__evo_hero:
+  - Knight
+  - Bowler
+  - BabyDragon
+  - Tornado
+  - ElectroGiant
+  - Lightning
+  - BarbLog
+  - GoblinHut
+  human_popular_31__ordinary:
+  - ElectroDragon
+  - Balloon
+  - InfernoDragon
+  - RageBarbarian
+  - Bowler
+  - Freeze
+  - Tornado
+  - BarbLog
+  human_popular_31__evo:
+  - ElectroDragon
+  - Balloon
+  - InfernoDragon
+  - RageBarbarian
+  - Bowler
+  - Freeze
+  - Tornado
+  - BarbLog
+  human_popular_31__hero:
+  - ElectroDragon
+  - Balloon
+  - InfernoDragon
+  - RageBarbarian
+  - Bowler
+  - Freeze
+  - Tornado
+  - BarbLog
+  human_popular_31__evo_hero:
+  - ElectroDragon
+  - Balloon
+  - InfernoDragon
+  - RageBarbarian
+  - Bowler
+  - Freeze
+  - Tornado
+  - BarbLog
+  human_popular_32__ordinary:
+  - FirespiritHut
+  - Berserker
+  - Snowball
+  - GoblinDrill
+  - Poison
+  - Skeletons
+  - RoyalDelivery
+  - Cannon
+  human_popular_32__evo:
+  - FirespiritHut
+  - Berserker
+  - Snowball
+  - GoblinDrill
+  - Poison
+  - Skeletons
+  - RoyalDelivery
+  - Cannon
+  human_popular_32__hero:
+  - FirespiritHut
+  - Berserker
+  - Snowball
+  - GoblinDrill
+  - Poison
+  - Skeletons
+  - RoyalDelivery
+  - Cannon
+  human_popular_32__evo_hero:
+  - FirespiritHut
+  - Berserker
+  - Snowball
+  - GoblinDrill
+  - Poison
+  - Skeletons
+  - RoyalDelivery
+  - Cannon
+  royale_20261103_02__ordinary:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - Mortar
+  - Rascals
+  - SkeletonBalloon
+  royale_20261103_02__evo:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - Mortar
+  - Rascals
+  - SkeletonBalloon
+  royale_20261103_02__hero:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - Mortar
+  - Rascals
+  - SkeletonBalloon
+  royale_20261103_02__evo_hero:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - IceWizard
+  - Mortar
+  - Rascals
+  - SkeletonBalloon
+  royale_20261103_03__ordinary:
+  - Arrows
+  - Bomber
+  - AngryBarbarians
+  - Golem
+  - MiniPekka
+  - DarkWitch
+  - Phoenix
+  - Zap
+  royale_20261103_03__evo:
+  - Arrows
+  - Bomber
+  - AngryBarbarians
+  - Golem
+  - MiniPekka
+  - DarkWitch
+  - Phoenix
+  - Zap
+  royale_20261103_03__hero:
+  - Arrows
+  - Bomber
+  - AngryBarbarians
+  - Golem
+  - MiniPekka
+  - DarkWitch
+  - Phoenix
+  - Zap
+  royale_20261103_03__evo_hero:
+  - Arrows
+  - Bomber
+  - AngryBarbarians
+  - Golem
+  - MiniPekka
+  - DarkWitch
+  - Phoenix
+  - Zap
+  royale_20261103_04__ordinary:
+  - ElectroWizard
+  - AngryBarbarians
+  - Giant
+  - Heal
+  - MiniPekka
+  - Rage
+  - ZapMachine
+  - Zap
+  royale_20261103_04__evo:
+  - ElectroWizard
+  - AngryBarbarians
+  - Giant
+  - Heal
+  - MiniPekka
+  - Rage
+  - ZapMachine
+  - Zap
+  royale_20261103_04__hero:
+  - ElectroWizard
+  - AngryBarbarians
+  - Giant
+  - Heal
+  - MiniPekka
+  - Rage
+  - ZapMachine
+  - Zap
+  royale_20261103_04__evo_hero:
+  - ElectroWizard
+  - AngryBarbarians
+  - Giant
+  - Heal
+  - MiniPekka
+  - Rage
+  - ZapMachine
+  - Zap
+  royale_20261103_08__ordinary:
+  - BarbLog
+  - FirespiritHut
+  - GoblinHut
+  - Graveyard
+  - IceWizard
+  - Knight
+  - Poison
+  - Skeletons
+  royale_20261103_08__evo:
+  - BarbLog
+  - FirespiritHut
+  - GoblinHut
+  - Graveyard
+  - IceWizard
+  - Knight
+  - Poison
+  - Skeletons
+  royale_20261103_08__hero:
+  - BarbLog
+  - FirespiritHut
+  - GoblinHut
+  - Graveyard
+  - IceWizard
+  - Knight
+  - Poison
+  - Skeletons
+  royale_20261103_08__evo_hero:
+  - BarbLog
+  - FirespiritHut
+  - GoblinHut
+  - Graveyard
+  - IceWizard
+  - Knight
+  - Poison
+  - Skeletons
+  royale_20261103_10__ordinary:
+  - BarbLog
+  - Bats
+  - Cannon
+  - IceWizard
+  - Knight
+  - Lightning
+  - MinionGiant
+  - Skeletons
+  royale_20261103_10__evo:
+  - BarbLog
+  - Bats
+  - Cannon
+  - IceWizard
+  - Knight
+  - Lightning
+  - MinionGiant
+  - Skeletons
+  royale_20261103_10__hero:
+  - BarbLog
+  - Bats
+  - Cannon
+  - IceWizard
+  - Knight
+  - Lightning
+  - MinionGiant
+  - Skeletons
+  royale_20261103_10__evo_hero:
+  - BarbLog
+  - Bats
+  - Cannon
+  - IceWizard
+  - Knight
+  - Lightning
+  - MinionGiant
+  - Skeletons
+  royale_20261103_12__ordinary:
+  - ArcherQueen
+  - Cannon
+  - Earthquake
+  - IceSpirits
+  - RoyalDelivery
+  - RoyalHogs
+  - Skeletons
+  - Log
+  royale_20261103_12__evo:
+  - ArcherQueen
+  - Cannon
+  - Earthquake
+  - IceSpirits
+  - RoyalDelivery
+  - RoyalHogs
+  - Skeletons
+  - Log
+  royale_20261103_14__ordinary:
+  - Arrows
+  - Bowler
+  - Giant
+  - Snowball
+  - Graveyard
+  - SkeletonWarriors
+  - Witch
+  - MiniSparkys
+  royale_20261103_14__evo:
+  - Arrows
+  - Bowler
+  - Giant
+  - Snowball
+  - Graveyard
+  - SkeletonWarriors
+  - Witch
+  - MiniSparkys
+  royale_20261103_14__hero:
+  - Arrows
+  - Bowler
+  - Giant
+  - Snowball
+  - Graveyard
+  - SkeletonWarriors
+  - Witch
+  - MiniSparkys
+  royale_20261103_14__evo_hero:
+  - Arrows
+  - Bowler
+  - Giant
+  - Snowball
+  - Graveyard
+  - SkeletonWarriors
+  - Witch
+  - MiniSparkys
+  royale_20261103_15__ordinary:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - Ghost
+  royale_20261103_15__evo:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - Ghost
+  royale_20261103_15__hero:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - Ghost
+  royale_20261103_15__evo_hero:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - Ghost
+  royale_20261103_16__ordinary:
+  - Archer
+  - BarbLog
+  - ElectroSpirit
+  - GoblinHut
+  - IceWizard
+  - Knight
+  - Lightning
+  - RoyalHogs
+  royale_20261103_16__evo:
+  - Archer
+  - BarbLog
+  - ElectroSpirit
+  - GoblinHut
+  - IceWizard
+  - Knight
+  - Lightning
+  - RoyalHogs
+  royale_20261103_16__hero:
+  - Archer
+  - BarbLog
+  - ElectroSpirit
+  - GoblinHut
+  - IceWizard
+  - Knight
+  - Lightning
+  - RoyalHogs
+  royale_20261103_16__evo_hero:
+  - Archer
+  - BarbLog
+  - ElectroSpirit
+  - GoblinHut
+  - IceWizard
+  - Knight
+  - Lightning
+  - RoyalHogs
+  royale_20261103_17__ordinary:
+  - BabyDragon
+  - BarbLog
+  - Bowler
+  - ElectroGiant
+  - ElectroWizard
+  - GoblinHut
+  - Lightning
+  - Tornado
+  royale_20261103_17__evo:
+  - BabyDragon
+  - BarbLog
+  - Bowler
+  - ElectroGiant
+  - ElectroWizard
+  - GoblinHut
+  - Lightning
+  - Tornado
+  royale_20261103_17__hero:
+  - BabyDragon
+  - BarbLog
+  - Bowler
+  - ElectroGiant
+  - ElectroWizard
+  - GoblinHut
+  - Lightning
+  - Tornado
+  royale_20261103_17__evo_hero:
+  - BabyDragon
+  - BarbLog
+  - Bowler
+  - ElectroGiant
+  - ElectroWizard
+  - GoblinHut
+  - Lightning
+  - Tornado
+  royale_20261103_18__ordinary:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - Goblinstein
+  - MinionHorde
+  - Mortar
+  - WitchMother
+  royale_20261103_18__evo:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - Goblinstein
+  - MinionHorde
+  - Mortar
+  - WitchMother
+  royale_20261103_18__hero:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - Goblinstein
+  - MinionHorde
+  - Mortar
+  - WitchMother
+  royale_20261103_18__evo_hero:
+  - BarbLog
+  - MovingCannon
+  - Fireball
+  - GoblinGang
+  - Goblinstein
+  - MinionHorde
+  - Mortar
+  - WitchMother
+  giant_sparky_v1__evo:
+  - Giant
+  - ZapMachine
+  - MiniPekka
+  - Musketeer
+  - Minions
+  - Knight
+  - Zap
+  - Arrows
+  giant_sparky_v1__hero:
+  - Giant
+  - ZapMachine
+  - MiniPekka
+  - Musketeer
+  - Minions
+  - Knight
+  - Zap
+  - Arrows
+  giant_sparky_v1__evo_hero:
+  - Giant
+  - ZapMachine
+  - MiniPekka
+  - Musketeer
+  - Minions
+  - Knight
+  - Zap
+  - Arrows
+  hog_cycle_v1__evo:
+  - HogRider
+  - Musketeer
+  - Cannon
+  - Fireball
+  - Skeletons
+  - IceSpirits
+  - Log
+  - Knight
+  hog_cycle_v1__hero:
+  - HogRider
+  - Musketeer
+  - Cannon
+  - Fireball
+  - Skeletons
+  - IceSpirits
+  - Log
+  - Knight
+  hog_cycle_v1__evo_hero:
+  - HogRider
+  - Musketeer
+  - Cannon
+  - Fireball
+  - Skeletons
+  - IceSpirits
+  - Log
+  - Knight
+  graveyard_control_v1__evo:
+  - Graveyard
+  - Poison
+  - BabyDragon
+  - Tombstone
+  - Knight
+  - BarbLog
+  - IceWizard
+  - Tornado
+  graveyard_control_v1__hero:
+  - Graveyard
+  - Poison
+  - BabyDragon
+  - Tombstone
+  - Knight
+  - BarbLog
+  - IceWizard
+  - Tornado
+  graveyard_control_v1__evo_hero:
+  - Graveyard
+  - Poison
+  - BabyDragon
+  - Tombstone
+  - Knight
+  - BarbLog
+  - IceWizard
+  - Tornado
+  human_popular_05__ordinary:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - BarbLog
+  - Skeletons
+  human_popular_05__evo:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - BarbLog
+  - Skeletons
+  human_popular_05__hero:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - BarbLog
+  - Skeletons
+  human_popular_05__evo_hero:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - BarbLog
+  - Skeletons
+  human_popular_09__ordinary:
+  - ElectroDragon
+  - Berserker
+  - AngryBarbarians
+  - Golem
+  - SkeletonDragons
+  - Tornado
+  - BarbLog
+  - Elixir Collector
+  human_popular_09__evo:
+  - ElectroDragon
+  - Berserker
+  - AngryBarbarians
+  - Golem
+  - SkeletonDragons
+  - Tornado
+  - BarbLog
+  - Elixir Collector
+  human_popular_09__hero:
+  - ElectroDragon
+  - Berserker
+  - AngryBarbarians
+  - Golem
+  - SkeletonDragons
+  - Tornado
+  - BarbLog
+  - Elixir Collector
+  human_popular_09__evo_hero:
+  - ElectroDragon
+  - Berserker
+  - AngryBarbarians
+  - Golem
+  - SkeletonDragons
+  - Tornado
+  - BarbLog
+  - Elixir Collector
+  human_popular_23__ordinary:
+  - Zap
+  - Giant
+  - Bowler
+  - DarkWitch
+  - GoblinGang
+  - InfernoTower
+  - Miner
+  - Fireball
+  human_popular_23__evo:
+  - Zap
+  - Giant
+  - Bowler
+  - DarkWitch
+  - GoblinGang
+  - InfernoTower
+  - Miner
+  - Fireball
+  human_popular_23__hero:
+  - Zap
+  - Giant
+  - Bowler
+  - DarkWitch
+  - GoblinGang
+  - InfernoTower
+  - Miner
+  - Fireball
+  human_popular_23__evo_hero:
+  - Zap
+  - Giant
+  - Bowler
+  - DarkWitch
+  - GoblinGang
+  - InfernoTower
+  - Miner
+  - Fireball
+  human_popular_30__ordinary:
+  - Snowball
+  - Balloon
+  - Musketeer
+  - BombTower
+  - Skeletons
+  - IceGolemite
+  - BarbLog
+  - Miner
+  human_popular_30__evo:
+  - Snowball
+  - Balloon
+  - Musketeer
+  - BombTower
+  - Skeletons
+  - IceGolemite
+  - BarbLog
+  - Miner
+  human_popular_30__hero:
+  - Snowball
+  - Balloon
+  - Musketeer
+  - BombTower
+  - Skeletons
+  - IceGolemite
+  - BarbLog
+  - Miner
+  human_popular_30__evo_hero:
+  - Snowball
+  - Balloon
+  - Musketeer
+  - BombTower
+  - Skeletons
+  - IceGolemite
+  - BarbLog
+  - Miner
+  royale_20261103_07__ordinary:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - RageBarbarian
+  royale_20261103_07__evo:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - RageBarbarian
+  royale_20261103_07__hero:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - RageBarbarian
+  royale_20261103_07__evo_hero:
+  - Arrows
+  - Assassin
+  - BattleRam
+  - ElectroWizard
+  - FirespiritHut
+  - GiantSkeleton
+  - Heal
+  - RageBarbarian
+  human_popular_02__ordinary:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - Log
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - Skeletons
+  human_popular_02__evo:
+  - Cannon
+  - MightyMiner
+  - Firecracker
+  - Log
+  - HogRider
+  - ElectroSpirit
+  - Earthquake
+  - Skeletons
+  human_popular_08__ordinary:
+  - AngryBarbarians
+  - Giant
+  - Zap
+  - ElectroWizard
+  - ZapMachine
+  - Heal
+  - Rage
+  - DarkPrince
+  human_popular_08__evo:
+  - AngryBarbarians
+  - Giant
+  - Zap
+  - ElectroWizard
+  - ZapMachine
+  - Heal
+  - Rage
+  - DarkPrince
+  human_popular_08__hero:
+  - AngryBarbarians
+  - Giant
+  - Zap
+  - ElectroWizard
+  - ZapMachine
+  - Heal
+  - Rage
+  - DarkPrince
+  human_popular_08__evo_hero:
+  - AngryBarbarians
+  - Giant
+  - Zap
+  - ElectroWizard
+  - ZapMachine
+  - Heal
+  - Rage
+  - DarkPrince
+  human_popular_10__ordinary:
+  - AngryBarbarians
+  - GoldenKnight
+  - FirespiritHut
+  - ThreeMusketeers
+  - IceGolemite
+  - Zap
+  - Heal
+  - Elixir Collector
+  human_popular_10__evo:
+  - AngryBarbarians
+  - GoldenKnight
+  - FirespiritHut
+  - ThreeMusketeers
+  - IceGolemite
+  - Zap
+  - Heal
+  - Elixir Collector
+  human_popular_10__hero:
+  - AngryBarbarians
+  - GoldenKnight
+  - FirespiritHut
+  - ThreeMusketeers
+  - IceGolemite
+  - Zap
+  - Heal
+  - Elixir Collector
+  human_popular_10__evo_hero:
+  - AngryBarbarians
+  - GoldenKnight
+  - FirespiritHut
+  - ThreeMusketeers
+  - IceGolemite
+  - Zap
+  - Heal
+  - Elixir Collector
+  royale_20261103_01__ordinary:
+  - BarbLog
+  - Berserker
+  - MovingCannon
+  - ElectroWizard
+  - AngryBarbarians
+  - FirespiritHut
+  - Golem
+  - Zap
+  royale_20261103_01__evo:
+  - BarbLog
+  - Berserker
+  - MovingCannon
+  - ElectroWizard
+  - AngryBarbarians
+  - FirespiritHut
+  - Golem
+  - Zap
+  royale_20261103_01__hero:
+  - BarbLog
+  - Berserker
+  - MovingCannon
+  - ElectroWizard
+  - AngryBarbarians
+  - FirespiritHut
+  - Golem
+  - Zap
+  royale_20261103_01__evo_hero:
+  - BarbLog
+  - Berserker
+  - MovingCannon
+  - ElectroWizard
+  - AngryBarbarians
+  - FirespiritHut
+  - Golem
+  - Zap
+  royale_20261103_06__ordinary:
+  - BlowdartGoblin
+  - GoblinBarrel
+  - IceSpirits
+  - InfernoTower
+  - Knight
+  - Princess
+  - SkeletonArmy
+  - Log
+  royale_20261103_06__evo:
+  - BlowdartGoblin
+  - GoblinBarrel
+  - IceSpirits
+  - InfernoTower
+  - Knight
+  - Princess
+  - SkeletonArmy
+  - Log
+  royale_20261103_06__hero:
+  - BlowdartGoblin
+  - GoblinBarrel
+  - IceSpirits
+  - InfernoTower
+  - Knight
+  - Princess
+  - SkeletonArmy
+  - Log
+  royale_20261103_06__evo_hero:
+  - BlowdartGoblin
+  - GoblinBarrel
+  - IceSpirits
+  - InfernoTower
+  - Knight
+  - Princess
+  - SkeletonArmy
+  - Log
+  user_giant_sparky_pump_plain__evo:
+  - Wizard
+  - DarkPrince
+  - ZapMachine
+  - Elixir Collector
+  - Fireball
+  - Giant
+  - Rage
+  - MiniPekka
+  user_giant_sparky_pump_plain__hero:
+  - Wizard
+  - DarkPrince
+  - ZapMachine
+  - Elixir Collector
+  - Fireball
+  - Giant
+  - Rage
+  - MiniPekka
+  user_giant_sparky_pump_plain__evo_hero:
+  - Wizard
+  - DarkPrince
+  - ZapMachine
+  - Elixir Collector
+  - Fireball
+  - Giant
+  - Rage
+  - MiniPekka
+  user_giant_sparky_pump_horde_plain:
+  - ZapMachine
+  - Elixir Collector
+  - Wizard
+  - Rage
+  - Giant
+  - DarkPrince
+  - MiniPekka
+  - MinionHorde
+slots:
+  human_popular_01:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_03:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_04:
+  - 1
+  - 2
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_06:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_07:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_11:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_12:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_13:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_14:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_15:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_16:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_17:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_18:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_19:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_20:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_21:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_22:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_24:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_25:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_26:
+  - 1
+  - 2
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_27:
+  - 1
+  - 2
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_28:
+  - 1
+  - 2
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_29:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_31:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_32:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_02:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 1
+  - 0
+  - 1
+  royale_20261103_03:
+  - 0
+  - 0
+  - 1
+  - 0
+  - 2
+  - 0
+  - 0
+  - 1
+  royale_20261103_04:
+  - 0
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  royale_20261103_08:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 2
+  - 1
+  - 0
+  - 0
+  royale_20261103_09:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 1
+  royale_20261103_10:
+  - 0
+  - 1
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_12:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  royale_20261103_13:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 1
+  - 0
+  royale_20261103_14:
+  - 0
+  - 2
+  - 0
+  - 1
+  - 0
+  - 0
+  - 1
+  - 0
+  royale_20261103_15:
+  - 0
+  - 0
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 1
+  royale_20261103_16:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 1
+  royale_20261103_17:
+  - 1
+  - 0
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_18:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 0
+  giant_sparky_v1:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  hog_cycle_v1:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  graveyard_control_v1:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_05:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_09:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_23:
+  - 1
+  - 2
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_30:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_07:
+  - 0
+  - 0
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 1
+  human_popular_02:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_08:
+  - 1
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_10:
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_01:
+  - 0
+  - 0
+  - 0
+  - 2
+  - 1
+  - 0
+  - 0
+  - 1
+  royale_20261103_06:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 1
+  - 0
+  user_giant_sparky_pump_plain:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_01__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_01__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_01__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_01__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_03__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_03__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_03__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_03__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_04__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_04__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_04__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_04__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_06__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_06__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_06__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_06__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_07__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_07__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_07__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_07__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_11__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_11__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_11__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_11__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_12__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_12__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_12__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_12__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_13__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_13__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_13__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_13__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_14__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_14__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_14__hero:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  human_popular_14__evo_hero:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  human_popular_15__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_15__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_15__hero:
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_15__evo_hero:
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_16__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_16__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_16__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_16__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_17__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_17__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_18__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_18__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_18__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_18__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_19__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_19__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_19__hero:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  human_popular_19__evo_hero:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  human_popular_20__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_20__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_20__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_20__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_21__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_21__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_21__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_21__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_22__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_22__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_22__hero:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  human_popular_22__evo_hero:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  human_popular_24__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_24__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_24__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_24__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_25__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_25__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_25__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_25__evo_hero:
+  - 2
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_26__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_26__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_26__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_26__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_27__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_27__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_27__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_27__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_28__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_28__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_28__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_28__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_29__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_29__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_29__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_29__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_31__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_31__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_31__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_31__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_32__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_32__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_32__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_32__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_02__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_02__evo:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  royale_20261103_02__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_02__evo_hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  royale_20261103_03__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_03__evo:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_03__hero:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  royale_20261103_03__evo_hero:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  royale_20261103_04__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_04__evo:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_04__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_04__evo_hero:
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_08__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_08__evo:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_08__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_08__evo_hero:
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_10__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_10__evo:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_10__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_10__evo_hero:
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_12__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_12__evo:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_14__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_14__evo:
+  - 0
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_14__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_14__evo_hero:
+  - 0
+  - 2
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_15__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_15__evo:
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_15__hero:
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_15__evo_hero:
+  - 0
+  - 0
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_16__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_16__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_16__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_16__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_17__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_17__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_17__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_17__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_18__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_18__evo:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  royale_20261103_18__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_18__evo_hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  giant_sparky_v1__evo:
+  - 0
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  giant_sparky_v1__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  giant_sparky_v1__evo_hero:
+  - 2
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  hog_cycle_v1__evo:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  hog_cycle_v1__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  hog_cycle_v1__evo_hero:
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  graveyard_control_v1__evo:
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  graveyard_control_v1__hero:
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  graveyard_control_v1__evo_hero:
+  - 0
+  - 0
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_05__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_05__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_05__hero:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  human_popular_05__evo_hero:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  human_popular_09__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_09__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_09__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_09__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_23__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_23__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_23__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_23__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_30__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_30__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_30__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_30__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_07__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_07__evo:
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_07__hero:
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_07__evo_hero:
+  - 0
+  - 0
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_02__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_02__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_08__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_08__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_08__hero:
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_08__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_10__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_10__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  human_popular_10__hero:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  human_popular_10__evo_hero:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  royale_20261103_01__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_01__evo:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  royale_20261103_01__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_01__evo_hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  royale_20261103_06__ordinary:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_06__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  royale_20261103_06__hero:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  royale_20261103_06__evo_hero:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  user_giant_sparky_pump_plain__evo:
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  user_giant_sparky_pump_plain__hero:
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  user_giant_sparky_pump_plain__evo_hero:
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  user_giant_sparky_pump_horde_plain: [0, 0, 0, 0, 0, 0, 0, 0]
+provenance:
+  human_popular_01:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 383
+  human_popular_03:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 204
+  human_popular_04:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 200
+  human_popular_06:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 180
+  human_popular_07:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 171
+    additional_sources:
+    - source: https://royaleapi.com/decks/stats/cannon,dart-goblin,goblin-barrel-ev1,ice-spirit,princess,skeleton-army-ev1,valkyrie-hero,wall-breakers
+      retrieved_date: '2026-11-03'
+  human_popular_11:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 163
+  human_popular_12:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 162
+  human_popular_13:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 160
+  human_popular_14:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 160
+  human_popular_15:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 156
+  human_popular_16:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 152
+  human_popular_17:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 149
+  human_popular_18:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 148
+    additional_sources:
+    - source: https://royaleapi.com/decks/stats/archers-ev1,electro-spirit,fireball,knight-hero,skeletons,tesla-ev1,the-log,x-bow
+      retrieved_date: '2026-11-03'
+  human_popular_19:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 136
+  human_popular_20:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 133
+  human_popular_21:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 132
+  human_popular_22:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 128
+  human_popular_24:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 122
+  human_popular_25:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 120
+  human_popular_26:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 120
+  human_popular_27:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 119
+  human_popular_28:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 116
+  human_popular_29:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 113
+  human_popular_31:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 105
+  human_popular_32:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 99
+  royale_20261103_02:
+    source: https://royaleapi.com/decks/stats/barbarian-barrel,cannon-cart,fireball,goblin-gang,ice-wizard-hero,mortar-ev1,rascals,skeleton-barrel-ev1
+    retrieved_date: '2026-11-03'
+  royale_20261103_03:
+    source: https://royaleapi.com/decks/stats/arrows,bomber,elite-barbarians-ev1,golem,mini-pekka-hero,night-witch,phoenix,zap-ev1
+    retrieved_date: '2026-11-03'
+  royale_20261103_04:
+    source: https://royaleapi.com/decks/stats/electro-wizard,elite-barbarians-ev1,giant-hero,heal-spirit,mini-pekka,rage,sparky,zap-ev1
+    retrieved_date: '2026-11-03'
+  royale_20261103_08:
+    source: https://royaleapi.com/decks/stats/barbarian-barrel,furnace-ev1,goblin-hut,graveyard,ice-wizard-hero,knight-ev1,poison,skeletons
+    retrieved_date: '2026-11-03'
+  royale_20261103_09:
+    source: https://royaleapi.com/decks/stats/barbarian-barrel,furnace-ev1,goblin-hut,graveyard,ice-wizard-hero,knight,poison,skeletons-ev1
+    retrieved_date: '2026-11-03'
+  royale_20261103_10:
+    source: https://royaleapi.com/decks/stats/barbarian-barrel,bats-ev1,cannon-ev1,ice-wizard-hero,knight,lightning,minion-giant,skeletons
+    retrieved_date: '2026-11-03'
+  royale_20261103_12:
+    source: https://royaleapi.com/decks/stats/archer-queen,cannon-ev1,earthquake,ice-spirit,royal-delivery,royal-hogs-ev1,skeletons,the-log
+    retrieved_date: '2026-11-03'
+  royale_20261103_13:
+    source: https://royaleapi.com/decks/stats/cannon-ev1,fireball,hog-rider,ice-golem,ice-spirit,musketeer-hero,skeletons-ev1,the-log
+    retrieved_date: '2026-11-03'
+  royale_20261103_14:
+    source: https://royaleapi.com/decks/stats/arrows,bowler-hero,giant,giant-snowball-ev1,graveyard,guards,witch-ev1,zappies
+    retrieved_date: '2026-11-03'
+  royale_20261103_15:
+    source: https://royaleapi.com/decks/stats/arrows,bandit,battle-ram-ev1,electro-wizard-hero,furnace,giant-skeleton,heal-spirit,royal-ghost-ev1
+    retrieved_date: '2026-11-03'
+  royale_20261103_16:
+    source: https://royaleapi.com/decks/stats/archers-ev1,barbarian-barrel,electro-spirit,goblin-hut,ice-wizard-hero,knight,lightning,royal-hogs-ev1
+    retrieved_date: '2026-11-03'
+  royale_20261103_17:
+    source: https://royaleapi.com/decks/stats/baby-dragon-ev1,barbarian-barrel,bowler-hero,electro-giant-ev1,electro-wizard,goblin-hut,lightning,tornado
+    retrieved_date: '2026-11-03'
+  royale_20261103_18:
+    source: https://royaleapi.com/decks/stats/barbarian-barrel,cannon-cart,fireball,goblin-gang,goblinstein,minion-horde-ev1,mortar-ev1,mother-witch
+    retrieved_date: '2026-11-03'
+  giant_sparky_v1:
+    source_config: configs/decks_expansion6.yaml
+    ordinary_slot_forms: true
+  hog_cycle_v1:
+    source_config: configs/decks_expansion6.yaml
+    ordinary_slot_forms: true
+  graveyard_control_v1:
+    source_config: configs/decks_expansion6.yaml
+    ordinary_slot_forms: true
+  human_popular_05:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 188
+  human_popular_09:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 169
+  human_popular_23:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 124
+  human_popular_30:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 105
+  royale_20261103_07:
+    source: https://royaleapi.com/decks/stats/arrows,bandit,battle-ram-ev1,electro-wizard-hero,furnace,giant-skeleton,heal-spirit,lumberjack-ev1
+    retrieved_date: '2026-11-03'
+  human_popular_02:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 321
+  human_popular_08:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 171
+  human_popular_10:
+    source: IL_Replay
+    revision: 059d43a02138a34b1b3009cc2acc7630fb99a638
+    occurrences_in_scanned_shards: 163
+  royale_20261103_01:
+    source: https://royaleapi.com/decks/stats/barbarian-barrel,berserker,cannon-cart,electro-wizard-hero,elite-barbarians-ev1,furnace,golem,zap-ev1
+    retrieved_date: '2026-11-03'
+  royale_20261103_06:
+    source: https://royaleapi.com/decks/stats/dart-goblin,goblin-barrel-ev1,ice-spirit,inferno-tower,knight-hero,princess,skeleton-army-ev1,the-log
+    retrieved_date: '2026-11-03'
+  user_giant_sparky_pump_plain:
+    source: user screenshot 2026-11-15
+    forms: ordinary only; no evolution or hero skills
+  user_giant_sparky_pump_horde_plain:
+    source: user screenshot 2026-11-17, preset 2
+    forms: ordinary only; no evolution or hero skills
+compatibility: reset and 120 legal-action decisions passed; not exhaustive mechanics
+  QA
+split: train_all51
+source_aliases:
+  royale_20261103_05: human_popular_07
+  royale_20261103_11: human_popular_18
+pool_purpose: ppo_training_with_form_augmentation
+deck_sampling:
+  mode: family_balanced
+  ordinary_fraction: 0.5
+augmentation_source: configs\decks_all51.yaml
+augmentation_table_version: 16.635.3

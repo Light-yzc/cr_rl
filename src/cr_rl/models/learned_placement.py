@@ -150,17 +150,38 @@ class SpatialResidual(nn.Module):
             (torch.arange(WIDTH, device=device).float()+.5)/WIDTH, indexing='ij')
         self.register_buffer('grid_xy', torch.stack((xx, yy))[None], persistent=False)
 
+    def _project_spatial(self, entities, entity_mask, entity_xy):
+        safe = torch.where(entity_mask[..., None].bool(), entities.float(), 0.)
+        sums, count = bilinear_scatter(self.entity_projection(safe), entity_xy, entity_mask)
+        grid = self.grid_xy.expand(len(entities), -1, -1, -1)
+        return self.spatial_input(torch.cat((sums/count.clamp_min(1e-6), count.log1p(), grid), 1))
+
+    def _conditioned_logits(self, spatial, context, card):
+        condition = self.condition_norm(torch.cat((context.float(), card.float()), -1))
+        for block in self.blocks:
+            spatial = block(spatial, condition)
+        return self.output(spatial).flatten(1)
+
     def residual_logits(self, context, entities, entity_mask, card_features, slots, entity_xy):
         with torch.autocast(device_type=context.device.type, enabled=False):
-            safe = torch.where(entity_mask[..., None].bool(), entities.float(), 0.)
-            sums, count = bilinear_scatter(self.entity_projection(safe), entity_xy, entity_mask)
-            spatial = torch.cat((sums/count.clamp_min(1e-6), count.log1p(), self.grid_xy.expand(len(context), -1, -1, -1)), 1)
-            spatial = self.spatial_input(spatial)
-            card = card_features.float().gather(1, slots[:, None, None].expand(-1, 1, self.card_dim)).squeeze(1)
-            condition = self.condition_norm(torch.cat((context.float(), card), -1))
-            for block in self.blocks:
-                spatial = block(spatial, condition)
-            return self.output(spatial).flatten(1)
+            spatial = self._project_spatial(entities, entity_mask, entity_xy)
+            card = card_features.gather(1, slots[:, None, None].expand(-1, 1, self.card_dim)).squeeze(1)
+            return self._conditioned_logits(spatial, context, card)
+
+    def legal_residual_logits(self, context, entities, entity_mask, card_features, entity_xy, legal_slots):
+        with torch.autocast(device_type=context.device.type, enabled=False):
+            frames = len(context)
+            slots, rows = legal_slots.transpose(0, 1).nonzero(as_tuple=True)
+            logits = context.new_zeros(frames * 4, TILES, dtype=torch.float32)
+            if len(rows):
+                spatial = self._project_spatial(entities, entity_mask, entity_xy)
+                residuals = []
+                # Keep each convolution batch at most as large as one dense slot.
+                for chunk_rows, chunk_slots in zip(rows.split(frames), slots.split(frames), strict=True):
+                    residuals.append(self._conditioned_logits(
+                        spatial[chunk_rows], context[chunk_rows], card_features[chunk_rows, chunk_slots]))
+                logits = logits.index_copy(0, rows * 4 + slots, torch.cat(residuals))
+            return logits.reshape(frames, 4, TILES)
 
 
 class CardLocationResidual(nn.Module):
@@ -262,7 +283,8 @@ class PlacementAdapter(nn.Module):
         if next(self.decoder.parameters()).dtype != torch.float32:
             raise ValueError('Learned placement parameters require FP32; use autocast for the trunk')
 
-    def forward(self, context, entities, entity_mask, card_features, entity_xy=None, card_ids=None):
+    def forward(self, context, entities, entity_mask, card_features, entity_xy=None, card_ids=None, *,
+                legal_slots=None):
         self._validate(context, entities, entity_mask, card_features, entity_xy, card_ids)
         variant, decoder = self.definition['variant'], self.decoder
         base = decoder
@@ -276,9 +298,18 @@ class PlacementAdapter(nn.Module):
             output = output + prior.prior_logits(card_ids)
         if variant in ('spatial_cnn', 'card_prior_cnn_001'):
             spatial = decoder.spatial if variant == 'card_prior_cnn_001' else decoder
-            residuals = [spatial.residual_logits(context, entities, entity_mask, card_features,
-                torch.full((len(context),), slot, dtype=torch.long, device=context.device), entity_xy) for slot in range(4)]
-            output = output + torch.stack(residuals, 1)
+            if legal_slots is None:
+                residuals = [spatial.residual_logits(context, entities, entity_mask, card_features,
+                    torch.full((len(context),), slot, dtype=torch.long, device=context.device), entity_xy)
+                    for slot in range(4)]
+                output = output + torch.stack(residuals, 1)
+            else:
+                # These callers mask unavailable slots from the joint distribution.
+                if (legal_slots.shape != (len(context), 4) or legal_slots.dtype != torch.bool
+                        or legal_slots.device != context.device):
+                    raise ValueError('Expected a boolean legal slot mask [B,4] on the placement device')
+                output = output + spatial.legal_residual_logits(
+                    context, entities, entity_mask, card_features, entity_xy, legal_slots)
         return output / self.definition['temperature']
 
     def forward_gt(self, context, entities, entity_mask, card_features, slots, entity_xy=None, card_ids=None):

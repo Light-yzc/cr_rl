@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
+import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
@@ -54,8 +57,10 @@ class CrForgeVector:
             self.backend_commit = subprocess.check_output(
                 ["git", "-C", str(vendor), "rev-parse", "HEAD"], text=True
             ).strip()
-            if self.backend_commit != expected_commit:
-                raise ValueError(f"Simulator revision differs from pinned {expected_commit}")
+        elif (vendor / 'PACKAGED_REVISION').is_file():
+            self.backend_commit = (vendor / 'PACKAGED_REVISION').read_text().strip()
+        if self.backend_commit is not None and self.backend_commit != expected_commit:
+            raise ValueError(f"Simulator revision differs from pinned {expected_commit}")
         deck_cfg = load_yaml("deck.yaml")
         self.deck = deck_cfg["cards"]
         self.level = int(deck_cfg["level"])
@@ -272,6 +277,13 @@ class IndependentBattles:
         if count < 1 or threads < 1:
             raise ValueError("Positive environment and thread counts are required")
         self.threads = min(count, threads)
+        diagnostic = os.getenv("CRRL_NATIVE_STEP_DIAGNOSTIC_SECONDS") if self.threads > 1 else None
+        self._step_diagnostic_seconds = float(diagnostic) if diagnostic else None
+        if self._step_diagnostic_seconds is not None and not (
+            np.isfinite(self._step_diagnostic_seconds) and self._step_diagnostic_seconds > 0
+        ):
+            raise ValueError("CRRL_NATIVE_STEP_DIAGNOSTIC_SECONDS must be finite and positive")
+        self._diagnostic_reset_seeds = [None] * count if diagnostic else None
         self._executor = (
             ThreadPoolExecutor(max_workers=self.threads, thread_name_prefix="battle-lane")
             if self.threads > 1 else None
@@ -283,6 +295,9 @@ class IndependentBattles:
         for name in ("observations", "masks", "actions", "rewards", "dones", "infos"):
             example = getattr(self.lanes[0], name)
             setattr(self, name, np.concatenate([example.copy() for _ in range(count)], axis=0))
+        if diagnostic:
+            schema = getattr(self.lanes[0], "schema", None)
+            self._diagnostic_tick_column = getattr(schema, "info", {}).get("tick")
 
     def __getattr__(self, name):
         return getattr(self.lanes[0], name)
@@ -308,6 +323,38 @@ class IndependentBattles:
         else:
             self.lanes[index].reset([seed], deck0, deck1, slots0, slots1)
         self._sync(index)
+        if self._diagnostic_reset_seeds is not None:
+            self._diagnostic_reset_seeds[index] = int(seed)
+
+    def fork_from_lane(self, source_vector, source_index: int, target_indices) -> None:
+        targets = [int(i) for i in target_indices]
+        if not targets:
+            return
+        src_lane = source_vector.lanes[int(source_index)]
+        for dst_idx in targets:
+            self.lanes[dst_idx].fork_from(src_lane, 0, -1, [0])
+            self._sync(dst_idx)
+
+    def fork_tasks_parallel(self, fork_groups) -> None:
+        if not fork_groups:
+            return
+        grouped: dict[tuple[int, int], tuple[object, int, list[int]]] = {}
+        for src_vec, src_idx, targets in fork_groups:
+            key = (id(src_vec), int(src_idx))
+            if key not in grouped:
+                grouped[key] = (src_vec, int(src_idx), [])
+            grouped[key][2].extend(int(i) for i in targets)
+        items = list(grouped.values())
+        if self._executor is None or len(items) <= 1:
+            for src_vec, src_idx, targets in items:
+                self.fork_from_lane(src_vec, src_idx, targets)
+            return
+        futures = [
+            self._executor.submit(self.fork_from_lane, src_vec, src_idx, targets)
+            for src_vec, src_idx, targets in items
+        ]
+        for fut in futures:
+            fut.result()
 
     def _step_lane(self, index):
         lane = self.lanes[index]
@@ -315,16 +362,64 @@ class IndependentBattles:
         lane.step()
         self._sync(index)
 
-    def step(self):
-        if self._executor is None:
-            for index in range(len(self.lanes)):
-                self._step_lane(index)
+    def _step_batch(self, batch):
+        for index in batch:
+            lane = self.lanes[index]
+            lane.actions[:] = self.actions[index : index + 1]
+            lane.step()
+            self._sync(index)
+
+    def _report_slow_step(self, pending_lanes):
+        frames = sys._current_frames()
+        stacks = []
+        caller = threading.current_thread()
+        pending = set(pending_lanes)
+        for thread in threading.enumerate():
+            frame = frames.get(thread.ident)
+            worker_frame = frame
+            lane = None
+            while worker_frame is not None:
+                if (worker_frame.f_code is IndependentBattles._step_lane.__code__
+                        and worker_frame.f_locals.get("self") is self):
+                    lane = worker_frame.f_locals.get("index")
+                    break
+                worker_frame = worker_frame.f_back
+            if frame is not None and (thread is caller or lane in pending):
+                stacks.append(dict(thread=thread.name, native_id=thread.native_id, lane=lane,
+                                   stack=traceback.format_stack(frame, limit=12)))
+                if len(stacks) == 16:
+                    break
+        tick = self._diagnostic_tick_column
+        print(json.dumps(dict(event="native_step_slow", timeout_seconds=self._step_diagnostic_seconds,
+            pending_lanes=[dict(lane=i, reset_seed=self._diagnostic_reset_seeds[i],
+                last_synced_tick=int(self.infos[i, tick]) if tick is not None else None,
+                actions=self.actions[i].tolist()) for i in pending_lanes],
+            python_stacks=stacks)), file=sys.stderr, flush=True)
+
+    def step_lanes(self, indices):
+        targets = [int(index) for index in indices]
+        if not targets:
             return
-        futures = [self._executor.submit(self._step_lane, i) for i in range(len(self.lanes))]
+        if self._executor is None or len(targets) == 1:
+            self._step_batch(targets)
+            return
+        n_chunks = min(len(targets), self.threads * 2)
+        chunks = [targets[i::n_chunks] for i in range(n_chunks)]
+        futures = [self._executor.submit(self._step_batch, ch) for ch in chunks]
         # Join every lane on failure: reset/close must not race an unfinished step.
-        wait(futures)
+        _, pending = wait(futures, timeout=self._step_diagnostic_seconds)
+        if pending:
+            try:
+                self._report_slow_step([idx for ch, future in zip(chunks, futures) if future in pending for idx in ch])
+            except Exception:
+                # A failed diagnostic must not bypass the join or mask a lane's exception.
+                pass
+            wait(pending)
         for future in futures:
             future.result()
+
+    def step(self):
+        self.step_lanes(range(len(self.lanes)))
 
     def info(self, index):
         return self.lanes[index].info(0)

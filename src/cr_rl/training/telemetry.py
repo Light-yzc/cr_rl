@@ -17,7 +17,7 @@ class TrainingTelemetry:
         run.define_metric("charts/optimizer_steps", hidden=True)
         run.define_metric("charts/critic_optimizer_steps", hidden=True)
         run.define_metric("critic/*", step_metric="charts/critic_optimizer_steps")
-        for group in ("policy", "selfplay", "value", "performance", "reward"):
+        for group in ("policy", "selfplay", "value", "performance", "reward", "awbc"):
             run.define_metric(group + "/*", step_metric="charts/learner_samples")
         run.define_metric("ppo/*", step_metric="charts/optimizer_steps")
         # These were accidentally emitted as charts by the first supervisor version.
@@ -34,7 +34,17 @@ class TrainingTelemetry:
             "learner_samples": samples,
         }
         values = {"charts/learner_samples": samples}
-        if phase in ("policy", "targets"):
+        if phase in ('awbc_playbuffer', 'expert_bc'):
+            prefix = 'awbc' if phase == 'awbc_playbuffer' else 'expert_bc'
+            for key,value in event.items():
+                if key not in ('phase','update') and isinstance(value,(int,float)) and math.isfinite(value):
+                    values[f'{prefix}/{key}']=value
+            if phase == 'expert_bc':
+                for group in ('baseline','validation'):
+                    for key,value in event.get(group, {}).items():
+                        if isinstance(value,(int,float)) and math.isfinite(value):
+                            values[f'expert_bc/{group}_{key}'] = value
+        elif phase in ("policy", "targets"):
             group = "policy" if phase == "policy" else "value"
             for key, value in event.items():
                 if key not in ("phase", "update", "learner_samples_total", "time_unix"):
@@ -121,6 +131,10 @@ class TrainingTelemetry:
             values["ppo_update/" + key] = value
         for key, value in summary.get("reward_component_sums", {}).items():
             values[f"reward/{key}_sum"] = value
+        for group in ('army_elixir_diagnostics','army_reward_distribution'):
+            for key,value in summary.get(group,{}).items():
+                if isinstance(value,(int,float)) and math.isfinite(value):
+                    values[f'reward/{group}/{key}']=value
         if "learner_reward_sum" in summary:
             values["reward/training_sum"] = summary["learner_reward_sum"]
         if "learner_raw_reward_sum" in summary:

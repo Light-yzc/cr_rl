@@ -1,0 +1,7 @@
+{
+  "run_name": "sparky_bc_full_train",
+  "expert_bc": true,
+  "expert_bc_dataset": "/content/crrl_sparky_bc_all_train_20261120",
+  "expert_bc_interval": 1,
+  "expert_bc_sequences": 48
+}

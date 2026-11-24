@@ -11,6 +11,7 @@ from collections import deque
 from contextlib import nullcontext
 import gc
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -23,7 +24,7 @@ from cr_rl.data.observations import CrForgeObservationAdapter
 from cr_rl.evaluation.cohort import paired_match_specs
 from cr_rl.models import ActorCritic, ActorPolicy, ModelConfig
 from cr_rl.models.policy import spatial_features
-from cr_rl.models.state_policy import StateActorCritic, state_model_from_checkpoint
+from cr_rl.models.state_policy import StateActorCritic, slice_memory, state_model_from_checkpoint
 from cr_rl.training.persistence import atomic_json, file_sha256
 
 
@@ -120,11 +121,13 @@ def load_frozen_policy(path, device, placement_decoder=None):
 
 class PolicyStream:
     """One policy, one episode, one seat; never share mutable recurrent memory."""
-    def __init__(self, model, adapter, device, *, precision="fp16", sampling_seed=0):
+    def __init__(self, model, adapter, device, *, precision="fp16", sampling_seed=0,
+                 action_mode="sample"):
         self.model=model
         self.adapter=adapter
         self.device=torch.device(device)
         self.precision=precision
+        self.action_mode=action_mode
         self.state=None
         self.history=deque(maxlen=model.cfg.context_len)
         self.decisions=0
@@ -178,8 +181,12 @@ class PolicyStream:
                     hand_card_ids=hands,deck_card_ids=decks,enemy_seen_card_ids=seen,compute_value=False)
         if not torch.isfinite(logp).all():
             raise FloatingPointError("Nonfinite frozen-policy log probabilities")
-        probabilities=logp.float().exp()
-        action=int(torch.multinomial(probabilities,1,generator=self.generator).cpu().item())
+        if self.action_mode == "argmax":
+            mask = torch.as_tensor(legal, device=self.device, dtype=torch.bool)
+            action = int(logp.masked_fill(~mask, -torch.inf).argmax(dim=-1).item())
+        else:
+            probabilities=logp.float().exp()
+            action=int(torch.multinomial(probabilities,1,generator=self.generator).cpu().item())
         latency=time.perf_counter()-started
         if not bool(legal[action]):
             raise ValueError("Frozen policy sampled an illegal action")
@@ -187,12 +194,71 @@ class PolicyStream:
         return action,latency
 
 
+class BatchedArgmaxStream:
+    """Advance one frozen v3 policy across the active games of a wave."""
+
+    def __init__(self, model, adapter, device, *, precision):
+        self.model = model
+        self.adapter = adapter
+        self.device = torch.device(device)
+        self.precision = precision
+        self.state = None
+        self.lanes = None
+        self.hand_indices = list(adapter.schema.header["hand_card"])
+
+    @torch.inference_mode()
+    def sample(self, raw, legal, lanes):
+        started = time.perf_counter()
+        # Games in a wave only leave the active set. Keep the same batched
+        # memory between decisions and compact it only after a game ends.
+        if self.lanes is not None and len(lanes) != len(self.lanes):
+            self.state = slice_memory(self.state, np.searchsorted(self.lanes, lanes))
+        self.lanes = lanes
+        tensors = [torch.as_tensor(value, device=self.device) for value in self.adapter(raw)]
+        hands = torch.as_tensor(raw[:, self.hand_indices], device=self.device)
+        mask = torch.as_tensor(legal, device=self.device, dtype=torch.bool)
+        with torch.autocast(self.device.type, dtype=torch.float16, enabled=self.precision == "fp16"):
+            if self.state is None:
+                self.state = self.model.initial_state(len(lanes), device=self.device)
+            logp, _, self.state = self.model.step(
+                *tensors, mask, state=self.state, hand_card_ids=hands, compute_value=False
+            )
+        if not torch.isfinite(logp).all():
+            raise FloatingPointError("Nonfinite frozen-policy log probabilities")
+        masked = logp.float().masked_fill(~mask, -torch.inf)
+        bsz = len(lanes)
+        wait_lp = masked[:, 0:1].clone()
+        if "elixir" in self.adapter.schema.header:
+            elix_idx = self.adapter.schema.header["elixir"][0]
+            near_full = torch.as_tensor(raw[:, elix_idx] >= 97000, device=self.device, dtype=torch.bool)
+            has_non_wait = mask[:, 1:].any(dim=-1)
+            wait_lp = torch.where((near_full & has_non_wait)[:, None], torch.full_like(wait_lp, -torch.inf), wait_lp)
+        slot_tiles = masked[:, 1:2305].reshape(bsz, 4, 576)
+        slot_lp = torch.logsumexp(slot_tiles, dim=-1)
+        abil_lp = masked[:, 2305:]
+        macro_choice = torch.cat((wait_lp, slot_lp, abil_lp), dim=-1).argmax(dim=-1)
+        best_tile_per_slot = slot_tiles.argmax(dim=-1)
+        actions_t = torch.zeros(bsz, dtype=torch.long, device=self.device)
+        is_slot = (macro_choice >= 1) & (macro_choice <= 4)
+        if is_slot.any():
+            sl = macro_choice[is_slot] - 1
+            tl = best_tile_per_slot[is_slot, sl]
+            actions_t[is_slot] = 1 + sl * 576 + tl
+        is_abil = macro_choice >= 5
+        if is_abil.any():
+            actions_t[is_abil] = 2305 + (macro_choice[is_abil] - 5)
+        actions = actions_t.cpu().numpy()
+        if not legal[np.arange(bsz), actions].all():
+            raise ValueError("Frozen policy selected an illegal action")
+        return actions, time.perf_counter() - started
+
+
 def new_decision_audit():
     return {"decisions":0,"wait_decisions":0,"forced_wait_decisions":0,
         "card_requests":0,"ability_requests":0,"requested_card_elixir_total":0.,
         "requested_cost_at_least5":0,"full_elixir_wait_legal_seconds":0.,
         "longest_full_elixir_wait_legal_seconds":0.,"illegal_submissions":0,
-        "_full_wait_run":0}
+        "_full_wait_run":0,"_last_card_request":None,"_card_request_gap_steps":0}
 
 
 def record_decision(audit, raw, legal, action, schema):
@@ -202,6 +268,10 @@ def record_decision(audit, raw, legal, action, schema):
     audit["card_requests"]+=int(0<action<2305)
     audit["ability_requests"]+=int(action>=2305)
     if 0<action<2305:
+        previous = audit["_last_card_request"]
+        if previous is not None:
+            audit["_card_request_gap_steps"] += audit["decisions"] - previous
+        audit["_last_card_request"] = audit["decisions"]
         slot=(action-1)//576
         cost=float(raw[schema.header["hand_cost"][slot]])
         audit["requested_card_elixir_total"]+=cost
@@ -219,6 +289,8 @@ def finish_decision_audit(audit):
     result={k:v for k,v in audit.items() if not k.startswith("_")}
     count=result["card_requests"]
     result["mean_requested_card_cost"]=result["requested_card_elixir_total"]/count if count else None
+    result["mean_card_request_interval_seconds"] = (
+        audit["_card_request_gap_steps"] * DECISION_SECONDS / (count - 1) if count > 1 else None)
     result["requested_cost_at_least5_fraction"]=result["requested_cost_at_least5"]/count if count else None
     result["scope"]="Active pre-step decisions; request costs are not confirmed native payments"
     return result
@@ -241,6 +313,15 @@ def native_strategy_summary(audit):
 
 
 def evaluate_games(model, opponent, infos, league, matchups, args, *, env_factory=None):
+    action_mode = getattr(args, "action_mode", "sample")
+    batch_argmax = getattr(args, "batch_argmax", False)
+    if batch_argmax:
+        if action_mode != "argmax":
+            raise ValueError("Batched evaluation requires argmax selection")
+        if not all(isinstance(policy, StateActorCritic) for policy in (model, opponent)):
+            raise ValueError("Batched evaluation requires two architecture-v3 policies")
+        if args.precision == "fp16" and torch.device(args.device).type != "cuda":
+            raise ValueError("FP16 online evaluation requires CUDA; CPU mocks use fp32")
     if env_factory is None:
         # Lazy import keeps CPU/unit checks independent of JPype/JVM installation.
         from cr_rl.envs.crforge import CrForgeVector
@@ -250,7 +331,8 @@ def evaluate_games(model, opponent, infos, league, matchups, args, *, env_factor
     for wave_start in range(0,len(matchups),args.envs):
         wave=matchups[wave_start:wave_start+args.envs]
         count=len(wave)
-        with env_factory(count,count,independent=True,arena="Arena_L",decision_ticks=DECISION_TICKS) as env:
+        threads = min(count, max(12, (os.cpu_count() or 12) // 2)) if batch_argmax else count
+        with env_factory(count,threads,independent=True,arena="Arena_L",decision_ticks=DECISION_TICKS) as env:
             env.set_autoreset(False)
             seeds=[row["seed"] for row in wave]
             deck0=[league["decks"][row["deck0"]] for row in wave]
@@ -262,7 +344,8 @@ def evaluate_games(model, opponent, infos, league, matchups, args, *, env_factor
                 metadata_path=args.out/f"simulator_wave_{wave_start:03d}.json"
                 atomic_json(metadata_path,{"decision_ticks":DECISION_TICKS,
                     "matchups":wave,"simulator":env.metadata()})
-                simulator_metadata.append({"file":metadata_path.name,"sha256":file_sha256(metadata_path)})
+                simulator_metadata.append({"file":metadata_path.name,"sha256":
+                    None if getattr(args,'no_file_hashes',False) else file_sha256(metadata_path)})
             schema=env.vector.schema
             adapter=CrForgeObservationAdapter(schema,env.vector.vocabulary_size,entity_bucket=16)
             for cfg in (model.cfg,opponent.cfg):
@@ -274,30 +357,64 @@ def evaluate_games(model, opponent, infos, league, matchups, args, *, env_factor
                     raise ValueError("Live simulator entity fields differ from checkpoint")
                 if cfg.vocab_size!=env.vector.vocabulary_size:
                     raise ValueError("Live simulator vocabulary differs from checkpoint")
-            streams=[]; audits=[]
-            for match in wave:
-                pair_streams=[]
-                for seat in (0,1):
-                    role=0 if seat==match["learner_seat"] else 1
-                    seed=args.sampling_seed+match["pair"]*4+match["learner_seat"]*2+role
-                    pair_streams.append(PolicyStream(model if role==0 else opponent,adapter,args.device,
-                        precision=args.precision,sampling_seed=seed))
-                streams.append(pair_streams)
-                audits.append([new_decision_audit(),new_decision_audit()])
+            if wave_start==0 and str(args.device).startswith("cuda"):
+                # Warm CUDA/cuBLAS and two-step KDA/GQA kernels before timing live games.
+                warm_raw=env.observations[0,0]; warm_legal=env.masks[0,0]
+                for warm_policy in (model,opponent):
+                    warm_stream=PolicyStream(warm_policy,adapter,args.device,
+                        precision=args.precision,sampling_seed=args.sampling_seed,action_mode=action_mode)
+                    warm_stream.sample(warm_raw,warm_legal)
+                    warm_stream.sample(warm_raw,warm_legal)
+                    warm_stream.reset()
+                torch.cuda.synchronize(args.device)
+            streams=[]
+            if batch_argmax:
+                batches = [BatchedArgmaxStream(policy, adapter, args.device, precision=args.precision)
+                           for policy in (model, opponent)]
+                learner_seats = np.array([match["learner_seat"] for match in wave])
+            else:
+                for match in wave:
+                    pair_streams=[]
+                    for seat in (0,1):
+                        role=0 if seat==match["learner_seat"] else 1
+                        seed=args.sampling_seed+match["pair"]*4+match["learner_seat"]*2+role
+                        pair_streams.append(PolicyStream(model if role==0 else opponent,adapter,args.device,
+                            precision=args.precision,sampling_seed=seed,action_mode=action_mode))
+                    streams.append(pair_streams)
+            audits = [[new_decision_audit(),new_decision_audit()] for _ in wave]
             active=np.ones(count,dtype=bool)
             for step in range(args.max_decisions):
                 actions=np.zeros((count,2),dtype=np.int32)
-                for i in np.flatnonzero(active):
-                    for seat in (0,1):
-                        raw=env.observations[i,seat]
-                        legal=env.masks[i,seat]
-                        action,seconds=streams[i][seat].sample(raw,legal)
-                        actions[i,seat]=action
-                        (candidate_latency if seat==wave[i]["learner_seat"] else opponent_latency).append(seconds)
-                        record_decision(audits[i][seat],raw,legal,action,schema)
-                started=time.perf_counter(); env.step(actions)
+                lanes = np.flatnonzero(active)
+                if batch_argmax:
+                    seats = learner_seats[lanes]
+                    for batch, role_seats, latency in zip(
+                        batches, (seats, 1 - seats), (candidate_latency, opponent_latency)
+                    ):
+                        raw = env.observations[lanes, role_seats]
+                        legal = env.masks[lanes, role_seats]
+                        chosen, seconds = batch.sample(raw, legal, lanes)
+                        actions[lanes, role_seats] = chosen
+                        latency.extend([seconds] * len(lanes))
+                        for row, (lane, seat) in enumerate(zip(lanes, role_seats)):
+                            record_decision(audits[lane][seat], raw[row], legal[row], chosen[row], schema)
+                else:
+                    for i in lanes:
+                        for seat in (0,1):
+                            raw=env.observations[i,seat]
+                            legal=env.masks[i,seat]
+                            action,seconds=streams[i][seat].sample(raw,legal)
+                            actions[i,seat]=action
+                            (candidate_latency if seat==wave[i]["learner_seat"] else opponent_latency).append(seconds)
+                            record_decision(audits[i][seat],raw,legal,action,schema)
+                started=time.perf_counter()
+                if not active.all() and hasattr(env.vector,"step_lanes"):
+                    env.actions[:]=actions
+                    env.vector.step_lanes(lanes)
+                else:
+                    env.step(actions)
                 simulator_latency.append(time.perf_counter()-started)
-                for i in np.flatnonzero(active):
+                for i in lanes:
                     info=env.vector.info(int(i))
                     for seat in (0,1):
                         audits[i][seat]["illegal_submissions"]+=int(info.get(f"illegal_{seat}",0))
@@ -309,15 +426,20 @@ def evaluate_games(model, opponent, infos, league, matchups, args, *, env_factor
                             reward=float(env.rewards[i,learner]),decision_ticks=DECISION_TICKS,
                             illegal=illegal,decision_audit={"learner":finish_decision_audit(audits[i][learner]),
                                 "opponent":finish_decision_audit(audits[i][1-learner])})
+                        if valid and "crowns" in schema.header and "crowns_enemy" in schema.header:
+                            terminal = env.observations[i,learner]
+                            wave[i]["crown_difference"] = (int(terminal[schema.header["crowns"][0]])
+                                - int(terminal[schema.header["crowns_enemy"][0]]))
                         path=args.out/f"match_{wave_start+i:03d}.json"
                         try:
                             path.write_text(env.vector.lanes[i].replay_json(0),encoding="utf-8")
-                            wave[i]["replay_sha256"]=file_sha256(path)
+                            wave[i]["replay_sha256"]=(None if getattr(args,'no_file_hashes',False) else file_sha256(path))
                         except Exception as error:
                             wave[i].update(valid=False,reason="native_replay_export_failed",
                                 replay_export_error=str(error))
                         active[i]=False
-                        for stream in streams[i]:stream.reset()
+                        if streams:
+                            for stream in streams[i]:stream.reset()
                 if not active.any():break
                 if step%128==0:
                     print(json.dumps({"wave_start":wave_start,"decision":step+1,
@@ -327,17 +449,19 @@ def evaluate_games(model, opponent, infos, league, matchups, args, *, env_factor
                     steps=args.max_decisions,decision_ticks=DECISION_TICKS,
                     decision_audit={"learner":finish_decision_audit(audits[i][wave[i]["learner_seat"]]),
                         "opponent":finish_decision_audit(audits[i][1-wave[i]["learner_seat"]])})
-                for stream in streams[i]:stream.reset()
+                if streams:
+                    for stream in streams[i]:stream.reset()
     return {"candidate_end_to_end":latency_summary(candidate_latency),
         "opponent_end_to_end":latency_summary(opponent_latency),
         "simulator_vector_step":latency_summary(simulator_latency),
         "simulator_metadata":simulator_metadata,
         "scope":"adapter/history construction, H2D, forward/state update, sampling and CPU action; "
-                "CUDA synchronized, batch1 per independent stream; simulator measured separately"}
+                + ("batched by policy, shared batch latency per active game" if batch_argmax
+                   else "CUDA synchronized, batch1 per independent stream")
+                + "; simulator measured separately"}
 
 
 def main():
-    code_sha256=file_sha256(Path(__file__))
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy",type=Path,required=True)
     parser.add_argument("--policy-placement-decoder",type=Path,
@@ -349,16 +473,34 @@ def main():
     parser.add_argument("--pair-start",type=int,default=0)
     # A single lane is useful for local replay preview: with autoreset disabled,
     # finished lanes must not be stepped again by the vector backend.
-    parser.add_argument("--envs",type=int,choices=(1,2,4),default=2)
+    parser.add_argument("--envs",type=int,default=2,
+                        help="Parallel games per wave (1, 2 or 4; up to 32 with --batch-argmax)")
     parser.add_argument("--device",default="cuda")
     parser.add_argument("--precision",choices=("fp16","fp32"),default="fp16")
     parser.add_argument("--max-decisions",type=int,default=1500,
         help="Hard failure after 600 simulated seconds by default; unfinished games are invalid")
     parser.add_argument("--sampling-seed",type=int,default=20261110)
+    parser.add_argument("--action-mode", choices=("sample", "argmax"), default="sample",
+                        help="Action selection for both seats on the fixed paired panel")
+    parser.add_argument("--batch-argmax",action="store_true",
+                        help="Use batched inference for two v3 policies with --action-mode argmax")
     parser.add_argument("--simulator-seed-base",type=int,default=1000000)
     parser.add_argument("--pairing-seed",type=int,default=20261103)
     parser.add_argument("--native-audit",action=argparse.BooleanOptionalAction,default=True)
+    parser.add_argument("--no-file-hashes",action="store_true",
+                        help="Skip file digests for periodic evaluation of immutable local snapshots")
     args=parser.parse_args()
+    if args.batch_argmax and (args.action_mode != "argmax" or not 1 <= args.envs <= 32):
+        parser.error("--batch-argmax requires --action-mode argmax and 1 to 32 environments")
+    if not args.batch_argmax and args.envs not in (1, 2, 4):
+        parser.error("--envs must be 1, 2 or 4 unless --batch-argmax is enabled")
+    if args.no_file_hashes and (args.native_audit or args.policy_placement_decoder):
+        parser.error("--no-file-hashes requires --no-native-audit and no decoder override")
+    def signature(path):
+        stat=path.stat()
+        return (stat.st_size,stat.st_mtime_ns,stat.st_ino)
+    identity=signature if args.no_file_hashes else file_sha256
+    code_id=identity(Path(__file__))
     if args.max_decisions*DECISION_SECONDS<360:
         parser.error("Decision limit must cover at least five minutes plus one-minute margin")
     if args.out.exists() and any(args.out.iterdir()):parser.error("Use a fresh evaluation directory")
@@ -371,8 +513,8 @@ def main():
         simulator_seed_base=args.simulator_seed_base,pairing_seed=args.pairing_seed)
     torch.manual_seed(args.sampling_seed)
     started=time.perf_counter()
-    policy_sha256=file_sha256(args.policy)
-    opponent_sha256=file_sha256(args.opponent)
+    policy_id=identity(args.policy)
+    opponent_id=identity(args.opponent)
     decoder_sha256=file_sha256(args.policy_placement_decoder) if args.policy_placement_decoder else None
     model,model_info=load_frozen_policy(args.policy,args.device,args.policy_placement_decoder)
     opponent,opponent_info=load_frozen_policy(args.opponent,args.device)
@@ -380,19 +522,33 @@ def main():
     latency=evaluate_games(model,opponent,[model_info,opponent_info],league,matchups,args)
     valid=[row for row in matchups if row.get("valid")]
     rewards=[row["reward"] for row in valid]
-    if policy_sha256!=file_sha256(args.policy) or opponent_sha256!=file_sha256(args.opponent):
+    crown_differences = [row["crown_difference"] for row in valid if "crown_difference" in row]
+    request_gaps = [row["decision_audit"]["learner"].get("mean_card_request_interval_seconds")
+                    for row in valid]
+    request_gaps = [gap for gap in request_gaps if gap is not None]
+    panel_metrics = {
+        "win_rate": sum(r > 0 for r in rewards) / len(rewards) if rewards else None,
+        "mean_crown_difference": float(np.mean(crown_differences)) if crown_differences else None,
+        "mean_card_request_interval_seconds": float(np.mean(request_gaps)) if request_gaps else None,
+    }
+    if policy_id!=identity(args.policy) or opponent_id!=identity(args.opponent):
         raise ValueError("Checkpoint changed during frozen evaluation")
     if args.policy_placement_decoder and decoder_sha256 != file_sha256(args.policy_placement_decoder):
         raise ValueError("Learned placement decoder changed during frozen evaluation")
-    if code_sha256!=file_sha256(Path(__file__)):
+    if code_id!=identity(Path(__file__)):
         raise ValueError("Evaluation implementation changed during frozen evaluation")
-    result={"policy_sha256":policy_sha256,"opponent_sha256":opponent_sha256,
-        "deck_pool_sha256":file_sha256(args.decks),"evaluation_code_sha256":code_sha256,
+    result={"policy_sha256":None if args.no_file_hashes else policy_id,
+        "opponent_sha256":None if args.no_file_hashes else opponent_id,
+        "deck_pool_sha256":None if args.no_file_hashes else file_sha256(args.decks),
+        "evaluation_code_sha256":None if args.no_file_hashes else code_id,
         "policy":model_info,"opponent":opponent_info,"decision_ticks":DECISION_TICKS,
         "pair_count":args.pairs,"pair_start":args.pair_start,"pairing_seed":args.pairing_seed,
         "simulator_seed_base":args.simulator_seed_base,"sampling_seed":args.sampling_seed,
-        "sampling_protocol":"Independent torch generator per physical game/role; stable across wave sizes",
-        "protocol":"fixed physical decks/seeds, paired policy-seat swap, stochastic sampling; explicit placement calibration is recorded in policy definition",
+        "action_mode":args.action_mode,"batch_argmax":args.batch_argmax,
+        "sampling_protocol":("Highest legal joint log probability in each seat" if args.action_mode == "argmax"
+                             else "Independent torch generator per physical game/role; stable across wave sizes"),
+        "protocol":"Fixed physical decks and seeds, paired policy-seat swap",
+        **panel_metrics,
         "envs":args.envs,"precision":args.precision,"max_decisions":args.max_decisions,
         "games":len(valid),"invalid_games":len(matchups)-len(valid),
         "fault_games":sum(bool(row.get("info",{}).get("fault")) for row in matchups),
@@ -408,9 +564,10 @@ def main():
         raise RuntimeError("Evaluation has unfinished, truncated, illegal or faulted matches")
     if not result["candidate_inference_budget_passed"]:
         raise RuntimeError("Candidate exceeded the required 400ms decision budget; evidence was saved")
-    summary={"evaluation":str(evaluation),"evaluation_sha256":file_sha256(evaluation),
+    summary={"evaluation":str(evaluation),"evaluation_sha256":None if args.no_file_hashes else file_sha256(evaluation),
         "native_audited":False,"latency":latency,"games":len(valid),
-        "wins":result["wins"],"losses":result["losses"],"draws":result["draws"]}
+        "wins":result["wins"],"losses":result["losses"],"draws":result["draws"],
+        "action_mode":args.action_mode,**panel_metrics}
     if args.native_audit:
         audit_path=args.out/"execution_audit.json"
         command=[sys.executable,str(Path(__file__).with_name("audit_policy_replays.py")),

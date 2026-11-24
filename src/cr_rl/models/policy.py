@@ -47,6 +47,7 @@ class ModelConfig:
     holding_prior_version: int = 1
     core_card_ids: tuple[int, ...] = ()
     tower_card_ids: tuple[int, ...] = ()
+    reserve_to_wait: bool = False
     core_slot_bias: float = 0.7
 
     def without_holding_prior(self):
@@ -477,6 +478,36 @@ class ActorCritic(HistoryEncoder):
         nn.init.normal_(self.wait_actor.weight, std=0.01)
         nn.init.zeros_(self.wait_actor.bias)
         self.holding_prior = ElixirHoldingPrior(cfg) if cfg.elixir_wait_bias else None
+        # Keep the base actor order; optimizer migration also handles later decoder modules.
+        self.wait_hand_gate = nn.Sequential(nn.Linear(12, 32), nn.GELU(), nn.Linear(32, 1))
+        nn.init.zeros_(self.wait_hand_gate[-1].weight)
+        nn.init.zeros_(self.wait_hand_gate[-1].bias)
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        # Additive gate migration is the sole tolerated legacy missing key set.
+        if not any(k.startswith("wait_hand_gate.") for k in state_dict):
+            self.wait_hand_gate[0].reset_parameters()
+            nn.init.zeros_(self.wait_hand_gate[-1].weight)
+            nn.init.zeros_(self.wait_hand_gate[-1].bias)
+            state_dict = dict(state_dict)
+            state_dict.update({k:v for k,v in self.state_dict().items() if k.startswith("wait_hand_gate.")})
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
+    def wait_hand_residual(self, header, slots, hands):
+        fields = self.cfg.header_fields
+        costs_at = [i for i, name in enumerate(fields) if name == "hand_cost"]
+        if len(costs_at) != 4 or "elixir" not in fields:
+            return slots.new_zeros(*slots.shape[:-1], 1)
+        present = hands >= 0
+        available = header[..., fields.index("elixir")].float() * 10
+        if "elixir_reserved" in fields:
+            available = available - header[..., fields.index("elixir_reserved")].float().clamp_min(0) * 10
+        costs = header[..., costs_at].float() * 10
+        known = present & (costs >= 0)
+        deficit = ((costs - available[..., None]).clamp(0, 10) / 10).masked_fill(~known, 0)
+        affordable = (known & (costs <= available[..., None] + 1e-5)).float()
+        features = torch.cat((slots.detach().float().masked_fill(~present, 0), deficit, affordable), -1)
+        return self.wait_hand_gate(features.to(self.wait_hand_gate[0].weight.dtype))
 
     def forward(
         self,
@@ -518,9 +549,9 @@ class ActorCritic(HistoryEncoder):
         card_features = self.card_embedding(card_indices) + self.card_slot_embedding
         context_slots = context.unsqueeze(1).expand(-1, 4, -1)
         slot_logits = self.slot_actor(torch.cat((context_slots, card_features), dim=-1)).squeeze(-1)
-        card_logits = torch.cat(
-            (self.wait_actor(context), slot_logits, self.ability_actor(context)), dim=-1
-        )
+        current_header = header if header.ndim == 2 else header[:, target_index % header.shape[1]]
+        wait = self.wait_actor(context) + self.wait_hand_residual(current_header, slot_logits, hand_card_ids)
+        card_logits = torch.cat((wait, slot_logits, self.ability_actor(context)), dim=-1)
         if self.holding_prior is not None:
             current_header = (
                 header if header.ndim == 2 else header[:, target_index % header.shape[1]]
@@ -549,7 +580,8 @@ class ActorCritic(HistoryEncoder):
             legal_action_mask = torch.ones(
                 batch, self.cfg.action_count, dtype=torch.bool, device=context.device
             )
-        joint_log_probs = self._joint_log_probs(card_logits, tile_logits, legal_action_mask)
+        joint_log_probs = self._joint_log_probs(card_logits, tile_logits, legal_action_mask,
+            hand_present_mask=(hand_card_ids >= 0) if self.cfg.reserve_to_wait else None)
         value = self.critic(context).squeeze(-1) if compute_value else context.new_zeros(batch)
         return joint_log_probs, value
 
@@ -598,7 +630,8 @@ class ActorCritic(HistoryEncoder):
 
     @staticmethod
     def _joint_log_probs(
-        card_logits: torch.Tensor, tile_logits: torch.Tensor, legal: torch.Tensor
+        card_logits: torch.Tensor, tile_logits: torch.Tensor, legal: torch.Tensor, *,
+        hand_present_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compose log p(slot) + log p(tile|slot) in the simulator's flat action codec."""
         # The policy body may run in native FP16 on Volta.  Keep the
@@ -616,11 +649,21 @@ class ActorCritic(HistoryEncoder):
         )
         if not torch.all(card_legal.any(dim=-1)):
             raise ValueError("Every state must have at least one legal action (WAIT)")
-        card_logp = torch.log_softmax(card_logits.masked_fill(~card_legal, -1e9), dim=-1)
+        compete = card_legal
+        if hand_present_mask is not None:
+            compete = torch.cat((legal[..., :1], (hand_present_mask.bool() & legal[..., :1]) | card_legal[..., 1:5],
+                                 legal[..., 2305:2307]), -1)
+        card_logp = torch.log_softmax(card_logits.masked_fill(~compete, -1e9), dim=-1)
+        if hand_present_mask is not None:
+            reserved = hand_present_mask.bool() & ~card_legal[..., 1:5] & legal[..., :1]
+            wait = torch.cat((card_logp[..., :1],
+                card_logp[..., 1:5].masked_fill(~reserved, float("-inf"))), -1).logsumexp(-1, keepdim=True)
+            card_logp = torch.cat((wait, card_logp[..., 1:5].masked_fill(reserved, -1e9),
+                                  card_logp[..., 5:7]), -1)
         tile_logp = torch.log_softmax(tile_logits.masked_fill(~tile_legal, -1e9), dim=-1)
         tile_logp = tile_logp.masked_fill(~tile_legal, -1e9)
         placement_logp = (card_logp[..., 1:5].unsqueeze(-1) + tile_logp).flatten(-2)
-        return torch.cat((card_logp[..., :1], placement_logp, card_logp[..., 5:7]), dim=-1)
+        return torch.cat((card_logp[..., :1], placement_logp, card_logp[..., 5:7]), dim=-1).masked_fill(~legal, -1e9)
 
     @staticmethod
     def masked_categorical(log_probs: torch.Tensor):

@@ -61,6 +61,7 @@ def summary_scalars(row):
         "reward_components": row.get("reward_component_sums", {}),
         "peak_gpu_memory_gib": row.get("peak_cuda_per_device_gib", {}),
         "learning_rates": {k: v[0] for k, v in row.get("learning_rates", {}).items() if v},
+        "train_traj": row.get("training_win_rates", {}),
     }
     result = flatten(groups)
     retention = row.get("opponent_retention", {})
@@ -84,6 +85,14 @@ def summary_scalars(row):
     ):
         if numeric(row.get(key)):
             result[f"training/{key}"] = row[key]
+    if (
+        "train_traj/overall_win_rate" not in result
+        and (row.get("terminal_games", 0) or 0) > 0
+        and numeric(row.get("terminal_seat_wins"))
+    ):
+        result["train_traj/overall_win_rate"] = float(row["terminal_seat_wins"]) / float(
+            row["terminal_games"]
+        )
     result["performance/update_seconds"] = row["seconds"]
     result["performance/effective_new_samples_per_second"] = (
         row["valid_learner_samples"] / row["seconds"]
@@ -92,6 +101,29 @@ def summary_scalars(row):
         row["completed_training_games"] * 3600 / row["seconds"]
     )
     return result
+
+
+def validation_scalars(results):
+    """Extract numeric validation scalars, skipping errored zero-game entries."""
+    scalars = {}
+    for label, vals in (results or {}).items():
+        if not isinstance(vals, dict):
+            continue
+        if int(vals.get("games", 1) or 0) == 0 and vals.get("error"):
+            continue
+        for key in (
+            "win_rate",
+            "wins",
+            "games",
+            "invalid_games",
+            "p50_ms",
+            "p99_ms",
+            "max_ms",
+            "latency_violations",
+        ):
+            if numeric(vals.get(key)):
+                scalars[f"validation/{label}_{key}"] = vals[key]
+    return scalars
 
 
 def event_scalars(row):
@@ -128,6 +160,8 @@ def event_scalars(row):
             for k in ("removed_bytes", "removed_files", "removed_opponents")
             if numeric(row.get(k))
         }
+    if phase == "validation":
+        return row["update"], validation_scalars(row.get("results", {}))
     return step, {}
 
 
@@ -222,6 +256,7 @@ def run(args):
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     writer = EventFileWriter(str(args.logdir / "local_dual_v100"), flush_secs=5)
     state.setdefault("timings", {})
+    state.setdefault("validations", {})
     state.setdefault("episodes", {"count": 0, "wins": 0, "score_sum": 0})
     last_gpu = 0
 
@@ -269,6 +304,18 @@ def run(args):
                                 }
                             )
                         emit(values, step, row.get("time_unix"))
+                        if row["phase"] == "validation" and values:
+                            val_summary = (
+                                args.run_dir
+                                / "validation"
+                                / f"update_{int(row['update']):08d}"
+                                / "summary.json"
+                            )
+                            state["validations"][str(int(row["update"]))] = (
+                                val_summary.stat().st_mtime_ns
+                                if val_summary.exists()
+                                else "event"
+                            )
                 state[name] = cursor
             for path in sorted((args.run_dir / "timings").glob("*.json")):
                 stamp = path.stat().st_mtime_ns
@@ -276,6 +323,17 @@ def run(args):
                     row = json.loads(path.read_text())
                     emit(timing_scalars(row), row["update"])
                     state["timings"][path.name] = stamp
+            for path in sorted((args.run_dir / "validation").glob("update_*/summary.json")):
+                suffix = path.parent.name.removeprefix("update_")
+                if not suffix.isdigit():
+                    continue
+                update_key = str(int(suffix))
+                stamp = path.stat().st_mtime_ns
+                if state["validations"].get(update_key) in (stamp, "event"):
+                    continue
+                results = json.loads(path.read_text())
+                emit(validation_scalars(results), int(update_key), path.stat().st_mtime)
+                state["validations"][update_key] = stamp
             now = time.time()
             if now - last_gpu >= 10:
                 try:

@@ -122,7 +122,7 @@ class AdaptiveActorLearningRate:
         if not actor_enabled or not self.groups:
             reason = "actor_disabled" if not actor_enabled else "no_groups"
             self.low_kl_updates = 0
-        elif overflow_steps:
+        elif overflow_steps and overflow_steps > committed_steps // 4:
             reason = "amp_overflow"
             self.low_kl_updates = 0
         elif not enough:
@@ -202,27 +202,59 @@ class AdaptiveActorLearningRate:
 
 
 def restore_actor_lr_controller(
-    optimizer, saved_state=None, *, enabled=False, min_lr=2.5e-6, max_lr=None
+    optimizer,
+    saved_state=None,
+    *,
+    enabled=False,
+    min_lr=2.5e-6,
+    max_lr=None,
+    allow_bound_override=False,
 ):
     """Resume saved feedback automatically; otherwise require explicit opt-in.
 
     A lowered current rate is never interpreted as a new ceiling on resume.
-    Explicit incompatible settings or optimizer LR overrides fail before use.
+    Explicit incompatible settings or optimizer LR overrides fail before use
+    unless `allow_bound_override` explicitly re-anchors bounds on resume.
     """
     if saved_state is None and not enabled:
         return None
     lr = AdaptiveActorLearningRate._optimizer_lr(optimizer)
+    effective_state = saved_state
+    adjusted = False
     if saved_state is not None:
-        config = AdaptiveActorLRConfig(**saved_state["config"])
-        if enabled and (min_lr != config.min_lr or (
-            max_lr is not None and max_lr != config.max_lr
-        )):
-            raise ValueError("Requested adaptive Actor LR bounds differ from the checkpoint")
+        saved_cfg = dict(saved_state["config"])
+        config = AdaptiveActorLRConfig(**saved_cfg)
+        bounds_differ = min_lr != config.min_lr or (max_lr is not None and max_lr != config.max_lr)
+        if enabled and bounds_differ:
+            if not allow_bound_override:
+                raise ValueError("Requested adaptive Actor LR bounds differ from the checkpoint")
+            saved_cfg["min_lr"] = float(min_lr)
+            if max_lr is not None:
+                saved_cfg["max_lr"] = float(max_lr)
+            config = AdaptiveActorLRConfig(**saved_cfg)
+            adjusted = True
+        if allow_bound_override:
+            clamped_lr = min(config.max_lr, max(config.min_lr, lr))
+            if not math.isclose(clamped_lr, lr, rel_tol=1e-12, abs_tol=1e-15):
+                for group in optimizer.param_groups:
+                    group["lr"] = clamped_lr
+                lr = clamped_lr
+                adjusted = True
+            saved_lr = saved_state.get("current_lr")
+            if saved_lr is None or not math.isclose(lr, saved_lr, rel_tol=1e-12, abs_tol=1e-15):
+                adjusted = True
+            if adjusted:
+                effective_state = {
+                    **saved_state,
+                    "config": asdict(config),
+                    "current_lr": lr,
+                    "low_kl_updates": 0,
+                }
     else:
         config = AdaptiveActorLRConfig(min_lr=min_lr, max_lr=lr if max_lr is None else max_lr)
     controller = AdaptiveActorLearningRate(config)
-    if saved_state is not None:
-        controller.load_state_dict(saved_state)
+    if effective_state is not None:
+        controller.load_state_dict(effective_state)
     if not config.min_lr <= lr <= config.max_lr:
         raise ValueError("Actor optimizer rate is outside the adaptive LR bounds")
     if controller.current_lr is not None and not math.isclose(

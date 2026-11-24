@@ -1,0 +1,15 @@
+version: army-elixir-stat-v1
+backend_commit: 7ee59b39bf1d41d5c01645f01c47ed8c8d3355d6
+data_version: '16.635.3'
+health: alive_0.3_plus_0.7_hp_fraction
+unknown: stat_two_bucket
+base_exact_config: army_elixir_values.yaml
+auto_exact_safe_direct: true
+fallback:
+  reference_level: 11
+  hp_threshold: 350
+  damage_threshold: 150
+  low: 0.10
+  high: 0.30
+  side_cap: 1.0
+  calibration: native_20_rows_reference_level_11_20261117

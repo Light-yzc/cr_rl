@@ -31,6 +31,8 @@ def freeze_publication_files(local, update):
         for name in ('ppo_latest.pt', 'actor_export.pt'):
             if (local / name).exists():
                 _link_or_copy(local / name, snapshot / name)
+        for source in (local / 'macro_search_buffer').glob('combo_*.npz'):
+            _link_or_copy(source, snapshot / 'macro_search_buffer' / source.name)
         receipt = local / '.publication_receipts.json'
         if receipt.exists():
             shutil.copyfile(receipt, snapshot / receipt.name)
@@ -67,11 +69,12 @@ def freeze_publication_files(local, update):
 
 
 class BoundedAsyncPublisher:
-    def __init__(self, local, destination):
+    def __init__(self, local, destination, *, checksum=True):
         self.local, self.destination = Path(local), Path(destination)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='checkpoint-publisher')
         self.pending = None
         self.closed = False
+        self.checksum = checksum
 
     def wait(self):
         if self.pending is None:
@@ -92,6 +95,14 @@ class BoundedAsyncPublisher:
 
         def publish():
             began = time.perf_counter()
+            if not self.checksum:
+                from cr_rl.training.fast_publication import publish_snapshot
+                manifest = publish_snapshot(snapshot, self.destination, update, keep_generations=1)
+                seconds = time.perf_counter() - began
+                if after_publish is not None:
+                    after_publish(manifest, seconds, snapshot_seconds, backpressure_seconds)
+                shutil.rmtree(snapshot)
+                return manifest
             manifest = publish_incremental(snapshot, self.destination, update)
             if (snapshot / 'archived_opponents.jsonl').exists():
                 copy_verified(snapshot / 'archived_opponents.jsonl',

@@ -1,6 +1,7 @@
 """Explicit current / frozen PPO history / BC anchor opponent buckets."""
 
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -47,7 +48,7 @@ class RoleMixture:
     def state_dict(self):
         return asdict(self)
 
-    def sample(self, pool, rng, own_deck, enemy_deck, learner_version):
+    def sample(self, pool, rng, own_deck, enemy_deck, learner_version, *, allowed_historical=None):
         """Return opponent and requested/actual bucket; missing history falls back to BC."""
         draw = rng.random()
         requested = (
@@ -61,6 +62,12 @@ class RoleMixture:
             return None, requested, requested
         candidates = [e for e in pool.entries if e.role == requested]
         actual = requested
+        if candidates and requested == "historical" and allowed_historical is not None:
+            restricted = [
+                e for e in candidates if str(Path(e.checkpoint).resolve()) in allowed_historical
+            ]
+            if restricted:
+                candidates = restricted
         if not candidates:
             actual = "anchor"
             candidates = [e for e in pool.entries if e.role == actual]

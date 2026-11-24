@@ -1,6 +1,14 @@
 import json
 
-from cr_rl.monitoring.tensorboard_bridge import event_scalars, read_lines, summary_scalars
+from types import SimpleNamespace
+
+from cr_rl.monitoring.tensorboard_bridge import (
+    event_scalars,
+    read_lines,
+    run,
+    summary_scalars,
+    validation_scalars,
+)
 
 
 def test_json_tailer_does_not_lose_partial_append_and_handles_replace(tmp_path):
@@ -120,3 +128,75 @@ def test_ram_metrics_include_host_headroom_and_enforced_training_limits(tmp_path
     assert metrics["ram/service_oom_kills"] == 0
     (run / "trainer.pid").unlink()
     assert host_memory_stats(run, proc, tmp_path / "cgroup") == {"ram/host_available_gib": 8}
+
+
+def test_validation_event_emits_win_rate_and_latency_scalars():
+    step, values = event_scalars(
+        {
+            "phase": "validation",
+            "update": 32,
+            "results": {
+                "bc": {
+                    "wins": 2,
+                    "games": 6,
+                    "win_rate": 2 / 6,
+                    "invalid_games": 0,
+                    "p50_ms": 9.1,
+                    "p99_ms": 10.0,
+                    "max_ms": 676.9,
+                    "latency_violations": 2,
+                    "budget_passed": False,
+                },
+                "history": {"wins": 4, "games": 6, "win_rate": 4 / 6},
+            },
+        }
+    )
+    assert step == 32
+    assert values["validation/bc_win_rate"] == 2 / 6
+    assert values["validation/bc_p99_ms"] == 10.0
+    assert values["validation/bc_latency_violations"] == 2
+    assert values["validation/history_win_rate"] == 4 / 6
+    assert "validation/bc_budget_passed" not in values
+
+
+def test_validation_scalars_skips_errored_zero_game_entries():
+    values = validation_scalars(
+        {
+            "bc": {"wins": 0, "games": 0, "win_rate": 0.0, "error": "CalledProcessError"},
+            "history": {"wins": 4, "games": 6, "win_rate": 4 / 6},
+        }
+    )
+    assert "validation/bc_win_rate" not in values
+    assert values["validation/history_win_rate"] == 4 / 6
+
+
+def test_bridge_backfills_validation_summary_files_once(tmp_path):
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    run_dir = tmp_path / "run"
+    logdir = run_dir / "tensorboard"
+    val_dir = run_dir / "validation" / "update_00000064"
+    val_dir.mkdir(parents=True)
+    (val_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "bc": {"wins": 3, "games": 6, "win_rate": 0.5, "p99_ms": 13.0},
+                "history": {"wins": 3, "games": 6, "win_rate": 0.5, "p99_ms": 10.5},
+            }
+        )
+    )
+    args = SimpleNamespace(
+        run_dir=run_dir,
+        logdir=logdir,
+        gpu_ids="",
+        interval=1.0,
+        once=True,
+    )
+    run(args)
+    run(args)  # Second pass must not duplicate the same update.
+
+    ea = EventAccumulator(str(logdir / "local_dual_v100"))
+    ea.Reload()
+    assert [(x.step, x.value) for x in ea.Scalars("validation/bc_win_rate")] == [(64, 0.5)]
+    assert [(x.step, x.value) for x in ea.Scalars("validation/bc_p99_ms")] == [(64, 13.0)]
+    assert [(x.step, x.value) for x in ea.Scalars("validation/history_win_rate")] == [(64, 0.5)]

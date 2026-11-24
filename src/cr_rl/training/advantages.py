@@ -15,6 +15,8 @@ def compute_gae(
     gae_lambda: float = 0.95,
     next_values: torch.Tensor | None = None,
     episode_ends: torch.Tensor | None = None,
+    step_ticks: torch.Tensor | None = None,
+    reference_ticks: int = 8,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """GAE over [time, env] with separate bootstrap and trace-boundary masks.
 
@@ -31,11 +33,24 @@ def compute_gae(
         raise ValueError("next_values and episode_ends must match rewards shape [time, env]")
     advantages = torch.zeros_like(rewards)
     gae = torch.zeros_like(last_value)
+    discounts = traces = None
+    if step_ticks is not None:
+        if reference_ticks <= 0 or step_ticks.shape != rewards.shape:
+            raise ValueError('Step durations must match rewards and have positive reference_ticks')
+        if not torch.isfinite(step_ticks).all() or (step_ticks<0).any():
+            raise ValueError('Step durations must be finite and nonnegative')
+        if ((step_ticks==0) & ~dones.bool()).any():
+            raise ValueError('Only true terminal transitions may have zero duration')
+        fractions = step_ticks.to(device=rewards.device,dtype=torch.float32) / reference_ticks
+        discounts = torch.pow(torch.full_like(fractions, gamma), fractions)
+        traces = discounts * torch.pow(torch.full_like(fractions, gae_lambda), fractions)
     for t in reversed(range(rewards.shape[0])):
         bootstrap = 1.0 - dones[t].float()
         continuation = 1.0 - episode_ends[t].float()
-        delta = rewards[t] + gamma * next_values[t] * bootstrap - values[t]
-        gae = delta + gamma * gae_lambda * continuation * gae
+        discount = gamma if discounts is None else discounts[t]
+        trace = gamma * gae_lambda if traces is None else traces[t]
+        delta = rewards[t] + discount * next_values[t] * bootstrap - values[t]
+        gae = delta + trace * continuation * gae
         advantages[t] = gae
     return advantages, advantages + values
 
@@ -52,6 +67,8 @@ def compute_actor_critic_targets(
     critic_gae_lambda=None,
     next_values=None,
     episode_ends=None,
+    step_ticks=None,
+    reference_ticks=8,
 ):
     """Freeze Actor advantages and optional independent Critic TD(lambda) targets.
 
@@ -65,7 +82,8 @@ def compute_actor_critic_targets(
     ):
         raise ValueError("Critic GAE lambda must be finite and in [0, 1]")
     arguments = dict(
-        gamma=gamma, next_values=next_values, episode_ends=episode_ends
+        gamma=gamma, next_values=next_values, episode_ends=episode_ends,
+        step_ticks=step_ticks, reference_ticks=reference_ticks,
     )
     advantages, targets = compute_gae(
         rewards, values, dones, last_value, gae_lambda=gae_lambda, **arguments

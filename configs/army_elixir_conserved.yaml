@@ -1,0 +1,27 @@
+version: army-elixir-conserved-v2
+backend_commit: 7ee59b39bf1d41d5c01645f01c47ed8c8d3355d6
+data_version: '16.635.3'
+health: alive_0.3_plus_0.7_hp_fraction
+unknown: stat_two_bucket
+allow_variants: true
+universal_direct_units: true
+# Strictly < army_elixir_bar_factor (0.75) so empty-board deployments never yield
+# artificial positive instant reward; value is earned only through advantageous trades,
+# tower damage, or Elixir Collector generation.
+category_factors:
+  troop: 0.70
+  split_troop: 0.62
+  collector: 0.72
+  building: 0.65
+  spawner: 0.50
+  spell_summon: 0.68
+cards:
+  Elixir Collector: collector
+fallback:
+  reference_level: 11
+  hp_threshold: 350
+  damage_threshold: 150
+  low: 0.10
+  high: 0.30
+  side_cap: 2.0
+  calibration: conserved_full_roster_v2_20261123

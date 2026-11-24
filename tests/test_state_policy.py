@@ -14,6 +14,46 @@ from cr_rl.models.state_policy import PolicyMemory, StateActorCritic, state_mode
 from cr_rl.models.state_temporal import GQAState, KDAState, StateTemporalConfig
 
 
+def test_slice_memory_batched_position_bound_matches_exact_trim():
+    from cr_rl.models.state_policy import slice_memory
+    from cr_rl.models.state_temporal import TemporalState
+
+    key = torch.randn(3, 2, 16, 8)
+    value = torch.randn_like(key)
+    memory = PolicyMemory(TemporalState(
+        [KDAState(torch.randn(3, 4, 8, 8)), GQAState(key, value)],
+        torch.tensor([0, 3, 7]), 7,
+    ), owner=123, generation=4)
+    for i, bound in enumerate(memory.temporal.positions.tolist()):
+        expected = slice_memory(memory, [i], trim_gqa=True)
+        actual = slice_memory(memory, [i], trim_gqa=True, position_bound=bound)
+        assert actual.temporal.length_bound == expected.temporal.length_bound
+        torch.testing.assert_close(actual.temporal.positions, expected.temporal.positions)
+        torch.testing.assert_close(actual.temporal.layers[0].matrix, expected.temporal.layers[0].matrix)
+        torch.testing.assert_close(actual.temporal.layers[1].key, expected.temporal.layers[1].key)
+        torch.testing.assert_close(actual.temporal.layers[1].value, expected.temporal.layers[1].value)
+        actual.temporal.layers[1].key.zero_()
+        assert torch.equal(memory.temporal.layers[1].key, key)
+        assert actual.temporal.layers[1].key.data_ptr() != key.data_ptr()
+
+
+def test_frozen_checkpoint_disk_cache_is_bounded_and_invalidates(tmp_path):
+    from cr_rl.training.host_memory import cache_frozen_checkpoint
+
+    source = tmp_path / "source.pt"
+    source.write_bytes(b"first")
+    cache = tmp_path / "cache"
+    staged = cache_frozen_checkpoint(source, cache, max_bytes=8)
+    assert staged != source and staged.read_bytes() == b"first"
+    assert cache_frozen_checkpoint(source, cache, max_bytes=8) == staged
+    source.write_bytes(b"second")
+    updated = cache_frozen_checkpoint(source, cache, max_bytes=8)
+    assert updated.read_bytes() == b"second" and updated != staged
+    assert sum(p.stat().st_size for p in cache.glob("*.pt")) <= 8
+    assert source.read_bytes() == b"second"
+    assert cache_frozen_checkpoint(source, cache, max_bytes=1) == source.resolve()
+
+
 def model_pair():
     torch.manual_seed(270)
     cfg = replace(configuration(), readout_version=2)
@@ -143,6 +183,32 @@ def test_implicit_memory_matches_active_autocast_precision():
             assert layer.key.dtype==layer.value.dtype==torch.bfloat16
         else:
             assert layer.matrix.dtype==torch.float32
+
+
+def test_fp32_ppo_actor_matches_streaming_under_outer_autocast():
+    _, model = model_pair()
+    model.ppo_actor_fp32 = True
+    h, e, mask, legal, hands = frames(batch=2, length=9)
+    original_fastpath = torch.backends.mha.get_fastpath_enabled()
+    torch.backends.mha.set_fastpath_enabled(False)
+    try:
+        with torch.inference_mode(), torch.autocast('cpu', dtype=torch.bfloat16):
+            state = None
+            streamed = []
+            for t in range(h.shape[1]):
+                row, _, state = model.step(h[:, t], e[:, t], mask[:, t], legal[:, t],
+                                           hand_card_ids=hands[:, t], state=state)
+                streamed.append(row)
+        model.train()
+        with torch.autocast('cpu', dtype=torch.bfloat16):
+            sequence, _, _ = model.forward_state(h, e, mask, legal, hand_card_ids=hands)
+        torch.testing.assert_close(sequence, torch.stack(streamed, dim=1), atol=1e-5, rtol=1e-6)
+        assert all(layer.key.dtype == torch.float32 for layer in state.temporal.layers
+                   if isinstance(layer, GQAState))
+        (-sequence[..., 1].mean()).backward()
+        assert model.wait_actor.weight.grad is not None
+    finally:
+        torch.backends.mha.set_fastpath_enabled(original_fastpath)
 
 
 def test_streamed_fixture_reads_one_history_only_and_retains_one_frame(tmp_path):

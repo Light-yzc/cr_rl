@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from contextlib import nullcontext
 
@@ -89,12 +90,55 @@ def autocast_context(device):
     return nullcontext()
 
 
+def sanitize_grad_scaler_state(
+    state: dict,
+    *,
+    min_scale: float = 1.0,
+    reset_scale: float = 128.0,
+    growth_interval: int = 100,
+) -> dict:
+    """Repair subnormal/zero or stale GradScaler state before restoring on resume."""
+    clean_state = dict(state)
+    raw_scale = clean_state.get("scale", reset_scale)
+    try:
+        saved_scale = float(reset_scale if raw_scale is None else raw_scale)
+    except (TypeError, ValueError):
+        saved_scale = 0.0
+    if not math.isfinite(saved_scale) or saved_scale < min_scale:
+        clean_state["scale"] = float(reset_scale)
+        clean_state["_growth_tracker"] = 0
+    clean_state["growth_interval"] = int(growth_interval)
+    return clean_state
+
+
+def build_grad_scaler(
+    enabled: bool,
+    state: dict | None = None,
+    *,
+    init_scale: float = 128.0,
+    growth_interval: int = 100,
+) -> torch.amp.GradScaler:
+    """Create an AMP GradScaler with fast recovery and safe resume state."""
+    scaler = torch.amp.GradScaler(
+        "cuda",
+        enabled=enabled,
+        init_scale=init_scale,
+        growth_interval=growth_interval,
+    )
+    if enabled and state:
+        scaler.load_state_dict(
+            sanitize_grad_scaler_state(
+                state,
+                reset_scale=init_scale,
+                growth_interval=growth_interval,
+            )
+        )
+    return scaler
+
+
 def configure_optimizer_amp(optimizer, device, state=None):
     enabled = str(device).startswith("cuda") and os.environ.get("CRRL_AMP_DTYPE") == "fp16"
-    scaler = torch.amp.GradScaler("cuda", enabled=enabled, init_scale=128.0)
-    if enabled and state:
-        scaler.load_state_dict(state)
-    optimizer.amp_scaler = scaler
+    optimizer.amp_scaler = build_grad_scaler(enabled, state)
 
 
 def backward_loss(loss, optimizer):

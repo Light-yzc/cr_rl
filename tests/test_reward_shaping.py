@@ -109,3 +109,34 @@ def test_missing_or_destroyed_tower_maximum_is_finite():
     hp, _ = tower_potentials(obs, schema, RewardConfig())
     assert np.isfinite(hp).all()
     np.testing.assert_allclose(hp, -0.15)
+
+
+def test_army_potential_terminal_telescoping_and_fault_mask():
+    from cr_rl.training.rewards import army_potentials
+    schema,current = arena()
+    schema.header_ints = current.shape[-1]
+    schema.max_entities = 2
+    schema.entity_ints = 4
+    schema.entity = {'kind':0,'side':1,'hp':2,'max_hp':3}
+    schema.header['entity_count'] = [schema.header['elixir'][0]]
+    current[...,schema.header['entity_count'][0]] = 2
+    current = np.concatenate((current,np.zeros((1,2,8),dtype=np.int32)),axis=-1)
+    units = current[...,schema.header_ints:].reshape(1,2,2,4)
+    units[0,0] = [[1,0,100,100],[2,1,1000,1000]]
+    units[0,1] = [[1,1,100,100],[2,0,1000,1000]]
+    cfg = RewardConfig(enabled=True,princess=0,king=0,crown=0,army_potential_weight=.015)
+    initial = army_potentials(current,schema,cfg)
+    np.testing.assert_allclose(initial,[[.0015,-.0015]])
+    total = np.zeros((1,2));gamma = .9995
+    for step in range(3):
+        following = current.copy()
+        following[...,schema.header_ints+2] = 80-step*30
+        reward,components = shaped_rewards(current,following,np.zeros((1,2)),np.zeros((1,2)),
+            np.array([step==2]),schema,gamma,cfg)
+        assert abs(reward.sum()) < 1e-7
+        total += gamma**step*reward
+        current = following
+    np.testing.assert_allclose(total,-initial,atol=1e-8)
+    reward,_ = shaped_rewards(current,current,np.zeros((1,2)),np.zeros((1,2)),np.array([True]),
+        schema,gamma,cfg,faulted=np.array([True]))
+    assert not reward.any()

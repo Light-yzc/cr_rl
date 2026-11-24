@@ -40,20 +40,28 @@ def infer_opening_cycle(sequence, minimum_prefix=8, maximum_events=32):
     }
 
 
+def _native_env_match(vector, env_index=0):
+    """Read VectorEnv.envs -> LadderEnv.match on pinned crforge 7ee59b39."""
+    if not 0 <= int(env_index) < int(vector.count):
+        raise ValueError('Environment index is outside the vector')
+    envs_field = vector._env.getClass().getDeclaredField("envs")
+    envs_field.setAccessible(True)
+    env = envs_field.get(vector._env)[int(env_index)]
+    match_field = env.getClass().getDeclaredField("match")
+    match_field.setAccessible(True)
+    match = match_field.get(env)
+    if match is None:
+        raise ValueError("Simulator reset produced no Ladder match")
+    return env, match
+
+
 def native_opening_deals(vector):
     """Read the pinned simulator's deal without altering any battle state.
 
     crforge 7ee59b39: VectorEnv.envs -> LadderEnv.match -> MatchSide.hand.
     Reflection is deliberately isolated and fails closed if upstream changes.
     """
-    envs_field = vector._env.getClass().getDeclaredField("envs")
-    envs_field.setAccessible(True)
-    env = envs_field.get(vector._env)[0]
-    match_field = env.getClass().getDeclaredField("match")
-    match_field.setAccessible(True)
-    match = match_field.get(env)
-    if match is None:
-        raise ValueError("Simulator reset produced no Ladder match")
+    _, match = _native_env_match(vector)
     deals = []
     for seat in (0, 1):
         side = match.side(seat)

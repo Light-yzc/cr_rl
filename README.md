@@ -1,5 +1,7 @@
 # Clash Royale RL Lab
 
+> **跨电脑日常开发、Colab G4/A100 启动保活与本地 MuMu 私服测试指南**：详见 [docs/COLAB_G4_AND_LOCAL_PLAY_GUIDE.md](docs/COLAB_G4_AND_LOCAL_PLAY_GUIDE.md)、一键运维 CLI [scripts/colab_g4_ops.py](scripts/colab_g4_ops.py) 及恢复 Notebook [notebooks/colab_g4_heavy_mcts.ipynb](notebooks/colab_g4_heavy_mcts.ipynb)。
+
 An experiment-first, shared multi-deck Clash Royale agent: human replay BC -> PPO -> historical-opponent self-play. Formal training starts from BC; random-initialized PPO is reserved for pipeline acceptance. The simulator is the training backend, not a claim of perfect parity with every live-client mechanic.
 
 ## Verified training status — 2026-11-05
