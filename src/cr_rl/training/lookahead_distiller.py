@@ -844,7 +844,7 @@ class LookaheadDistiller:
         deck_probabilities=None,
         focal_deck_indices: list[int] | None = None,
         include_placement: bool = True,
-        include_last_temporal: bool = True,
+        include_last_temporal: bool = False,
     ) -> dict:
         if not probes or not any(np.any(ep["actor_keep"]) for ep in probes):
             return dict(ran=False, reason="no_ppo_choice_probes")
@@ -1030,7 +1030,6 @@ class LookaheadDistiller:
                 if (
                     abs(wait_delta) > MAX_DISTILL_WAIT_DRIFT
                     or (wait_delta > 0.0 and cand_probe["mean_p_wait"] > MAX_DISTILL_MEAN_P_WAIT)
-                    or (wait_delta < 0.0 and cand_probe["mean_p_wait"] < MIN_DISTILL_MEAN_P_WAIT)
                 ):
                     step_reasons.append("mean_p_wait_drift")
                 if step_reasons:
