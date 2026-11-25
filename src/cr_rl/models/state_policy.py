@@ -74,7 +74,8 @@ class _RecurrentStateMixin:
 
     def _activation_forward(self, function, *args, **kwargs):
         if torch.is_grad_enabled() and getattr(self, "gradient_checkpointing", False):
-            if self.training or any(p.requires_grad for p in function.parameters()):
+            params = function.parameters() if hasattr(function, "parameters") else ()
+            if self.training or any(p.requires_grad for p in params):
                 return activation_checkpoint(function, *args, use_reentrant=False, **kwargs)
         return function(*args, **kwargs)
 
