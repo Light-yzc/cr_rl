@@ -464,10 +464,12 @@ elif vram_gib >= 20.0:
     cfg.update(gradient_checkpointing=True, temporal_checkpoint_mode="block", frame_microbatch=256, actor_batch_size=2, critic_batch_size=4, cache_state_frames=True, cache_reference=True, opponent_cache_size=4, training_opponent_cache_size=4, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=12, lookahead_distill_parallel_games=12, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), validation_argmax_lanes=8)
 else:
     profile_tag = "compact_t4_15g"
-    cfg.update(gradient_checkpointing=True, temporal_checkpoint_mode="block", frame_microbatch=64, actor_batch_size=1, critic_batch_size=1, cache_state_frames=False, cache_reference=False, opponent_cache_size=2, training_opponent_cache_size=1, env_threads=min(8, ncpu), torch_threads=min(4, ncpu), lookahead_distill_games=8, lookahead_distill_parallel_games=8, lookahead_distill_parallel_searches=2, lookahead_distill_threads=min(8, ncpu), lookahead_distill_candidates=8, lookahead_distill_rollouts=2, lookahead_distill_horizon=14, lookahead_distill_batch_episodes=8, lookahead_distill_steps=3, macro_search_candidates=4, macro_search_batch_episodes=4, validation_argmax_lanes=8)
+    cfg.update(gradient_checkpointing=True, sparse_placement=True, temporal_checkpoint_mode="block", frame_microbatch=32, actor_batch_size=1, critic_batch_size=1, cache_state_frames=False, cache_reference=False, opponent_cache_size=1, training_opponent_cache_size=1, env_threads=min(8, ncpu), torch_threads=min(4, ncpu), lookahead_distill_games=8, lookahead_distill_parallel_games=8, lookahead_distill_parallel_searches=2, lookahead_distill_threads=min(8, ncpu), lookahead_distill_candidates=8, lookahead_distill_rollouts=2, lookahead_distill_horizon=14, lookahead_distill_batch_episodes=8, lookahead_distill_steps=3, macro_search_candidates=4, macro_search_batch_episodes=4, validation_argmax_lanes=8)
 
 (PREP / "cr_train_config.json").write_text(json.dumps(cfg, indent=2) + "\\n")
 env = dict(os.environ, PYTHONPATH=f"{{ROOT / 'src'}}:{{ROOT / '.cache/vendor/crforge/python'}}", PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+if cfg.get("sparse_placement"):
+    env["CRRL_SPARSE_PLACEMENT"] = "1"
 res = subprocess.run([sys.executable, str(ROOT / "scripts/cr_train_pipeline.py"), "start"], cwd=ROOT, env=env, capture_output=True, text=True, check=True)
 print(json.dumps({{"status": "RESTORED_AND_STARTED_OK", "gpu": props.name, "vram_gib": round(vram_gib, 1), "cpus": ncpu, "profile": profile_tag, "restored_from_update": restored_update, "elapsed_sec": round(time.perf_counter() - t0, 1), "pipeline": json.loads(res.stdout.strip())}}, indent=2))
 '''
@@ -488,6 +490,15 @@ from pathlib import Path
 import torch
 
 RUN = Path("/content/crrl_training/runs") / {args.run!r}
+DRV_RUN = Path("/content/drive/MyDrive/cr_rl_ppo/training") / {args.run!r}
+latest_src = RUN / "actor_export.pt"
+if not latest_src.is_file() and (DRV_RUN / "latest.json").is_file():
+    rel_act = json.loads((DRV_RUN / "latest.json").read_text()).get("actor")
+    if rel_act and (DRV_RUN / rel_act).is_file():
+        latest_src = DRV_RUN / rel_act
+best_src = RUN / "actor_best_val.pt"
+if not best_src.is_file() and (DRV_RUN / "best_validation/actor_best_val.pt").is_file():
+    best_src = DRV_RUN / "best_validation/actor_best_val.pt"
 STAGE = Path("/crrl_dl_stage")
 if STAGE.exists():
     shutil.rmtree(STAGE)
@@ -495,7 +506,7 @@ STAGE.mkdir(parents=True, exist_ok=True)
 
 CHUNK = 8 * 1024 * 1024
 manifest = {{}}
-for tag, src in [("latest", RUN / "actor_export.pt"), ("best_val", RUN / "actor_best_val.pt")]:
+for tag, src in [("latest", latest_src), ("best_val", best_src)]:
     if not src.is_file():
         continue
     snap = STAGE / f"{{tag}}_full.tmp"
