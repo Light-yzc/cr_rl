@@ -338,6 +338,143 @@ print(res.stdout, res.stderr)
     return 0
 
 
+def cmd_restore_and_start(args) -> int:
+    conn = _connect_existing_colab()
+    if conn is None:
+        print("NO_EXISTING_COLAB_INSTANCE", flush=True)
+        return 2
+    remote_code = f'''
+from concurrent.futures import ThreadPoolExecutor
+import importlib.util, json, os, shutil, subprocess, sys, time, zipfile
+from pathlib import Path
+
+t0 = time.perf_counter()
+DRIVE = Path("/content/drive/MyDrive/cr_rl_ppo")
+if not DRIVE.is_dir():
+    raise RuntimeError("Mount Google Drive at /content/drive first")
+
+RUN_NAME = {args.run!r}
+ROOT = Path("/content/crrl_training")
+PREP = ROOT / "prepared"
+RUN_DIR = ROOT / "runs" / RUN_NAME
+BC_PLAN_B = Path("/content/crrl_sparky_plan_b")
+ROOT.mkdir(parents=True, exist_ok=True)
+PREP.mkdir(parents=True, exist_ok=True)
+RUN_DIR.mkdir(parents=True, exist_ok=True)
+
+pkgs = {{"yaml": "PyYAML", "jpype": "jpype1", "gymnasium": "gymnasium", "pettingzoo": "pettingzoo", "tqdm": "tqdm", "tensorboard": "tensorboard", "zstandard": "zstandard"}}
+missing = [v for k, v in pkgs.items() if importlib.util.find_spec(k) is None]
+pip_proc = subprocess.Popen([sys.executable, "-m", "pip", "install", "--quiet", *missing]) if missing else None
+
+def _copy_atomic(src: Path, dst: Path):
+    if not src.is_file():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    sz = src.stat().st_size
+    if dst.is_file() and dst.stat().st_size == sz:
+        return
+    tmp = dst.with_name(dst.name + ".partial")
+    shutil.copyfile(src, tmp)
+    if tmp.stat().st_size != sz:
+        raise IOError(f"Incomplete copy {{src}} -> {{dst}}")
+    tmp.replace(dst)
+
+base_code_src = DRIVE / "preparation/sparky_bc_20261120/g4_training_code.zip"
+if not base_code_src.is_file():
+    base_code_src = DRIVE / "preparation/crrl_training_code.zip"
+rt_overlay_src = DRIVE / "preparation/sparky_value_bc_v2/runtime_overlay.zip"
+mcts_overlay_src = DRIVE / "preparation/sparky_value_bc_v2/g4_heavy_mcts_overlay.zip"
+plan_b_zips = sorted((DRIVE / "preparation/sparky_value_bc_v2").glob("sparky_plan_b_*.zip"))
+val_hist_drv = DRIVE / "training/ppo_phase0_baselines/u1380_and_u1340/latest_u1380/opponents/opponent_1073743204.pt"
+
+copy_jobs = [
+    (base_code_src, Path("/content/crrl_base_code.zip")),
+    (DRIVE / "preparation/anchor_actor.pt", PREP / "anchor_actor.pt"),
+]
+if rt_overlay_src.is_file():
+    copy_jobs.append((rt_overlay_src, Path("/content/crrl_rt_overlay.zip")))
+if mcts_overlay_src.is_file():
+    copy_jobs.append((mcts_overlay_src, Path("/content/crrl_mcts_overlay.zip")))
+if plan_b_zips and not (BC_PLAN_B / "dataset.manifest.json").is_file():
+    copy_jobs.append((plan_b_zips[-1], Path("/content/crrl_sparky_plan_b.zip")))
+if val_hist_drv.is_file():
+    copy_jobs.append((val_hist_drv, PREP / "validation_history.pt"))
+
+bv_drv = DRIVE / "training" / RUN_NAME / "best_validation"
+if bv_drv.is_dir():
+    for fn in ("actor_best_val.pt", "ppo_best_val.pt", "best_validation.json"):
+        if (bv_drv / fn).is_file():
+            copy_jobs.append((bv_drv / fn, RUN_DIR / fn))
+
+with ThreadPoolExecutor(max_workers=6) as pool:
+    list(pool.map(lambda pair: _copy_atomic(*pair), copy_jobs))
+
+for z_local in (Path("/content/crrl_base_code.zip"), Path("/content/crrl_rt_overlay.zip"), Path("/content/crrl_mcts_overlay.zip")):
+    if z_local.is_file():
+        with zipfile.ZipFile(z_local) as zf:
+            zf.extractall(ROOT)
+
+env_bin = ROOT / ".cache/vendor/crforge/env/build/install/env/bin/env"
+if env_bin.is_file():
+    env_bin.chmod(0o755)
+tables = Path.home() / ".crforge/tables/16.635.3"
+if not tables.is_dir() and (ROOT / "assets/tables/16.635.3").is_dir():
+    tables.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(ROOT / "assets/tables/16.635.3", tables)
+
+if not (BC_PLAN_B / "dataset.manifest.json").is_file() and Path("/content/crrl_sparky_plan_b.zip").is_file():
+    tmp_bc = Path("/content/crrl_sparky_plan_b.extracting")
+    if tmp_bc.exists():
+        shutil.rmtree(tmp_bc)
+    tmp_bc.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile("/content/crrl_sparky_plan_b.zip") as zf:
+        zf.extractall(tmp_bc)
+    tmp_bc.rename(BC_PLAN_B)
+
+if pip_proc is not None and pip_proc.wait() != 0:
+    raise RuntimeError("pip install failed")
+
+sys.path.insert(0, str(ROOT / "src"))
+from cr_rl.training.fast_publication import restore_latest
+ckpt_path = restore_latest(DRIVE / "training" / RUN_NAME, RUN_DIR)
+if ckpt_path is None or not Path(ckpt_path).is_file():
+    raise RuntimeError("Failed to restore latest checkpoint")
+
+import torch, yaml
+snap = torch.load(RUN_DIR / "ppo_latest.pt", map_location="cpu", mmap=True, weights_only=False)
+restored_update = int(snap["updates"])
+(PREP / "source_metadata.json").write_text(json.dumps({{k: snap.get(k) for k in ("updates", "model_architecture_version", "decision_ticks", "training_args", "reward_config", "level_profile")}}, indent=2) + "\\n")
+(PREP / "source_league.yaml").write_text(yaml.safe_dump(snap["league_config"]))
+del snap
+
+cfg = json.loads((DRIVE / "preparation/sparky_value_bc_v2/cr_train_config_g4.json").read_text())
+cfg["trainer_entry"] = str(ROOT / "scripts/train_selfplay.py")
+cfg["expert_bc_dataset"] = str(BC_PLAN_B)
+if (PREP / "validation_history.pt").is_file():
+    cfg["validation_history"] = str(PREP / "validation_history.pt")
+
+props = torch.cuda.get_device_properties(0)
+vram_gib = props.total_memory / (1024 ** 3)
+ncpu = len(os.sched_getaffinity(0))
+if vram_gib >= 70.0:
+    profile_tag = "wide_70g+"
+    cfg.update(gradient_checkpointing=False, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=10 if vram_gib >= 88 else 8, cache_state_frames=True, cache_reference=True, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(16, ncpu), torch_threads=min(16, ncpu))
+elif vram_gib >= 20.0:
+    profile_tag = "mid_20g_45g"
+    cfg.update(gradient_checkpointing=True, temporal_checkpoint_mode="block", frame_microbatch=256, actor_batch_size=2, critic_batch_size=4, cache_state_frames=True, cache_reference=True, opponent_cache_size=4, training_opponent_cache_size=4, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=12, lookahead_distill_parallel_games=12, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), validation_argmax_lanes=8)
+else:
+    profile_tag = "compact_t4_15g"
+    cfg.update(gradient_checkpointing=True, temporal_checkpoint_mode="block", frame_microbatch=64, actor_batch_size=1, critic_batch_size=1, cache_state_frames=False, cache_reference=False, opponent_cache_size=2, training_opponent_cache_size=1, env_threads=min(8, ncpu), torch_threads=min(4, ncpu), lookahead_distill_games=8, lookahead_distill_parallel_games=8, lookahead_distill_parallel_searches=2, lookahead_distill_threads=min(8, ncpu), lookahead_distill_candidates=8, lookahead_distill_rollouts=2, lookahead_distill_horizon=14, lookahead_distill_batch_episodes=8, lookahead_distill_steps=3, macro_search_candidates=4, macro_search_batch_episodes=4, validation_argmax_lanes=8)
+
+(PREP / "cr_train_config.json").write_text(json.dumps(cfg, indent=2) + "\\n")
+env = dict(os.environ, PYTHONPATH=f"{{ROOT / 'src'}}:{{ROOT / '.cache/vendor/crforge/python'}}", PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+res = subprocess.run([sys.executable, str(ROOT / "scripts/cr_train_pipeline.py"), "start"], cwd=ROOT, env=env, capture_output=True, text=True, check=True)
+print(json.dumps({{"status": "RESTORED_AND_STARTED_OK", "gpu": props.name, "vram_gib": round(vram_gib, 1), "cpus": ncpu, "profile": profile_tag, "restored_from_update": restored_update, "elapsed_sec": round(time.perf_counter() - t0, 1), "pipeline": json.loads(res.stdout.strip())}}, indent=2))
+'''
+    print(conn["exec"](remote_code, timeout_sec=420), flush=True)
+    return 0
+
+
 def cmd_download_actors(args) -> int:
     conn = _connect_existing_colab()
     if conn is None:
@@ -479,6 +616,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start", help="Start cr_train_pipeline.py worker on Colab")
     sub.add_parser("stop", help="Request graceful checkpoint-safe stop on Colab")
     sub.add_parser("restart", help="Gracefully stop and restart cr_train_pipeline.py worker on Colab")
+    sub.add_parser(
+        "restore-and-start",
+        help="Restore latest Drive checkpoint/opponents/code to /content SSD (auto-adapting G4/A100/L4/T4 VRAM) and start training",
+    )
 
     p_dl = sub.add_parser("download-actors", help="Download & SHA256-verify actor_latest.pt and actor_best_val.pt")
     p_dl.add_argument("--out", type=Path, default=Path("artifacts/g4_heavy_mcts"))
@@ -497,6 +638,8 @@ def main(argv=None) -> int:
         rc = cmd_exec(args)
     elif args.cmd in ("start", "stop", "restart"):
         rc = cmd_pipeline_ctl(args, args.cmd)
+    elif args.cmd == "restore-and-start":
+        rc = cmd_restore_and_start(args)
     elif args.cmd == "download-actors":
         rc = cmd_download_actors(args)
     else:

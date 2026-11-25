@@ -50,9 +50,13 @@ $colabPy = "$env:APPDATA\uv\tools\google-colab-cli\Scripts\python.exe"
 & $colabPy scripts/colab_g4_ops.py stop
 ```
 
-### 场景 B：Colab 实例已关闭，需要重新开机续训
-1. 在浏览器打开仓库中的 [notebooks/colab_g4_heavy_mcts.ipynb](../notebooks/colab_g4_heavy_mcts.ipynb)（或上传到 Google Colab），右上角选择已有的 **G4 (`RTX PRO 6000`) / A100** 运行时。
-2. 依次运行前 **2 个单元格**：
+### 场景 B：Colab 实例刚重开（已挂载 Google Drive），一键恢复到 SSD 并续训
+如果已在浏览器中打开了任意 GPU 实例（G4 / A100 / L4 / T4）并完成了 `drive.mount('/content/drive')`，可直接在本地一键恢复并启动（自动根据当前显存大小适配 G4 95GB / L4 22GB / T4 15GB 参数，绝不 OOM）：
+```powershell
+$colabPy = "$env:APPDATA\uv\tools\google-colab-cli\Scripts\python.exe"
+& $colabPy scripts/colab_g4_ops.py restore-and-start
+```
+或者直接在浏览器打开仓库中的 [notebooks/colab_g4_heavy_mcts.ipynb](../notebooks/colab_g4_heavy_mcts.ipynb) 运行前 **2 个单元格**：
    - **第 1 格**：挂载 Google Drive，将模拟器、最新 `g4_heavy_mcts_overlay.zip` 代码包、`sparky_plan_b` 数据集以及最新一代 `ppo_latest.pt` + 对手池高速解压到 `/content` 本地 SSD，并按显存自动生成 `cr_train_config.json`。
    - **第 2 格**：启动后台守护进程 `cr_train_pipeline.py start`（即使关掉浏览器标签页，只要内核保活，后台子进程也会持续训练并每轮异步备份到 Drive）。
 3. 随后即可在本地终端运行 `& $colabPy scripts/colab_g4_ops.py watch --interval 900` 接管保活。
