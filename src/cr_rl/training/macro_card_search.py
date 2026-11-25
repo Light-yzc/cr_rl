@@ -1263,6 +1263,8 @@ class MacroCardSearch:
             originals = {name: parameters[name].detach().clone() for name in names}
             optimizer = torch.optim.AdamW([parameters[name] for name in names], lr=lr, weight_decay=0.0)
             scaler = torch.amp.GradScaler("cuda", enabled=torch.device(device).type == "cuda", init_scale=128.0)
+            if torch.device(device).type == "cuda":
+                torch.cuda.empty_cache()
             actor.eval()
             probe_before, reference = _score(actor, adapter, probes, device, precision, capture=True)
             _train_accumulated(actor, adapter, train_eps, train_w, optimizer, scaler, device, precision)

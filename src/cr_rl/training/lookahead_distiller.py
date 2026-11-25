@@ -69,12 +69,12 @@ def unfreeze_distill_heads(
 
 def _train_distill_accumulated(actor, adapter, episodes, weights, optimizer, scaler, device, precision) -> None:
     """Weight-normalized batched sequence NLL update so sparse overrides receive crisp gradients fast."""
-    from cr_rl.training.expert_bc_plan_b import _batched_episodes
+    from cr_rl.training.expert_bc_plan_b import _aux_episode_batch_size, _batched_episodes
 
     optimizer.zero_grad(set_to_none=True)
     n_eps = max(1, len(episodes))
     for b_start, group, lengths, logp_b in _batched_episodes(
-        actor, adapter, episodes, device, precision, batch_size=6
+        actor, adapter, episodes, device, precision, batch_size=_aux_episode_batch_size(device, 6)
     ):
         batch_loss = None
         for pos, (episode, n_len) in enumerate(zip(group, lengths)):
@@ -92,6 +92,7 @@ def _train_distill_accumulated(actor, adapter, episodes, weights, optimizer, sca
             if not torch.isfinite(batch_loss):
                 raise FloatingPointError("Nonfinite LookaheadDistiller training loss")
             scaler.scale(batch_loss).backward()
+        del logp_b, batch_loss
     scaler.unscale_(optimizer)
     norm = torch.nn.utils.clip_grad_norm_(
         [p for p in actor.parameters() if p.requires_grad], 1.0
@@ -1017,6 +1018,8 @@ class LookaheadDistiller:
                 param_groups.append({"params": temporal_params, "lr": lr * 0.15})
             optimizer = torch.optim.AdamW(param_groups, weight_decay=0.0)
             scaler = torch.amp.GradScaler("cuda", enabled=torch.device(device).type == "cuda", init_scale=128.0)
+            if torch.device(device).type == "cuda":
+                torch.cuda.empty_cache()
             actor.eval()
             probe_before, reference = _score(actor, adapter, probes, device, precision, capture=True)
             for _step_i in range(max(1, int(optimizer_steps))):

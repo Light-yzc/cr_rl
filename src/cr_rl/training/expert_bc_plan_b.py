@@ -57,6 +57,15 @@ def _sequence(actor, adapter, episode, device, precision, *, chunk=32):
         yield span, logp[0].float()
 
 
+def _aux_episode_batch_size(device, default_bs: int) -> int:
+    dev = torch.device(device)
+    if dev.type == 'cuda':
+        vram_gib = torch.cuda.get_device_properties(dev).total_memory / (1024 ** 3)
+        if vram_gib < 22.0:
+            return 2 if default_bs <= 6 else 4
+    return default_bs
+
+
 def _batched_episodes(actor, adapter, episodes, device, precision, *, batch_size=16):
     """Run causal full-episode forwards in padded batches without cross-episode leakage."""
     if not episodes:
@@ -84,7 +93,10 @@ def _batched_episodes(actor, adapter, episodes, device, precision, *, batch_size
                 tensor(header), tensor(entities), tensor(mask), tensor(leg_b),
                 hand_card_ids=tensor(raw_b[..., hands_idx]), state=None, compute_value=False,
             )
-        yield b_start, group, lengths, logp.float()
+        out_logp = logp.float()
+        del logp
+        yield b_start, group, lengths, out_logp
+        del out_logp
 
 
 @torch.no_grad()
@@ -94,7 +106,7 @@ def _score(actor, adapter, episodes, device, precision, *, weights=None, referen
     frames = deploy_frames = correct_cards = 0
     probabilities = {}
     for b_start, group, lengths, logp_b in _batched_episodes(
-        actor, adapter, episodes, device, precision, batch_size=16
+        actor, adapter, episodes, device, precision, batch_size=_aux_episode_batch_size(device, 16)
     ):
         for pos, (episode, n_len) in enumerate(zip(group, lengths)):
             index = b_start + pos
@@ -122,6 +134,7 @@ def _score(actor, adapter, episodes, device, precision, *, weights=None, referen
                 old = reference[index].to(device)
                 term = torch.where(old > 0, old * (old.clamp_min(1e-30).log() - current), 0.)
                 kl += float(term.sum())
+        del logp_b
     if not frames or (weights is not None and weight_sum <= 0):
         raise ValueError('Plan B evaluation requires legal choice frames')
     result = dict(unweighted_nll=nll / frames, reference_forward_kl=kl / frames,
@@ -143,7 +156,7 @@ def _train_accumulated(actor, adapter, episodes, weights, optimizer, scaler, dev
         if not int(np.count_nonzero(ep['actor_keep'])):
             raise ValueError('Plan B training requires usable choice frames')
     for b_start, group, lengths, logp_b in _batched_episodes(
-        actor, adapter, episodes, device, precision, batch_size=6
+        actor, adapter, episodes, device, precision, batch_size=_aux_episode_batch_size(device, 6)
     ):
         batch_loss = None
         for pos, (episode, n_len) in enumerate(zip(group, lengths)):
@@ -161,6 +174,7 @@ def _train_accumulated(actor, adapter, episodes, weights, optimizer, scaler, dev
             if not torch.isfinite(batch_loss):
                 raise FloatingPointError('Nonfinite Plan B training loss')
             scaler.scale(batch_loss).backward()
+        del logp_b, batch_loss
     scaler.unscale_(optimizer)
     norm = torch.nn.utils.clip_grad_norm_(
         [parameter for parameter in actor.parameters() if parameter.requires_grad], 1.
@@ -275,6 +289,8 @@ class PlanBExpertBC(ExpertBC):
                 opt_groups.append({'params': tile_params, 'lr': lr * 0.2})
             optimizer = torch.optim.AdamW(opt_groups, weight_decay=0.)
             scaler = torch.amp.GradScaler('cuda', enabled=torch.device(device).type == 'cuda', init_scale=128.)
+            if torch.device(device).type == 'cuda':
+                torch.cuda.empty_cache()
             actor.eval()
             baseline, _ = _score(actor, adapter, holdout, device, precision, weights=holdout_weights)
             probe_before, reference = _score(actor, adapter, probes, device, precision, capture=True)

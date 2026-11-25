@@ -89,4 +89,14 @@ def restore_latest(destination, local, *, checkpoint_source=None):
         os.link(checkpoint_source, checkpoint)
     else:
         copy_once(generation/'ppo_latest.pt',checkpoint)
+    upd = report.get('update')
+    if isinstance(upd, int) and upd >= 0:
+        ckpt_dir = local/'checkpoints'
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        seed_ckpt = ckpt_dir/f'update_{upd:06d}.pt'
+        seed_pool = ckpt_dir/f'update_{upd:06d}.pool.json'
+        if not seed_ckpt.exists():
+            os.link(checkpoint, seed_ckpt)
+        if not seed_pool.exists():
+            atomic_json(seed_pool, pool)
     return checkpoint

@@ -73,8 +73,9 @@ class _RecurrentStateMixin:
         raise RuntimeError("Architecture-v3 requires forward_state()/step() with explicit episode memory")
 
     def _activation_forward(self, function, *args, **kwargs):
-        if self.training and torch.is_grad_enabled() and getattr(self, "gradient_checkpointing", False):
-            return activation_checkpoint(function, *args, use_reentrant=False, **kwargs)
+        if torch.is_grad_enabled() and getattr(self, "gradient_checkpointing", False):
+            if self.training or any(p.requires_grad for p in function.parameters()):
+                return activation_checkpoint(function, *args, use_reentrant=False, **kwargs)
         return function(*args, **kwargs)
 
     def _encode_state_sequence(self, header, entities, entity_mask, *, state=None, time_mask=None):

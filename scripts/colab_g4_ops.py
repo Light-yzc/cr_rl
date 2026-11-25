@@ -446,6 +446,14 @@ restored_update = int(snap["updates"])
 (PREP / "source_metadata.json").write_text(json.dumps({{k: snap.get(k) for k in ("updates", "model_architecture_version", "decision_ticks", "training_args", "reward_config", "level_profile")}}, indent=2) + "\\n")
 (PREP / "source_league.yaml").write_text(yaml.safe_dump(snap["league_config"]))
 del snap
+ckpt_dir = RUN_DIR / "checkpoints"
+ckpt_dir.mkdir(parents=True, exist_ok=True)
+seed_ckpt = ckpt_dir / f"update_{{restored_update:06d}}.pt"
+seed_pool = ckpt_dir / f"update_{{restored_update:06d}}.pool.json"
+if not seed_ckpt.is_file():
+    os.link(RUN_DIR / "ppo_latest.pt", seed_ckpt)
+if (RUN_DIR / "opponent_pool.json").is_file() and not seed_pool.is_file():
+    shutil.copyfile(RUN_DIR / "opponent_pool.json", seed_pool)
 
 cfg = json.loads((DRIVE / "preparation/sparky_value_bc_v2/cr_train_config_g4.json").read_text())
 cfg["trainer_entry"] = str(ROOT / "scripts/train_selfplay.py")
