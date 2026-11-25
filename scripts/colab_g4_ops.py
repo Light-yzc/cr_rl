@@ -455,9 +455,15 @@ if not seed_ckpt.is_file():
 if (RUN_DIR / "opponent_pool.json").is_file() and not seed_pool.is_file():
     shutil.copyfile(RUN_DIR / "opponent_pool.json", seed_pool)
 
-cfg = json.loads((DRIVE / "preparation/sparky_value_bc_v2/cr_train_config_g4.json").read_text())
+drv_cfg_path = DRIVE / "preparation/sparky_value_bc_v2/cr_train_config_g4.json"
+cfg = json.loads(drv_cfg_path.read_text())
+if cfg.get("focal_decks") and cfg.get("validation_decks") != "/content/crrl_training/configs/decks_eval_focal.yaml":
+    cfg["validation_decks"] = "/content/crrl_training/configs/decks_eval_focal.yaml"
+    drv_cfg_path.write_text(json.dumps(cfg, indent=2) + "\\n")
 cfg["trainer_entry"] = str(ROOT / "scripts/train_selfplay.py")
 cfg["expert_bc_dataset"] = str(BC_PLAN_B)
+if cfg.get("focal_decks") and (ROOT / "configs/decks_eval_focal.yaml").is_file():
+    cfg["validation_decks"] = str(ROOT / "configs/decks_eval_focal.yaml")
 if (PREP / "validation_history.pt").is_file():
     cfg["validation_history"] = str(PREP / "validation_history.pt")
 
@@ -466,10 +472,13 @@ vram_gib = props.total_memory / (1024 ** 3)
 ncpu = len(os.sched_getaffinity(0))
 if vram_gib >= 70.0:
     profile_tag = "wide_70g+"
-    cfg.update(gradient_checkpointing=False, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=10 if vram_gib >= 88 else 8, cache_state_frames=True, cache_reference=True, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(16, ncpu), torch_threads=min(16, ncpu))
+    cfg.update(gradient_checkpointing=False, sparse_placement=False, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=10 if vram_gib >= 88 else 8, cache_state_frames=True, cache_reference=True, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(16, ncpu), torch_threads=min(16, ncpu))
+elif vram_gib >= 38.0:
+    profile_tag = "mid_40g"
+    cfg.update(gradient_checkpointing=True, sparse_placement=False, temporal_checkpoint_mode="block", frame_microbatch=256, actor_batch_size=2, critic_batch_size=4, cache_state_frames=True, cache_reference=True, opponent_cache_size=6, training_opponent_cache_size=4, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=12, lookahead_distill_parallel_games=12, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), validation_argmax_lanes=8)
 elif vram_gib >= 20.0:
-    profile_tag = "mid_20g_45g"
-    cfg.update(gradient_checkpointing=True, temporal_checkpoint_mode="block", frame_microbatch=256, actor_batch_size=2, critic_batch_size=4, cache_state_frames=True, cache_reference=True, opponent_cache_size=4, training_opponent_cache_size=4, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=12, lookahead_distill_parallel_games=12, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), validation_argmax_lanes=8)
+    profile_tag = "l4_22g"
+    cfg.update(gradient_checkpointing=True, sparse_placement=True, temporal_checkpoint_mode="block", frame_microbatch=128, actor_batch_size=2, critic_batch_size=2, cache_state_frames=False, cache_reference=False, opponent_cache_size=4, training_opponent_cache_size=2, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=8, lookahead_distill_parallel_games=8, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), lookahead_distill_candidates=8, lookahead_distill_rollouts=2, lookahead_distill_horizon=14, lookahead_distill_batch_episodes=8, lookahead_distill_steps=3, macro_search_candidates=6, macro_search_batch_episodes=6, validation_argmax_lanes=8)
 else:
     profile_tag = "compact_t4_15g"
     cfg.update(gradient_checkpointing=True, sparse_placement=True, temporal_checkpoint_mode="block", frame_microbatch=32, actor_batch_size=1, critic_batch_size=1, cache_state_frames=False, cache_reference=False, opponent_cache_size=4, training_opponent_cache_size=1, env_threads=min(8, ncpu), torch_threads=min(4, ncpu), lookahead_distill_games=8, lookahead_distill_parallel_games=8, lookahead_distill_parallel_searches=2, lookahead_distill_threads=min(8, ncpu), lookahead_distill_candidates=8, lookahead_distill_rollouts=2, lookahead_distill_horizon=14, lookahead_distill_batch_episodes=8, lookahead_distill_steps=3, macro_search_candidates=4, macro_search_batch_episodes=4, validation_argmax_lanes=8)

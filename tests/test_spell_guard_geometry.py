@@ -77,3 +77,73 @@ def test_rage_empty_board_veto_and_hierarchical_argmax_anti_hijack():
     giant[S.E_X] = 4500
     giant[S.E_Y] = 12500
     assert spell_has_target(S.play(0, 4, 12), "Rage", obs)
+
+
+def test_live_blunders_020919_goblin_barrel_pump_and_giant_push():
+    # 1) Blunder A: 3x BarrelGoblin (hp=323 each) on left tower -> never drop 6-cost ZapMachine over Rage / DarkPrince!
+    obs = np.zeros(S.SEAT_INTS, dtype=np.int32)
+    obs[S.H_ELIXIR] = 98000
+    obs[S.H_TOWERS + 2] = 1922
+    obs[S.H_ENTITY_COUNT] = 3
+    for i, (gx, gy) in enumerate([(3500, 6500), (4200, 7200), (3000, 7200)]):
+        ent = obs[S.HEADER_INTS + i * S.ENTITY_INTS : S.HEADER_INTS + (i + 1) * S.ENTITY_INTS]
+        ent[S.E_KIND] = S.KIND_CHARACTER
+        ent[S.E_SIDE] = 1
+        ent[S.E_HP] = 323
+        ent[S.E_X] = gx
+        ent[S.E_Y] = gy
+
+    p = np.zeros(S.ACTIONS, dtype=np.float64)
+    legal = np.zeros(S.ACTIONS, dtype=bool)
+    legal[0] = True
+    p[0] = 0.25
+    # Slot 0 = ZapMachine (0.35), Slot 1 = DarkPrince (0.22), Slot 2 = Rage on tower (0.18)
+    zm = S.play(0, 2, 3)
+    dp = S.play(1, 3, 6)
+    rg = S.play(2, 3, 6)
+    legal[zm] = legal[dp] = legal[rg] = True
+    p[zm], p[dp], p[rg] = 0.35, 0.22, 0.18
+    p /= p.sum()
+    assert spell_has_target(rg, "Rage", obs)
+    chosen, _ = select_live_action(p, legal, obs, ("ZapMachine", "DarkPrince", "Rage", "Giant"), selection_mode="argmax")
+    assert chosen in (dp, rg)
+
+    # 2) Blunder B & C: t=2740 (2x elixir, down 0-1 crowns, lone ZapMachine walking up left lane at row 10)
+    # -> NEVER plant Elixir Collector on leak_guard; place Giant in front of ZapMachine on left lane!
+    obs2 = np.zeros(S.SEAT_INTS, dtype=np.int32)
+    obs2[S.H_TICK] = 2740
+    obs2[S.H_ELIXIR] = 98000
+    obs2[S.H_CROWNS] = 0
+    obs2[S.H_CROWNS_ENEMY] = 1
+    obs2[S.H_TOWERS + 2] = 0
+    obs2[S.H_TOWERS + 4] = 2800
+    obs2[S.H_TOWERS + 8] = 390
+    obs2[S.H_ENTITY_COUNT] = 1
+    own_zm = obs2[S.HEADER_INTS : S.HEADER_INTS + S.ENTITY_INTS]
+    own_zm[S.E_KIND] = S.KIND_CHARACTER
+    own_zm[S.E_SIDE] = 0
+    own_zm[S.E_HP] = 1920
+    own_zm[S.E_MAX_HP] = 1920
+    own_zm[S.E_X] = 3500
+    own_zm[S.E_Y] = 10500
+
+    p2 = np.zeros(S.ACTIONS, dtype=np.float64)
+    leg2 = np.zeros(S.ACTIONS, dtype=bool)
+    leg2[0] = True
+    p2[0] = 0.55
+    pump_act = S.play(0, 2, 2)
+    horde_act = S.play(1, 3, 14)
+    giant_back = S.play(2, 14, 3)
+    giant_front = S.play(2, 3, 13)
+    leg2[pump_act] = leg2[horde_act] = leg2[giant_back] = leg2[giant_front] = True
+    p2[pump_act] = 0.08
+    p2[horde_act] = 0.22
+    p2[giant_back] = 0.09
+    p2[giant_front] = 0.06
+    p2 /= p2.sum()
+
+    chosen2, _ = select_live_action(
+        p2, leg2, obs2, ("Elixir Collector", "MinionHorde", "Giant", "MiniPekka"), selection_mode="argmax"
+    )
+    assert chosen2 == giant_front
+

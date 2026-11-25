@@ -61,8 +61,10 @@ def _aux_episode_batch_size(device, default_bs: int) -> int:
     dev = torch.device(device)
     if dev.type == 'cuda':
         vram_gib = torch.cuda.get_device_properties(dev).total_memory / (1024 ** 3)
-        if vram_gib < 22.0:
+        if vram_gib < 18.0:
             return 1 if default_bs <= 6 else 2
+        if vram_gib < 32.0:
+            return min(default_bs, 2 if default_bs <= 6 else 4)
     return default_bs
 
 
