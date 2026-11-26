@@ -33,8 +33,8 @@ from cr_rl.training.test_time_search import (
 )
 
 MAX_DISTILL_KL = 0.010
-MAX_DISTILL_WAIT_DRIFT = 0.006
-MIN_DISTILL_MEAN_P_WAIT = 0.81
+MAX_DISTILL_WAIT_DRIFT = 0.008
+MIN_DISTILL_MEAN_P_WAIT = 0.75
 MAX_DISTILL_MEAN_P_WAIT = 0.90
 MAX_DISTILL_LR = 3e-5
 
@@ -148,10 +148,10 @@ def lookahead_frame_weights(
     if override_only:
         w = np.zeros(len(acts), dtype=np.float64)
     elif pure_override:
-        # Zero weight on unsearched garbage PLAYs; keep 0.16 WAIT patience baseline to prevent anti-WAIT erosion!
-        w = np.where(acts == 0, 0.16, 0.0)
+        # Zero weight on unsearched garbage PLAYs; keep 0.24 WAIT patience baseline so wait_delta stays ~0!
+        w = np.where(acts == 0, 0.24, 0.0)
         w = np.where(searched & ~overridden & (acts > 0), 0.35, w)
-        w = np.where(searched & ~overridden & (acts == 0), 0.20, w)
+        w = np.where(searched & ~overridden & (acts == 0), 0.24, w)
     else:
         # Balanced non-override baseline (prevents 10x anti-WAIT erosion across updates)
         w = np.where(acts > 0, 0.35, 0.15)
