@@ -31,9 +31,10 @@ def _rage_has_engagement(x: float, y: float, obs: np.ndarray) -> bool:
         if bool(((d2_et <= 2.8 ** 2) & (enemy_t[:, S.E_HP] <= 170)).any()):
             return True
 
-    if y <= 11.5 and len(enemy_c):
+    if y <= 15.0 and len(enemy_c):
         d2_ec = (enemy_c[:, S.E_X] / 1000.0 - x) ** 2 + (enemy_c[:, S.E_Y] / 1000.0 - y) ** 2
-        if int(((d2_ec <= 3.2 ** 2) & (enemy_c[:, S.E_HP] <= 380)).sum()) >= 2:
+        swarm_cnt = int(((d2_ec <= 3.2 ** 2) & (enemy_c[:, S.E_HP] <= 380)).sum())
+        if swarm_cnt >= (2 if y <= 11.5 else 6):
             return True
 
     own_troop = chars & (rows[:, S.E_SIDE] == 0) & ((rows[:, S.E_FLAGS] & S.F_BUILDING) == 0)
@@ -44,12 +45,14 @@ def _rage_has_engagement(x: float, y: float, obs: np.ndarray) -> bool:
     buffed = own_c[d2_own <= 3.8 ** 2]
     if not len(buffed) or int(buffed[:, S.E_HP].sum()) < 300:
         return False
+    if int(buffed[:, S.E_HP].sum()) >= 1200 and float(buffed[:, S.E_Y].max()) / 1000.0 >= 13.5 and len(enemy_t):
+        return True
     targets = np.concatenate([enemy_c, enemy_t], axis=0) if (len(enemy_c) or len(enemy_t)) else np.empty((0, S.ENTITY_INTS))
     if not len(targets):
         return False
     dx = buffed[:, None, S.E_X] / 1000.0 - targets[None, :, S.E_X] / 1000.0
     dy = buffed[:, None, S.E_Y] / 1000.0 - targets[None, :, S.E_Y] / 1000.0
-    return bool(((dx * dx + dy * dy) <= 6.5 ** 2).any())
+    return bool(((dx * dx + dy * dy) <= 7.0 ** 2).any())
 
 
 def _best_cluster_tile(slot_probs: np.ndarray, slot_legal: np.ndarray) -> int:
@@ -207,11 +210,11 @@ def select_live_action(
 
     tiles = p[1 : S.FIRST_ABILITY].reshape(4, S.TILES)
     slots = tiles.sum(-1)
-    best = int(slots.argmax())
-    near_full = obs[S.H_ELIXIR] >= 95000
+    near_full = int(obs[S.H_ELIXIR]) >= 95000
     play_limit = 0.15 if near_full else play_threshold
     slot_limit = 0.10 if near_full else slot_threshold
     info = {
+        "selection_mode": selection_mode,
         "spell_vetoed": False,
         "selection_reason": "confidence_wait",
         "effective_play_threshold": play_limit,
@@ -224,22 +227,55 @@ def select_live_action(
         and skills[skill] >= max(float(p[0]), float(slots.max()))
         and legal[S.FIRST_ABILITY + skill]
     ):
-        info["selection_reason"] = "ability"
-        return S.FIRST_ABILITY + skill, info
-    if slots.sum() < play_limit or slots[best] < slot_limit:
+        ab_act = S.FIRST_ABILITY + skill
+        info.update(
+            proposed_action=ab_act,
+            proposed_action_probability=float(p[ab_act]),
+            selection_reason="ability",
+        )
+        return ab_act, info
+    if (slots.sum() + skills.sum()) < play_limit:
+        info.update(proposed_action=0, proposed_action_probability=float(p[0]))
         return 0, info
-    if tile_temperature <= 1e-4:
-        tile = int(tiles[best].argmax())
-    else:
-        rng = np.random.default_rng() if rng is None else rng
-        valid = legal[1 + best * S.TILES : 1 + (best + 1) * S.TILES] & (tiles[best] > 0)
-        logp = np.full(S.TILES, -np.inf)
-        logp[valid] = np.log(tiles[best, valid]) / tile_temperature
-        weights = np.exp(logp - logp.max())
-        tile = int(rng.choice(S.TILES, p=weights / weights.sum()))
-    action = S.play_tile(best, tile)
-    if not spell_has_target(action, hand_cards[best], obs):
-        info.update(spell_vetoed=True, selection_reason="spell_guard_veto", vetoed_action=action)
+    first_vetoed = None
+    for slot in np.argsort(-slots):
+        slot = int(slot)
+        if slots[slot] < slot_limit or slots[slot] <= 0:
+            break
+        slot_legal = legal[1 + slot * S.TILES : 1 + (slot + 1) * S.TILES]
+        if not slot_legal.any():
+            continue
+        if tile_temperature <= 1e-4:
+            tile = _best_cluster_tile(tiles[slot], slot_legal)
+        else:
+            rng = np.random.default_rng() if rng is None else rng
+            valid = slot_legal & (tiles[slot] > 0)
+            logp = np.full(S.TILES, -np.inf)
+            logp[valid] = np.log(tiles[slot, valid]) / tile_temperature
+            weights = np.exp(logp - logp.max())
+            tile = int(rng.choice(S.TILES, p=weights / weights.sum()))
+        action = S.play_tile(slot, tile)
+        card_name = hand_cards[slot] if slot < len(hand_cards) else None
+        if not spell_has_target(action, card_name, obs):
+            if first_vetoed is None:
+                first_vetoed = action
+            continue
+        info.update(
+            proposed_action=action,
+            proposed_action_probability=float(p[action]),
+            selected_slot_probability=float(slots[slot]),
+            spell_vetoed=first_vetoed is not None,
+            selection_reason="play",
+        )
+        return action, info
+    if first_vetoed is not None:
+        info.update(
+            proposed_action=first_vetoed,
+            proposed_action_probability=float(p[first_vetoed]),
+            spell_vetoed=True,
+            selection_reason="spell_guard_veto",
+            vetoed_action=first_vetoed,
+        )
         return 0, info
-    info["selection_reason"] = "play"
-    return action, info
+    info.update(proposed_action=0, proposed_action_probability=float(p[0]))
+    return 0, info

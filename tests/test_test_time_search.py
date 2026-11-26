@@ -799,3 +799,127 @@ def test_play_distill_batch_handles_staggered_dones_and_chunked_searches(tmp_pat
             sys.modules.pop("crforge_env", None)
 
 
+def test_hierarchical_default_naked_rage_skeleton_army_giant_bank_and_corner_pump():
+    @dataclass
+    class _FullTacSchema(_DummySchema):
+        tile_units: int = 1000
+        width_units: int = 18000
+        height_units: int = 32000
+        entity: dict = None
+        kinds: dict = None
+        flags: dict = None
+
+        def __post_init__(self):
+            super().__post_init__()
+            self.header["hand_cost"] = (11, 12, 13, 14)
+            self.header["overtime"] = (60,)
+            self.entity = {"side": 0, "kind": 1, "x": 2, "y": 3, "hp": 4, "max_hp": 5, "flags": 6}
+            self.kinds = {"character": 1, "tower": 2, "projectile": 3, "area": 4}
+            self.flags = {"alive": 1, "building": 2}
+            self._ents = np.zeros((0, 7), dtype=np.int32)
+
+        def entities(self, _raw):
+            return self._ents
+
+    schema = _FullTacSchema()
+    cfg = LookaheadConfig(trigger_elixir=6.0, defense_elixir=4.5, bank_min_elixir=3.8)
+
+    # 1) Hierarchical default catches diffuse naked Rage (slot sum 0.72 > WAIT 0.28, single tile 0.09 < WAIT 0.28!)
+    raw = np.zeros(224, dtype=np.int32)
+    raw[2] = 28000  # 2.8 elixir
+    raw[7:11] = [99, 10, 3, 20]  # [Rage(2), Pump(6), Giant(5), Sparky(6)]
+    raw[11:15] = [2, 6, 5, 6]
+    raw[36:42] = [3600, 3600, 5800, 3600, 3600, 5800]
+    schema._ents = np.array([[1, 1, 3500, 20500, 970, 1200, 1]], dtype=np.int32)  # Medium enemy at y=20.5, 0 own units!
+    legal = np.zeros(2307, dtype=bool)
+    legal[0] = True
+    legal[1:577] = True
+    lp_diff = torch.full((2307,), -25.0)
+    lp_diff[0] = float(np.log(0.28))
+    for k_t in range(8):
+        lp_diff[1 + 20 * 18 + 2 + k_t] = float(np.log(0.72 / 8.0))  # Each tile 0.09 < 0.28, but slot sum = 0.72!
+    assert should_trigger_search(raw, legal, lp_diff, schema, cfg, rage_card_ids=(99,)) is True
+    cands_diff = select_macro_candidates(lp_diff, legal, raw, schema, max_candidates=5, rage_card_ids=(99,))
+    assert cands_diff[0] != 0 and 0 in cands_diff
+
+    # 2) 12-Skeleton Army crossing river/bridge at y=13.5 triggers centered Rage without -4.0 nat penalty!
+    schema._ents = np.array(
+        [[1, 1, 14500 + (i % 3) * 300, 13000 + (i // 3) * 400, 130, 130, 1] for i in range(12)],
+        dtype=np.int32,
+    )
+    lp_wait = torch.full((2307,), -20.0)
+    lp_wait[0] = -0.05
+    lp_wait[1] = -3.5
+    assert should_trigger_search(raw, legal, lp_wait, schema, cfg, rage_card_ids=(99,)) is True
+    cands_skarmy = select_macro_candidates(lp_wait, legal, raw, schema, max_candidates=5, rage_card_ids=(99,))
+    skarmy_tiles = [((a - 1) % 18, (a - 1) // 18) for a in cands_skarmy if 1 <= a <= 576]
+    assert any(13 <= c <= 16 and 12 <= r <= 15 for c, r in skarmy_tiles), f"Got {skarmy_tiles}"
+
+    # 3) Proactive bridge-push Rage: Giant+Sparky at y=14.5 with enemy tower at y=25.5 (11 tiles away, 0 enemy units)
+    raw[2] = 23000
+    schema._ents = np.array(
+        [
+            [0, 1, 3500, 14800, 3200, 4090, 1],
+            [0, 1, 3500, 13600, 2319, 2319, 1],
+            [1, 2, 3500, 25500, 3600, 4858, 1],
+        ],
+        dtype=np.int32,
+    )
+    assert should_trigger_search(raw, legal, lp_wait, schema, cfg, rage_card_ids=(99,)) is True
+    cands_bpush = select_macro_candidates(lp_wait, legal, raw, schema, max_candidates=5, rage_card_ids=(99,))
+    bpush_tiles = [((a - 1) % 18, (a - 1) // 18) for a in cands_bpush if 1 <= a <= 576]
+    assert any(2 <= c <= 5 and 14 <= r <= 17 for c, r in bpush_tiles), f"Got {bpush_tiles}"
+
+    # 4) Sparky advancing at y=10.5 with 4.2 elixir and [Rage(2), Wizard(5), DarkPrince(4), Giant(5)] prioritizes BANK->Giant!
+    raw[2] = 42000
+    raw[7:11] = [99, 40, 27, 3]
+    raw[11:15] = [2, 5, 4, 5]
+    schema._ents = np.array(
+        [
+            [0, 1, 3500, 10500, 2319, 2319, 1],
+            [1, 2, 3500, 25500, 3600, 4858, 1],
+        ],
+        dtype=np.int32,
+    )
+    leg_ft = np.zeros(2307, dtype=bool)
+    leg_ft[0] = True
+    leg_ft[1:577] = True
+    leg_ft[1 + 2 * 576 : 1 + 2 * 576 + 270] = True  # DarkPrince (slot 2) legal, Giant (slot 3) 0.8 elx short!
+    lp_ft = torch.full((2307,), -18.0)
+    lp_ft[1 + 2 * 576 + 100] = -0.2
+    lp_ft[0] = -2.0
+    cands_ft = select_macro_candidates(
+        lp_ft,
+        leg_ft,
+        raw,
+        schema,
+        max_candidates=6,
+        include_bank_macros=True,
+        rage_card_ids=(99,),
+        giant_card_ids=(3,),
+        non_tank_card_ids=(40,),
+    )
+    assert encode_bank_candidate(3) in cands_ft[:4]
+
+    # 5) Calm non-overtime board at 7.0 elixir injects safe behind-tower corner Elixir Collector!
+    raw[2] = 70000
+    raw[7:11] = [99, 10, 27, 3]  # slot 1 = Collector (id=10)
+    raw[11:15] = [2, 6, 4, 5]
+    raw[36:39] = [3600, 2200, 5800]  # Left tower healthier -> prefers (1, 1) / (2, 1)
+    schema._ents = np.array([[1, 2, 3500, 25500, 3600, 4858, 1]], dtype=np.int32)
+    leg_col = np.zeros(2307, dtype=bool)
+    leg_col[0] = True
+    for s_i in range(4):
+        leg_col[1 + s_i * 576 : 1 + s_i * 576 + 270] = True
+    lp_col = torch.full((2307,), -18.0)
+    lp_col[1 + 2 * 576 + 180] = -0.3  # Model raw argmax wants DarkPrince at bridge
+    lp_col[1 + 1 * 576 + 12 * 18 + 8] = -1.5  # Model raw Collector peak is exposed mid-board (8, 12)!
+    lp_col[1 + 1 * 576 + 1 * 18 + 1] = -4.0   # Safe corner (1, 1)
+    cands_col = select_macro_candidates(
+        lp_col, leg_col, raw, schema, max_candidates=7, include_bank_macros=True, rage_card_ids=(99,), collector_card_ids=(10,)
+    )
+    safe_left_corner = 1 + 1 * 576 + 1 * 18 + 1
+    assert safe_left_corner in cands_col
+
+
+

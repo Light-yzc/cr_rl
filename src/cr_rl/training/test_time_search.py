@@ -224,6 +224,50 @@ def _hold_to_full_slots(
 GLOBAL_SPELL_MIN_TILES = 500
 
 
+def _hierarchical_default_action(lp: np.ndarray, legal: np.ndarray, raw_obs: np.ndarray, schema) -> int:
+    """Match live `--action-mode argmax`: compare WAIT vs slot total mass vs ability mass, then pick slot peak tile."""
+    legal_b = np.asarray(legal, dtype=bool).reshape(-1)
+    lp_1d = np.asarray(lp, dtype=np.float64).reshape(-1)
+    masked = np.where(legal_b, lp_1d, -np.inf)
+    max_lp = float(np.max(masked))
+    if not np.isfinite(max_lp):
+        return 0
+    probs = np.where(legal_b, np.exp(masked - max_lp), 0.0)
+    tot = float(probs.sum())
+    if tot <= 0.0:
+        return int(np.argmax(masked))
+    probs /= tot
+
+    cols = int(getattr(schema, "cols", 18))
+    rows_n = int(getattr(schema, "rows", 32))
+    tiles = cols * rows_n
+    hand_slots = int(getattr(schema, "hand_slots", 4))
+    first_ab = 1 + hand_slots * tiles
+
+    wait_mass = float(probs[0]) if legal_b[0] else -1.0
+    slot_masses = probs[1:first_ab].reshape(hand_slots, tiles).sum(axis=-1)
+    skill_masses = probs[first_ab:] if first_ab < len(probs) else np.zeros(0, dtype=np.float64)
+
+    scale = float((getattr(schema, "scales", None) or {}).get("elixir_scale", 10000))
+    elix_idx = (getattr(schema, "header", None) or {}).get("elixir")
+    avail_bars = (float(raw_obs[elix_idx[0]]) / scale) if elix_idx else 0.0
+    non_wait_max = max(float(slot_masses.max()) if len(slot_masses) else 0.0, float(skill_masses.max()) if len(skill_masses) else 0.0)
+    near_full = avail_bars >= 9.7 and (float(slot_masses.sum()) + float(skill_masses.sum())) >= 0.05
+
+    if (not near_full) and legal_b[0] and wait_mass >= non_wait_max:
+        return 0
+    if len(skill_masses):
+        sk = int(np.argmax(skill_masses))
+        if skill_masses[sk] >= float(slot_masses.max()) and skill_masses[sk] > 0.0 and legal_b[first_ab + sk]:
+            return first_ab + sk
+    best_slot = int(np.argmax(slot_masses))
+    lo = 1 + best_slot * tiles
+    hi = lo + tiles
+    if slot_masses[best_slot] > 0.0 and legal_b[lo:hi].any():
+        return lo + int(np.argmax(masked[lo:hi]))
+    return int(np.argmax(masked))
+
+
 def _is_engaged_global_spell(
     action: int,
     raw_obs: np.ndarray,
@@ -281,23 +325,27 @@ def _is_engaged_global_spell(
             d2_et = (enemy_t[:, e["x"]] - tx) ** 2 + (enemy_t[:, e["y"]] - ty) ** 2
             if bool(((d2_et <= (2.8 * tu) ** 2) & (enemy_t[:, e["hp"]] <= 170)).any()):
                 return True
-        # Naked defensive Rage ONLY on our own tower zone (y <= 11.5 tiles) hitting >=2 low-HP swarm units (e.g. Goblin Barrel)
-        if ty <= 11.5 * tu and len(enemy_c):
+        # Defensive swarm Rage: >=2 low-HP swarm units on tower zone (y<=11.5) OR >=5 swarm units up to river (y<=15.5, e.g. SkeletonArmy)
+        if ty <= 15.5 * tu and len(enemy_c):
             d2_ec = (enemy_c[:, e["x"]] - tx) ** 2 + (enemy_c[:, e["y"]] - ty) ** 2
-            if int(((d2_ec <= (3.2 * tu) ** 2) & (enemy_c[:, e["hp"]] <= 380)).sum()) >= 2:
+            swarm_cnt = int(((d2_ec <= (3.2 * tu) ** 2) & (enemy_c[:, e["hp"]] <= 380)).sum())
+            if swarm_cnt >= (2 if ty <= 11.5 * tu else 5):
                 return True
         if not len(own_c):
             return False
         d2_own = (own_c[:, e["x"]] - tx) ** 2 + (own_c[:, e["y"]] - ty) ** 2
-        buffed = own_c[d2_own <= (4.0 * tu) ** 2]
+        buffed = own_c[d2_own <= (4.2 * tu) ** 2]
         if not len(buffed) or int(buffed[:, e["hp"]].sum()) < 300:
             return False
+        # Proactive bridge-push Rage: >=1200 HP friendly push at/across bridge (y>=13.5) marching toward alive enemy tower
+        if int(buffed[:, e["hp"]].sum()) >= 1200 and float(buffed[:, e["y"]].max()) >= 13.5 * tu and len(enemy_t):
+            return True
         targets = np.concatenate([enemy_c, enemy_t], axis=0) if (len(enemy_c) or len(enemy_t)) else np.empty((0, ents.shape[1]))
         if not len(targets):
             return False
         dx = buffed[:, None, e["x"]] - targets[None, :, e["x"]]
         dy = buffed[:, None, e["y"]] - targets[None, :, e["y"]]
-        return bool(((dx * dx + dy * dy) <= (6.5 * tu) ** 2).any())
+        return bool(((dx * dx + dy * dy) <= (7.0 * tu) ** 2).any())
 
     if len(enemy_c):
         d2_ec = (enemy_c[:, e["x"]] - tx) ** 2 + (enemy_c[:, e["y"]] - ty) ** 2
@@ -322,14 +370,17 @@ def _front_tank_candidates(
     legal_mask: np.ndarray,
     masked_lp: np.ndarray,
     schema,
-) -> list[int]:
-    """Generate bridge/in-front tank placements ahead of advancing friendly support units (e.g. Sparky/Wizard)."""
+    *,
+    giant_card_ids: Sequence[int] = (),
+    non_tank_card_ids: Sequence[int] = (),
+) -> tuple[list[int], list[int]]:
+    """Return `(immediate_front_tank_actions, bank_for_giant_slots)` ahead of advancing friendly support units."""
     if not hasattr(schema, "entities"):
-        return []
+        return [], []
     e = schema.entity
     ents = schema.entities(raw_obs)
     if not len(ents):
-        return []
+        return [], []
     tu = int(getattr(schema, "tile_units", 1000))
     width_u = int(getattr(schema, "width_units", 18000))
     alive_flag = schema.flags.get("alive", 0)
@@ -346,12 +397,12 @@ def _front_tank_candidates(
         own_mask &= (ents[:, e["flags"]] & bldg_flag) == 0
     own_troops = ents[own_mask]
     if not len(own_troops):
-        return []
+        return [], []
 
     # Advancing units in own mid-field / bridge zone [3.5, 18.0] tiles that lack a >=2400 HP tank ahead in lane
     advancing = own_troops[(own_troops[:, e["y"]] >= int(3.5 * tu)) & (own_troops[:, e["y"]] <= int(18.0 * tu))]
     if not len(advancing):
-        return []
+        return [], []
 
     unshielded = []
     for unit in advancing:
@@ -365,10 +416,9 @@ def _front_tank_candidates(
             & (own_troops[:, e["hp"]] >= 1400)
         )
         if not bool(ahead_tank.any()):
-            # Prioritize high-HP/high-value backliners (Sparky ~2300 max_hp, Wizard ~1200 max_hp) near bridge
             unshielded.append((int(unit[e["max_hp"]] >= 1000), int(uy), ux, uy))
     if not unshielded:
-        return []
+        return [], []
     unshielded.sort(reverse=True)
 
     cols = int(getattr(schema, "cols", 18))
@@ -377,18 +427,41 @@ def _front_tank_candidates(
     hand_slots = int(getattr(schema, "hand_slots", 4))
     legal = np.asarray(legal_mask, dtype=bool).reshape(-1)
     costs = _hand_costs_bars(raw_obs, schema)
+    hand_idx = schema.header.get("hand_card")
+    scale = float((getattr(schema, "scales", None) or {}).get("elixir_scale", 10000))
+    elix = float(raw_obs[schema.header["elixir"][0]])
+    res = float(raw_obs[schema.header["elixir_reserved"][0]]) if "elixir_reserved" in schema.header else 0.0
+    avail = (elix - res) / scale
 
-    # Identify legal non-global-spell troop slots, prioritizing sturdy >=4-cost frontliners (Giant/DarkPrince/MiniPekka)
-    slot_order: list[tuple[int, float, int]] = []
+    # Check if an unaffordable Giant (deficit <= 1.5 bars) is in hand while backliner hasn't crossed bridge yet!
+    bank_giant_slots: list[int] = []
+    if legal[0] and not _critical_low_own_tower(raw_obs, schema) and any(uy <= int(14.5 * tu) for _p, _ys, _ux, uy in unshielded):
+        for slot in range(hand_slots):
+            cid = int(raw_obs[hand_idx[slot]]) if (hand_idx is not None and slot < len(hand_idx)) else -1
+            lo = 1 + slot * tiles
+            hi = lo + tiles
+            if legal[lo:hi].any():
+                continue
+            c_val = float(costs[slot]) if (costs is not None and slot < len(costs)) else -1.0
+            is_giant = (cid in giant_card_ids) if giant_card_ids else (abs(c_val - 5.0) < 0.2 and cid not in non_tank_card_ids)
+            if is_giant and 0.0 < (c_val - avail) <= 1.5:
+                bank_giant_slots.append(slot)
+
+    # Identify legal non-global-spell frontliner slots, prioritizing Giant over 4-cost mini-tanks & skipping squishy backliners
+    slot_order: list[tuple[int, int, float, int]] = []
     for slot in range(hand_slots):
+        cid = int(raw_obs[hand_idx[slot]]) if (hand_idx is not None and slot < len(hand_idx)) else -1
+        if non_tank_card_ids and cid in non_tank_card_ids:
+            continue
         lo = 1 + slot * tiles
         hi = lo + tiles
         n_leg = int(legal[lo:hi].sum())
         if 0 < n_leg < GLOBAL_SPELL_MIN_TILES:
             c_val = float(costs[slot]) if (costs is not None and slot < len(costs)) else 3.0
-            slot_order.append((int(c_val >= 4.0), c_val, slot))
+            is_giant = int(cid in giant_card_ids) if giant_card_ids else 0
+            slot_order.append((is_giant, int(c_val >= 4.0), c_val, slot))
     if not slot_order:
-        return []
+        return [], bank_giant_slots
     slot_order.sort(reverse=True)
 
     grid_idx = np.arange(tiles, dtype=np.int32)
@@ -400,7 +473,7 @@ def _front_tank_candidates(
         lane_bridge_c = 3.5 if ux < width_u // 2 else (cols - 4.5)
         t_col = int(np.clip(round(0.5 * (ux / tu) + 0.5 * lane_bridge_c), 2, cols - 3))
         t_row = int(np.clip((uy // tu) + 3, 9, 14))
-        for _ge4, _cval, slot in slot_order[:2]:
+        for _is_g, _ge4, _cval, slot in slot_order[:2]:
             lo = 1 + slot * tiles
             hi = lo + tiles
             near_front = legal[lo:hi] & ((np.abs(grid_c - t_col) + np.abs(grid_r - t_row)) <= 3) & (grid_r >= max(8, (uy // tu) + 1))
@@ -410,7 +483,7 @@ def _front_tank_candidates(
             act = lo + int(np.argmax(scores))
             if legal[act] and act not in out_acts:
                 out_acts.append(act)
-    return out_acts
+    return out_acts, bank_giant_slots
 
 
 def _urgent_defense_threat(raw_obs: np.ndarray, schema) -> bool:
@@ -453,7 +526,7 @@ def _tower_swarm_spell_action(
     *,
     rage_card_ids: Sequence[int] = (),
 ) -> int | None:
-    """When >=2 low-HP swarm units are on our tower zone, propose centering global spell `slot` on them."""
+    """When >=2 swarm units are on our tower zone (y<=11.5) or >=5 up to river (y<=15.5), propose centered spell."""
     if not hasattr(schema, "entities"):
         return None
     cols = int(getattr(schema, "cols", 18))
@@ -472,21 +545,89 @@ def _tower_swarm_spell_action(
     chars = (ents[:, e["side"]] == 1) & (ents[:, e["kind"]] == schema.kinds["character"]) & (ents[:, e["hp"]] > 0)
     if alive_flag:
         chars &= (ents[:, e["flags"]] & alive_flag) != 0
-    sw = ents[chars & (ents[:, e["y"]] <= 11.5 * tu) & (ents[:, e["hp"]] <= 380)]
+    sw = ents[chars & (ents[:, e["y"]] <= 15.5 * tu) & (ents[:, e["hp"]] <= 380)]
     if len(sw) < 2:
         return None
-    # Split by lane so dual-lane clutter never averages across the arena center
     width_u = float(getattr(schema, "width_units", 18000))
     left_sw = sw[sw[:, e["x"]] < width_u * 0.5]
     right_sw = sw[sw[:, e["x"]] >= width_u * 0.5]
     cluster = left_sw if len(left_sw) >= len(right_sw) else right_sw
     if len(cluster) < 2:
         return None
+    mean_y = float(cluster[:, e["y"]].mean())
+    if mean_y > 11.5 * tu and len(cluster) < 5:
+        return None
     sc = int(np.clip(round(float(cluster[:, e["x"]].mean()) / tu - 0.5), 0, cols - 1))
-    sr = int(np.clip(round(float(cluster[:, e["y"]].mean()) / tu - 0.5), 0, 11))
+    sr = int(np.clip(round(mean_y / tu - 0.5), 0, 15))
     act = lo + sr * cols + sc
     if legal[act] and _is_engaged_global_spell(act, raw_obs, legal, schema, rage_card_ids=rage_card_ids):
         return int(act)
+    return None
+
+
+def _safe_collector_candidate(
+    raw_obs: np.ndarray,
+    legal: np.ndarray,
+    masked_lp: np.ndarray,
+    schema,
+    *,
+    collector_card_ids: Sequence[int] = (),
+) -> int | None:
+    """Propose safe behind-princess-tower corner Elixir Collector on calm non-overtime boards."""
+    if not collector_card_ids or not hasattr(schema, "entities"):
+        return None
+    ot_idx = schema.header.get("overtime")
+    if ot_idx and int(raw_obs[ot_idx[0]]) != 0:
+        return None
+    if _emergency_tower_threat(raw_obs, schema):
+        return None
+    hand_idx = schema.header.get("hand_card")
+    if hand_idx is None:
+        return None
+    e = schema.entity
+    ents = schema.entities(raw_obs)
+    bldg_flag = schema.flags.get("building", 0)
+    if len(ents) and bldg_flag:
+        own_bldg = (
+            (ents[:, e["side"]] == 0)
+            & (ents[:, e["kind"]] == schema.kinds["character"])
+            & (ents[:, e["hp"]] > 0)
+            & ((ents[:, e["flags"]] & bldg_flag) != 0)
+        )
+        if bool(own_bldg.any()):
+            return None
+
+    cols = int(getattr(schema, "cols", 18))
+    rows_n = int(getattr(schema, "rows", 32))
+    tiles = cols * rows_n
+    hand_slots = int(getattr(schema, "hand_slots", 4))
+    l_hp = int(raw_obs[schema.header["own_left_hp"][0]]) if "own_left_hp" in schema.header else 3600
+    r_hp = int(raw_obs[schema.header["own_right_hp"][0]]) if "own_right_hp" in schema.header else 3600
+    if max(l_hp, r_hp) < 1400:
+        return None
+
+    pref_spots = (
+        [(1, 1), (2, 1), (1, 2), (8, 5)]
+        if l_hp >= r_hp
+        else [(cols - 2, 1), (cols - 3, 1), (cols - 2, 2), (9, 5)]
+    )
+    for slot in range(min(hand_slots, len(hand_idx))):
+        if int(raw_obs[hand_idx[slot]]) not in collector_card_ids:
+            continue
+        lo = 1 + slot * tiles
+        hi = lo + tiles
+        if not legal[lo:hi].any():
+            continue
+        best_spot = None
+        best_lp = -np.inf
+        for c_s, r_s in pref_spots:
+            if 0 <= c_s < cols and 0 <= r_s < rows_n:
+                cand = lo + r_s * cols + c_s
+                if legal[cand] and float(masked_lp[cand]) > best_lp:
+                    best_lp = float(masked_lp[cand])
+                    best_spot = cand
+        if best_spot is not None:
+            return int(best_spot)
     return None
 
 
@@ -499,7 +640,7 @@ def _engaged_push_rage_action(
     rage_card_ids: Sequence[int] = (),
     min_push_hp: int = 800,
 ) -> int | None:
-    """When our push/counterpush is actively engaged with enemy units/tower, propose Rage centered on the combat wave."""
+    """When our push/counterpush engages enemies OR >=1800 HP push crosses the bridge, propose Rage (with forward lead)."""
     if not rage_card_ids or not hasattr(schema, "entities"):
         return None
     hand_idx = schema.header.get("hand_card")
@@ -543,24 +684,42 @@ def _engaged_push_rage_action(
 
     dx = own_c[:, None, e["x"]] - targets[None, :, e["x"]]
     dy = own_c[:, None, e["y"]] - targets[None, :, e["y"]]
-    in_combat = ((dx * dx + dy * dy) <= (6.2 * tu) ** 2).any(axis=1)
+    in_combat = ((dx * dx + dy * dy) <= (6.5 * tu) ** 2).any(axis=1)
     engaged = own_c[in_combat]
-    if not len(engaged):
-        return None
 
-    left_eng = engaged[engaged[:, e["x"]] < width_u * 0.5]
-    right_eng = engaged[engaged[:, e["x"]] >= width_u * 0.5]
-    cluster = left_eng if int(left_eng[:, e["hp"]].sum()) >= int(right_eng[:, e["hp"]].sum()) else right_eng
-    tot_cluster_hp = int(cluster[:, e["hp"]].sum())
-    if tot_cluster_hp < int(min_push_hp):
-        return None
-    # Require either bridge/enemy-half presence (y >= 13.5 tiles) or a heavy >=2200 HP counterpush wave
-    if not bool((cluster[:, e["y"]] >= 13.5 * tu).any()) and tot_cluster_hp < 2200:
+    proactive_lead = False
+    cluster = np.empty((0, ents.shape[1]), dtype=ents.dtype)
+    if len(engaged):
+        left_eng = engaged[engaged[:, e["x"]] < width_u * 0.5]
+        right_eng = engaged[engaged[:, e["x"]] >= width_u * 0.5]
+        cand_cl = left_eng if int(left_eng[:, e["hp"]].sum()) >= int(right_eng[:, e["hp"]].sum()) else right_eng
+        tot_hp = int(cand_cl[:, e["hp"]].sum())
+        if tot_hp >= int(min_push_hp) and (bool((cand_cl[:, e["y"]] >= 13.5 * tu).any()) or tot_hp >= 2200):
+            cluster = cand_cl
+
+    # Proactive bridge-push path: heavy push (>=1800 HP) already at/past bridge (y>=13.5) marching toward alive enemy tower
+    if not len(cluster) and len(enemy_t):
+        adv_push = own_c[own_c[:, e["y"]] >= 13.0 * tu]
+        if len(adv_push):
+            l_adv = adv_push[adv_push[:, e["x"]] < width_u * 0.5]
+            r_adv = adv_push[adv_push[:, e["x"]] >= width_u * 0.5]
+            cand_cl = l_adv if int(l_adv[:, e["hp"]].sum()) >= int(r_adv[:, e["hp"]].sum()) else r_adv
+            if (
+                len(cand_cl)
+                and int(cand_cl[:, e["hp"]].sum()) >= max(int(min_push_hp), 1800)
+                and bool((cand_cl[:, e["y"]] >= 13.5 * tu).any())
+            ):
+                cluster = cand_cl
+                proactive_lead = True
+
+    if not len(cluster):
         return None
 
     w = np.maximum(cluster[:, e["max_hp"]], cluster[:, e["hp"]]).astype(np.float64)
     cx = float((cluster[:, e["x"]] * w).sum() / w.sum())
     cy = float((cluster[:, e["y"]] * w).sum() / w.sum())
+    if proactive_lead:
+        cy = min(cy + 1.5 * tu, 25.0 * tu)
 
     # Skip if an active friendly area spell (e.g. Rage) is already ticking on this push
     area_kind = schema.kinds.get("area", -1)
@@ -734,8 +893,11 @@ def select_macro_candidates(
     bank_min_card_cost: float = 5.0,
     bank_max_deficit: float = 2.2,
     rage_card_ids: Sequence[int] = (),
+    collector_card_ids: Sequence[int] = (),
+    giant_card_ids: Sequence[int] = (),
+    non_tank_card_ids: Sequence[int] = (),
 ) -> list[int]:
-    """Select up to `max_candidates` macro-distinct actions (WAIT + legal slots + front-tank + bank macros + tactical + splits)."""
+    """Select up to `max_candidates` macro-distinct actions (WAIT + legal slots + front-tank + collector + bank + tactical)."""
     if max_candidates < 1:
         raise ValueError("max_candidates must be positive")
     legal = np.asarray(legal_mask, dtype=bool).reshape(-1)
@@ -744,7 +906,7 @@ def select_macro_candidates(
         raise ValueError(f"logp shape {lp.shape} != legal_mask shape {legal.shape}")
 
     masked_lp = np.where(legal, lp, -np.inf)
-    default_action = int(np.argmax(masked_lp))
+    default_action = _hierarchical_default_action(lp, legal, raw_obs, schema)
     if not legal[default_action]:
         return [0]
 
@@ -791,23 +953,46 @@ def select_macro_candidates(
     if legal[0] and 0 not in candidates and elixir_bars < 9.8 and len(candidates) < max_candidates:
         candidates.append(0)
 
-    # Pass 1.2: prioritize Front-Tank Synergy placements ahead of advancing friendly support units (e.g. Sparky -> Giant)
-    for ft_act in _front_tank_candidates(raw_obs, legal, masked_lp, schema):
+    # Pass 1.2: Front-Tank Synergy (prioritize BANK_FOR_SLOT(Giant) when <1.5 bars short, then Giant/front-tank ahead of Sparky)
+    ft_acts, ft_bank_giant = _front_tank_candidates(
+        raw_obs,
+        legal,
+        masked_lp,
+        schema,
+        giant_card_ids=giant_card_ids,
+        non_tank_card_ids=non_tank_card_ids,
+    )
+    if include_bank_macros:
+        for g_slot in ft_bank_giant:
+            if len(candidates) >= max_candidates:
+                break
+            g_macro = encode_bank_candidate(g_slot)
+            if g_macro not in candidates:
+                candidates.append(g_macro)
+    for ft_act in ft_acts:
         if len(candidates) >= max_candidates:
             break
         if ft_act not in candidates:
             candidates.append(ft_act)
 
-    # Pass 1.25: prioritize Engaged-Push / Counterpush Rage (2-cost steamroll multiplier on Giant/Sparky/MiniPekka waves!)
+    # Pass 1.25: Engaged-Push / Proactive Bridge-Push Rage (2-cost steamroll multiplier on Giant/Sparky waves!)
     if rage_card_ids and len(candidates) < max_candidates:
         for slot in range(hand_slots):
             if len(candidates) >= max_candidates:
                 break
             pr_act = _engaged_push_rage_action(
-                slot, raw_obs, legal, schema, rage_card_ids=rage_card_ids, min_push_hp=1350
+                slot, raw_obs, legal, schema, rage_card_ids=rage_card_ids, min_push_hp=1200
             )
             if pr_act is not None and pr_act not in candidates:
                 candidates.append(pr_act)
+
+    # Pass 1.3: Safe behind-tower corner Elixir Collector on calm non-overtime boards (evaluated by 38-step deep MCTS!)
+    if collector_card_ids and len(candidates) < max_candidates:
+        col_act = _safe_collector_candidate(
+            raw_obs, legal, masked_lp, schema, collector_card_ids=collector_card_ids
+        )
+        if col_act is not None and col_act not in candidates:
+            candidates.append(col_act)
 
     for _score, act, _slot in group_best:
         if len(candidates) >= max_candidates:
@@ -902,6 +1087,8 @@ def should_trigger_search(
     cfg: LookaheadConfig,
     *,
     rage_card_ids: Sequence[int] = (),
+    giant_card_ids: Sequence[int] = (),
+    non_tank_card_ids: Sequence[int] = (),
 ) -> bool:
     """Return True on high-elixir macro turns, front-tank/push-Rage synergy turns, unengaged spells, or urgent defense."""
     legal = np.asarray(legal_mask, dtype=bool).reshape(-1)
@@ -913,7 +1100,7 @@ def should_trigger_search(
 
     lp_np = logp.detach().float().cpu().numpy().reshape(-1)
     masked_lp = np.where(legal, lp_np, -np.inf)
-    default_action = int(np.argmax(masked_lp))
+    default_action = _hierarchical_default_action(lp_np, legal, raw_obs, schema)
     if default_action > 0 and not _is_engaged_global_spell(
         default_action, raw_obs, legal, schema, rage_card_ids=rage_card_ids
     ):
@@ -924,11 +1111,11 @@ def should_trigger_search(
     res = float(raw_obs[schema.header["elixir_reserved"][0]]) if "elixir_reserved" in schema.header else 0.0
     avail = (elix - res) / scale
 
-    # Unconditional urgent defense trigger at >=2.0 elixir (catches Goblin Barrel / tower rushes even when WAIT=0.97!)
+    # Unconditional urgent defense trigger at >=2.0 elixir (catches Goblin Barrel / SkeletonArmy / tower rushes!)
     if avail >= 2.0 and _urgent_defense_threat(raw_obs, schema):
         return True
 
-    # Unconditional engaged-push Rage trigger at >=2.0 elixir (when Giant/Sparky/counterpush engages enemy at 2..4 elx!)
+    # Unconditional engaged / bridge-push Rage trigger at >=2.0 elixir
     if avail >= 2.0 and rage_card_ids:
         hand_slots = int(getattr(schema, "hand_slots", 4))
         for s_r in range(hand_slots):
@@ -943,8 +1130,17 @@ def should_trigger_search(
     if avail >= cfg.trigger_elixir:
         return True
 
-    if avail >= 4.0 and _front_tank_candidates(raw_obs, legal, masked_lp, schema):
-        return True
+    if avail >= 3.5:
+        ft_acts, ft_bank_giant = _front_tank_candidates(
+            raw_obs,
+            legal,
+            masked_lp,
+            schema,
+            giant_card_ids=giant_card_ids,
+            non_tank_card_ids=non_tank_card_ids,
+        )
+        if ft_bank_giant or (avail >= 4.0 and ft_acts):
+            return True
 
     if avail >= cfg.bank_min_elixir and _unaffordable_bank_slots(
         raw_obs,
@@ -988,6 +1184,49 @@ def _potential_value(raw_obs: np.ndarray, schema) -> float:
     return 0.15 * crowns + 0.05 * ((own_hp - opp_hp) / 3000.0) + 0.003 * (own_elix - 5.0)
 
 
+def _eval_critic_sequence_leaf(
+    critic: StateValueNetwork,
+    crit_mem: PolicyMemory,
+    h_steps: list[torch.Tensor],
+    e_steps: list[torch.Tensor],
+    m_steps: list[torch.Tensor],
+    leaf_h: np.ndarray,
+    leaf_e: np.ndarray,
+    leaf_m: np.ndarray,
+    live_rows: np.ndarray,
+    critic_device: torch.device,
+    critic_ctx,
+) -> np.ndarray:
+    """Evaluate leaf `V(s_{t+H})` for `live_rows` in ONE fused chunked-KDA/GQA prefill instead of H sequential steps."""
+    idx_t = torch.as_tensor(live_rows, dtype=torch.long, device=critic_device)
+    all_h = [t.index_select(0, idx_t) for t in h_steps] + [torch.as_tensor(leaf_h, device=critic_device)]
+    all_e = [t.index_select(0, idx_t) for t in e_steps] + [torch.as_tensor(leaf_e, device=critic_device)]
+    all_m = [t.index_select(0, idx_t) for t in m_steps] + [
+        torch.as_tensor(leaf_m, dtype=torch.bool, device=critic_device)
+    ]
+    seq_h = torch.stack(all_h, dim=1)
+    max_ent = max(int(t.shape[1]) for t in all_e)
+    if all(int(t.shape[1]) == max_ent for t in all_e):
+        seq_e = torch.stack(all_e, dim=1)
+        seq_m = torch.stack(all_m, dim=1)
+    else:
+        n_live = len(live_rows)
+        t_len = len(all_e)
+        feat_d = int(all_e[0].shape[-1])
+        seq_e = all_e[0].new_zeros((n_live, t_len, max_ent, feat_d))
+        seq_m = torch.zeros((n_live, t_len, max_ent), dtype=torch.bool, device=critic_device)
+        for s_i, (et, mt) in enumerate(zip(all_e, all_m)):
+            ec = int(et.shape[1])
+            seq_e[:, s_i, :ec, :] = et
+            seq_m[:, s_i, :ec] = mt
+    crit_live = slice_memory(
+        crit_mem, live_rows, trim_gqa=True, position_bound=crit_mem.temporal.length_bound
+    )
+    with critic_ctx:
+        vals_seq, _ = critic.forward_state(seq_h, seq_e, seq_m, state=crit_live)
+    return vals_seq[:, -1].float().cpu().numpy()
+
+
 class LookaheadPolicyStream:
     """Drop-in PolicyStream wrapper with forked CrForge rollout lookahead + Critic leaf evaluation."""
 
@@ -1003,6 +1242,9 @@ class LookaheadPolicyStream:
         precision: str = "fp16",
         seed: int = 20261122,
         rage_card_ids: Sequence[int] = (),
+        collector_card_ids: Sequence[int] = (),
+        giant_card_ids: Sequence[int] = (),
+        non_tank_card_ids: Sequence[int] = (),
     ):
         self.actor = actor.eval()
         self.critic = critic.eval() if critic is not None else None
@@ -1020,6 +1262,9 @@ class LookaheadPolicyStream:
         self.search_env = search_env
         self.rng = np.random.default_rng(seed)
         self.rage_card_ids = tuple(int(x) for x in rage_card_ids)
+        self.collector_card_ids = tuple(int(x) for x in collector_card_ids)
+        self.giant_card_ids = tuple(int(x) for x in giant_card_ids)
+        self.non_tank_card_ids = tuple(int(x) for x in non_tank_card_ids)
         self.hand_indices = list(adapter.schema.header["hand_card"])
 
         # Match-level replay context for exact simulator forking
@@ -1115,17 +1360,18 @@ class LookaheadPolicyStream:
         """Evaluate active bank/hold commitments and search triggers from pre-computed `logp_1d`."""
         mask_1d = torch.as_tensor(legal, device=logp_1d.device, dtype=torch.bool)
         masked_lp = logp_1d.masked_fill(~mask_1d, -torch.inf)
-        default_action = int(masked_lp.argmax(dim=-1).item())
-        chosen_action = default_action
-        bank_wait = False
-        bank_slot_used: int | None = None
-        unlocked_bank_slot: int | None = None
-
         schema = self.adapter.schema
         cols = int(getattr(schema, "cols", 18))
         rows = int(getattr(schema, "rows", 32))
         tiles = cols * rows
         legal_np = np.asarray(legal, dtype=bool).reshape(-1)
+        default_action = _hierarchical_default_action(
+            logp_1d.detach().float().cpu().numpy(), legal_np, raw, schema
+        )
+        chosen_action = default_action
+        bank_wait = False
+        bank_slot_used: int | None = None
+        unlocked_bank_slot: int | None = None
 
         scale = float((getattr(schema, "scales", None) or {}).get("elixir_scale", 10000))
         elix = float(raw[schema.header["elixir"][0]])
@@ -1216,7 +1462,16 @@ class LookaheadPolicyStream:
             and self.match_seed is not None
             and cooldown_ok
             and self._match_searches < self.cfg.max_searches_per_game
-            and should_trigger_search(raw, legal, logp_1d, schema, self.cfg, rage_card_ids=self.rage_card_ids)
+            and should_trigger_search(
+                raw,
+                legal,
+                logp_1d,
+                schema,
+                self.cfg,
+                rage_card_ids=self.rage_card_ids,
+                giant_card_ids=self.giant_card_ids,
+                non_tank_card_ids=self.non_tank_card_ids,
+            )
         ):
             candidates = select_macro_candidates(
                 logp_1d,
@@ -1228,6 +1483,9 @@ class LookaheadPolicyStream:
                 bank_min_card_cost=self.cfg.bank_min_card_cost,
                 bank_max_deficit=self.cfg.bank_max_deficit,
                 rage_card_ids=self.rage_card_ids,
+                collector_card_ids=self.collector_card_ids,
+                giant_card_ids=self.giant_card_ids,
+                non_tank_card_ids=self.non_tank_card_ids,
             )
             if chosen_action != default_action and chosen_action >= 0 and chosen_action not in candidates:
                 candidates[0] = chosen_action
@@ -1467,6 +1725,10 @@ class LookaheadPolicyStream:
                 if hs is not None:
                     lane_hold_full[c_idx * r : (c_idx + 1) * r] = True
 
+        crit_h_steps: list[torch.Tensor] = []
+        crit_e_steps: list[torch.Tensor] = []
+        crit_m_steps: list[torch.Tensor] = []
+
         for h_step in range(self.cfg.horizon_steps):
             if not live.any():
                 break
@@ -1512,11 +1774,11 @@ class LookaheadPolicyStream:
                         compute_value=False,
                     )
                 if self.critic is not None and crit_mem is not None:
-                    ch = sh_t if self.critic_device == self.device else sh_t.to(self.critic_device)
-                    ce = se_t if self.critic_device == self.device else se_t.to(self.critic_device)
-                    cm = sm_t if self.critic_device == self.device else sm_t.to(self.critic_device)
-                    with self._autocast(self.critic_device):
-                        _, crit_mem = self.critic.step(ch, ce, cm, state=crit_mem)
+                    crit_h_steps.append(sh_t if self.critic_device == self.device else sh_t.to(self.critic_device))
+                    crit_e_steps.append(se_t if self.critic_device == self.device else se_t.to(self.critic_device))
+                    crit_m_steps.append(
+                        sm_t.bool() if self.critic_device == self.device else sm_t.to(self.critic_device, dtype=torch.bool)
+                    )
                 own_acts = self._sample_legal_crn(own_lp, own_mask_b, np.tile(crn_draws[h_step, :, 0], k))
 
                 # Enforce multi-step BANK_FOR_SLOT / HOLD_TO_FULL holds until target condition unlocks!
@@ -1583,24 +1845,30 @@ class LookaheadPolicyStream:
                     returns[lane] += discounts[lane] * step_shaping
                     discounts[lane] *= self.cfg.gamma
 
-        # 3. Bootstrap surviving lanes at t + H using Independent Critic V(s_{t+H}) (or potential fallback)
+        # 3. Bootstrap surviving lanes at t + H using 1-shot fused Critic sequence prefill (or potential fallback)
         if live.any():
-            leaf_obs = self.search_env.observations[:lanes_used, seat]
+            live_rows = np.flatnonzero(live)
+            leaf_obs = self.search_env.observations[live_rows, seat]
             if self.critic is not None and crit_mem is not None:
                 lh, le, lm = self.adapter(leaf_obs)
-                with self._autocast(self.critic_device):
-                    leaf_v, _ = self.critic.step(
-                        torch.as_tensor(lh, device=self.critic_device),
-                        torch.as_tensor(le, device=self.critic_device),
-                        torch.as_tensor(lm, device=self.critic_device),
-                        state=crit_mem,
-                    )
-                leaf_vals = leaf_v.float().cpu().numpy()
-                for lane in np.flatnonzero(live):
-                    returns[lane] += discounts[lane] * float(leaf_vals[lane])
+                leaf_vals = _eval_critic_sequence_leaf(
+                    self.critic,
+                    crit_mem,
+                    crit_h_steps,
+                    crit_e_steps,
+                    crit_m_steps,
+                    lh,
+                    le,
+                    lm,
+                    live_rows,
+                    self.critic_device,
+                    self._autocast(self.critic_device),
+                )
+                for pos_l, lane in enumerate(live_rows):
+                    returns[lane] += discounts[lane] * float(leaf_vals[pos_l])
             else:
-                for lane in np.flatnonzero(live):
-                    returns[lane] += discounts[lane] * (_potential_value(leaf_obs[lane], schema) - root_pot)
+                for pos_l, lane in enumerate(live_rows):
+                    returns[lane] += discounts[lane] * (_potential_value(leaf_obs[pos_l], schema) - root_pot)
 
         cand_returns = returns.reshape(k, r).mean(axis=1)
         lp_np = root_logp.detach().float().cpu().numpy().reshape(-1)
@@ -1793,6 +2061,10 @@ def run_batched_lookahead(
     )
 
     both_mem: PolicyMemory | None = None
+    crit_h_steps: list[torch.Tensor] = []
+    crit_e_steps: list[torch.Tensor] = []
+    crit_m_steps: list[torch.Tensor] = []
+
     for h_step in range(cfg.horizon_steps):
         if not live.any():
             break
@@ -1842,12 +2114,13 @@ def run_batched_lookahead(
             own_lp = both_lp[:total_lanes]
             opp_lp = both_lp[total_lanes:]
             if critic is not None and crit_mem is not None:
-                ch = bh_t[:total_lanes] if critic_device == device else bh_t[:total_lanes].to(critic_device)
-                ce = be_t[:total_lanes] if critic_device == device else be_t[:total_lanes].to(critic_device)
-                cm = bm_t[:total_lanes] if critic_device == device else bm_t[:total_lanes].to(critic_device)
-                crit_mem = reserve_step_memory(crit_mem, 128)
-                with critic_ctx:
-                    _, crit_mem = critic.step(ch, ce, cm, state=crit_mem)
+                crit_h_steps.append(bh_t[:total_lanes] if critic_device == device else bh_t[:total_lanes].to(critic_device))
+                crit_e_steps.append(be_t[:total_lanes] if critic_device == device else be_t[:total_lanes].to(critic_device))
+                crit_m_steps.append(
+                    bm_t[:total_lanes].bool()
+                    if critic_device == device
+                    else bm_t[:total_lanes].to(critic_device, dtype=torch.bool)
+                )
             opp_acts = LookaheadPolicyStream._sample_legal_crn(opp_lp, opp_mask_b, u_draws[h_step, :, 1])
             own_acts = LookaheadPolicyStream._sample_legal_crn(own_lp, own_mask_b, u_draws[h_step, :, 0])
 
@@ -1915,24 +2188,30 @@ def run_batched_lookahead(
                 returns[lane] += discounts[lane] * step_shaping
                 discounts[lane] *= cfg.gamma
 
-    # 3. Batched leaf Critic bootstrap across all surviving lanes of all tasks
+    # 3. Batched 1-shot fused leaf Critic bootstrap across surviving lanes of all tasks
     if live.any():
-        leaf_obs = search_env.observations[lane_rows, lane_seat]
+        live_rows = np.flatnonzero(live)
+        leaf_obs = search_env.observations[live_rows, lane_seat[live_rows]]
         if critic is not None and crit_mem is not None:
             lh, le, lm = adapter(leaf_obs)
-            with critic_ctx:
-                leaf_v, _ = critic.step(
-                    torch.as_tensor(lh, device=critic_device),
-                    torch.as_tensor(le, device=critic_device),
-                    torch.as_tensor(lm, device=critic_device),
-                    state=crit_mem,
-                )
-            leaf_vals = leaf_v.float().cpu().numpy()
-            for lane in np.flatnonzero(live):
-                returns[lane] += discounts[lane] * float(leaf_vals[lane])
+            leaf_vals = _eval_critic_sequence_leaf(
+                critic,
+                crit_mem,
+                crit_h_steps,
+                crit_e_steps,
+                crit_m_steps,
+                lh,
+                le,
+                lm,
+                live_rows,
+                critic_device,
+                critic_ctx,
+            )
+            for pos_l, lane in enumerate(live_rows):
+                returns[lane] += discounts[lane] * float(leaf_vals[pos_l])
         else:
-            for lane in np.flatnonzero(live):
-                returns[lane] += discounts[lane] * (_potential_value(leaf_obs[lane], schema) - root_pots[lane])
+            for pos_l, lane in enumerate(live_rows):
+                returns[lane] += discounts[lane] * (_potential_value(leaf_obs[pos_l], schema) - root_pots[lane])
 
     # 4. Per-match candidate aggregation and override margin gating
     outputs: list[tuple[int, float]] = []

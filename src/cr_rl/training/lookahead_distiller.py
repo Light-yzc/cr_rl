@@ -29,6 +29,7 @@ from cr_rl.training.test_time_search import (
     LookaheadConfig,
     LookaheadPolicyStream,
     _emergency_tower_threat,
+    _is_engaged_global_spell,
     run_batched_lookahead,
 )
 
@@ -134,6 +135,7 @@ def lookahead_frame_weights(
     override_boost: float = 1.0,
     bank_wait_mask: np.ndarray | None = None,
     adverse_mask: np.ndarray | None = None,
+    tactical_boost_mask: np.ndarray | None = None,
     override_only: bool = False,
     pure_override: bool = False,
     score_gains: np.ndarray | None = None,
@@ -166,6 +168,9 @@ def lookahead_frame_weights(
         else:
             w = np.where(bank_w & (acts == 0), 2.50 * boost, w)
     w = np.where(overridden & (acts > 0), 2.50 * boost, w)
+    if tactical_boost_mask is not None:
+        tac_b = np.asarray(tactical_boost_mask, dtype=bool)
+        w = np.where(overridden & tac_b, w * 1.65, w)
     if score_gains is not None:
         gains = np.clip(np.asarray(score_gains, dtype=np.float64), 0.0, 0.25)
         w = np.where(overridden, w * (1.0 + 8.0 * gains), w)
@@ -543,7 +548,29 @@ class LookaheadDistiller:
         schema = play_env.vector.schema
         tiles = int(schema.cols) * int(schema.rows)
         hand_indices = list(adapter.schema.header["hand_card"])
-        rage_ids = tuple(i for i, name in enumerate(play_env.vector.vocabulary) if name == "Rage")
+        vocab = play_env.vector.vocabulary
+        rage_ids = tuple(i for i, name in enumerate(vocab) if name == "Rage")
+        collector_ids = tuple(
+            i for i, name in enumerate(vocab) if name in ("Elixir Collector", "ElixirCollector", "Pump")
+        )
+        giant_ids = tuple(i for i, name in enumerate(vocab) if name == "Giant")
+        non_tank_ids = tuple(
+            i
+            for i, name in enumerate(vocab)
+            if name
+            in (
+                "Wizard",
+                "MinionHorde",
+                "Minions",
+                "Elixir Collector",
+                "ElixirCollector",
+                "Bats",
+                "Skeletons",
+                "SpearGoblins",
+                "GoblinGang",
+            )
+        )
+        tactical_key_ids = set(rage_ids) | set(collector_ids) | set(giant_ids)
 
         streams: list[LookaheadPolicyStream] = []
         for g_idx, sp in enumerate(specs):
@@ -563,6 +590,9 @@ class LookaheadDistiller:
                 precision=precision,
                 seed=int(sp["search_seed"]),
                 rage_card_ids=rage_ids,
+                collector_card_ids=collector_ids,
+                giant_card_ids=giant_ids,
+                non_tank_card_ids=non_tank_ids,
             )
             st.bind_match(seed=int(sp["seed"]), deck0=d0, deck1=d1, slots0=s0, slots1=s1, seat=seat)
             streams.append(st)
@@ -592,6 +622,8 @@ class LookaheadDistiller:
         traj_overridden: list[list[bool]] = [[] for _ in range(w_count)]
         traj_bank_wait: list[list[bool]] = [[] for _ in range(w_count)]
         traj_adverse: list[list[bool]] = [[] for _ in range(w_count)]
+        traj_tactical_boost: list[list[bool]] = [[] for _ in range(w_count)]
+        traj_gains: list[list[float]] = [[] for _ in range(w_count)]
         override_cards: list[list[str]] = [[] for _ in range(w_count)]
         step_counts = [0] * w_count
 
@@ -727,9 +759,26 @@ class LookaheadDistiller:
                 traj_searched[g].append(bool(meta.get("searched", False)))
                 is_ovr = bool(meta.get("overridden", False) or (meta.get("unlocked_bank_slot") is not None and a_own > 0))
                 is_bank_w = bool(meta.get("bank_wait", False))
+                def_act_m = int(meta.get("default_action", 0))
+                vetoed_bad_spell = bool(
+                    is_ovr
+                    and def_act_m > 0
+                    and not _is_engaged_global_spell(def_act_m, raw_own, own_mask_b[pos], schema, rage_card_ids=rage_ids)
+                )
+                is_tac_boost = vetoed_bad_spell
+                if is_ovr and not is_tac_boost:
+                    if a_own == 0 and meta.get("bank_slot") is not None:
+                        b_cid = int(raw_own[schema.header["hand_card"][int(meta["bank_slot"])]])
+                        is_tac_boost = b_cid in tactical_key_ids
+                    elif 0 < a_own < 1 + 4 * tiles:
+                        s_played = (a_own - 1) // tiles
+                        p_cid = int(raw_own[schema.header["hand_card"][s_played]])
+                        is_tac_boost = p_cid in tactical_key_ids
                 traj_overridden[g].append(is_ovr)
                 traj_bank_wait[g].append(is_bank_w)
                 traj_adverse[g].append(_is_adverse_frame(raw_own, schema))
+                traj_tactical_boost[g].append(is_tac_boost)
+                traj_gains[g].append(float(meta.get("score_gain", 0.0)))
                 if is_ovr:
                     ovr_cards = override_cards[g]
                     if a_own == 0:
@@ -820,8 +869,10 @@ class LookaheadDistiller:
                 override_boost=1.8,
                 bank_wait_mask=np.asarray(traj_bank_wait[g_idx], dtype=bool),
                 adverse_mask=np.asarray(traj_adverse[g_idx], dtype=bool),
+                tactical_boost_mask=np.asarray(traj_tactical_boost[g_idx], dtype=bool),
                 override_only=contested_adverse,
                 pure_override=not contested_adverse,
+                score_gains=np.asarray(traj_gains[g_idx], dtype=np.float32),
             )
             report["status"] = "admitted_adverse_overrides" if contested_adverse else "admitted"
             episode = dict(

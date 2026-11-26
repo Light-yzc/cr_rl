@@ -251,24 +251,30 @@ if val_dir.exists():
                 print(vd.name + ": " + " | ".join(parts))
 
 drv_latest = Path("/content/drive/MyDrive/cr_rl_ppo/training") / run_name / "latest.json"
-if drv_latest.is_file():
-    print("\\n=== DRIVE_LATEST ===")
-    print(drv_latest.read_text().strip())
+try:
+    if drv_latest.is_file():
+        print("\\n=== DRIVE_LATEST ===")
+        print(drv_latest.read_text().strip())
+except OSError as e:
+    print(f"\\n=== DRIVE_LATEST (OSError: {{e}}) ===")
 
 bv_local = base / "best_validation.json"
 if bv_local.is_file():
-    bv_drive_dir = Path("/content/drive/MyDrive/cr_rl_ppo/training") / run_name / "best_validation"
-    bv_drive_meta = bv_drive_dir / "best_validation.json"
     loc_meta = json.loads(bv_local.read_text())
-    drv_u = json.loads(bv_drive_meta.read_text()).get("update") if bv_drive_meta.is_file() else None
-    if drv_u != loc_meta.get("update") or not (bv_drive_dir / "actor_best_val.pt").is_file():
-        bv_drive_dir.mkdir(parents=True, exist_ok=True)
-        for fn in ("actor_best_val.pt", "ppo_best_val.pt", "best_validation.json"):
-            src = base / fn
-            if src.is_file():
-                tmp = bv_drive_dir / (fn + ".partial")
-                shutil.copyfile(src, tmp)
-                tmp.replace(bv_drive_dir / fn)
+    try:
+        bv_drive_dir = Path("/content/drive/MyDrive/cr_rl_ppo/training") / run_name / "best_validation"
+        bv_drive_meta = bv_drive_dir / "best_validation.json"
+        drv_u = json.loads(bv_drive_meta.read_text()).get("update") if bv_drive_meta.is_file() else None
+        if drv_u != loc_meta.get("update") or not (bv_drive_dir / "actor_best_val.pt").is_file():
+            bv_drive_dir.mkdir(parents=True, exist_ok=True)
+            for fn in ("actor_best_val.pt", "ppo_best_val.pt", "best_validation.json"):
+                src = base / fn
+                if src.is_file():
+                    tmp = bv_drive_dir / (fn + ".partial")
+                    shutil.copyfile(src, tmp)
+                    tmp.replace(bv_drive_dir / fn)
+    except OSError:
+        pass
     print(f"=== BEST_VALIDATION: u={{loc_meta.get('update')}} bc={{loc_meta.get('bc_win_rate',0)*100:.1f}}% history={{loc_meta.get('history_win_rate',0)*100:.1f}}% ===")
 '''
 
@@ -472,7 +478,7 @@ vram_gib = props.total_memory / (1024 ** 3)
 ncpu = len(os.sched_getaffinity(0))
 if vram_gib >= 70.0:
     profile_tag = "wide_70g+"
-    cfg.update(gradient_checkpointing=False, sparse_placement=True, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=8, cache_state_frames=True, cache_reference=True, pool_capacity=12, current_opponent_fraction=0.55, historical_opponent_fraction=0.35, anchor_opponent_fraction=0.10, expert_bc=True, expert_bc_interval=12, anchor_kl_coef=0.022, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(16, ncpu), torch_threads=min(16, ncpu), lookahead_distill_games=24, lookahead_distill_parallel_games=24, lookahead_distill_parallel_searches=min(12, max(4, ncpu // 4)), lookahead_distill_threads=min(42, ncpu), lookahead_distill_candidates=7, lookahead_distill_horizon=20, lookahead_distill_rollouts=3, lookahead_distill_max_searches=28, lookahead_distill_batch_episodes=24, lookahead_distill_steps=2, lookahead_distill_learning_rate=4e-6, lookahead_distill_max_kl=0.005, lookahead_distill_temporal_blocks=1, validation_argmax_lanes=min(24, max(8, ncpu // 2)))
+    cfg.update(gradient_checkpointing=False, sparse_placement=True, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=8, cache_state_frames=True, cache_reference=True, pool_capacity=12, current_opponent_fraction=0.55, historical_opponent_fraction=0.35, anchor_opponent_fraction=0.10, expert_bc=True, expert_bc_interval=12, anchor_kl_coef=0.022, card_entropy_coef=0.0001, tile_entropy_coef=-0.0002, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(16, ncpu), torch_threads=min(16, ncpu), lookahead_distill_games=20, lookahead_distill_parallel_games=20, lookahead_distill_parallel_searches=min(10, max(4, ncpu // 4)), lookahead_distill_threads=min(42, ncpu), lookahead_distill_candidates=8, lookahead_distill_horizon=38, lookahead_distill_rollouts=3, lookahead_distill_max_searches=28, lookahead_distill_batch_episodes=20, lookahead_distill_steps=4, lookahead_distill_learning_rate=1.2e-5, lookahead_distill_max_kl=0.005, lookahead_distill_temporal_blocks=1, validation_argmax_lanes=min(24, max(8, ncpu // 2)))
 elif vram_gib >= 38.0:
     profile_tag = "mid_40g"
     cfg.update(gradient_checkpointing=True, sparse_placement=False, temporal_checkpoint_mode="block", frame_microbatch=256, actor_batch_size=2, critic_batch_size=4, cache_state_frames=True, cache_reference=True, opponent_cache_size=6, training_opponent_cache_size=4, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=12, lookahead_distill_parallel_games=12, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), validation_argmax_lanes=8)
@@ -516,10 +522,20 @@ if not latest_src.is_file() and (DRV_RUN / "latest.json").is_file():
 best_src = RUN / "actor_best_val.pt"
 if not best_src.is_file() and (DRV_RUN / "best_validation/actor_best_val.pt").is_file():
     best_src = DRV_RUN / "best_validation/actor_best_val.pt"
-STAGE = Path("/crrl_dl_stage")
+STAGE = Path("/content/crrl_dl_stage")
 if STAGE.exists():
     shutil.rmtree(STAGE)
 STAGE.mkdir(parents=True, exist_ok=True)
+root_link = Path("/crrl_dl_stage")
+if root_link.is_symlink() or root_link.exists():
+    if root_link.is_symlink() or root_link.is_file():
+        root_link.unlink()
+    else:
+        shutil.rmtree(root_link)
+try:
+    root_link.symlink_to(STAGE)
+except Exception:
+    pass
 
 CHUNK = 8 * 1024 * 1024
 manifest = {{}}
@@ -571,26 +587,48 @@ print("MANIFEST_JSON:" + json.dumps(manifest))
 
     def _fetch_chunk(item):
         cname, exp_len, exp_sha = item
+        urls = [
+            f"{base_url}/api/contents/content/crrl_dl_stage/{cname}",
+            f"{base_url}/api/contents/crrl_dl_stage/{cname}",
+        ]
         for attempt in range(5):
-            try:
-                r = http.get(
-                    f"{base_url}/api/contents/crrl_dl_stage/{cname}",
-                    headers=headers,
-                    params={**params, "content": "1", "format": "base64"},
-                    timeout=45,
-                )
-                r.raise_for_status()
-                raw = base64.b64decode(r.json()["content"])
-                if len(raw) != exp_len or hashlib.sha256(raw).hexdigest() != exp_sha:
-                    raise ValueError(f"Chunk integrity mismatch: {cname}")
-                return raw
-            except Exception:
-                if attempt == 4:
-                    raise
-                time.sleep(1.0 * (attempt + 1))
+            for u_try in urls:
+                try:
+                    r = http.get(
+                        u_try,
+                        headers=headers,
+                        params={**params, "content": "1", "format": "base64"},
+                        timeout=45,
+                    )
+                    if r.status_code == 404:
+                        continue
+                    r.raise_for_status()
+                    raw = base64.b64decode(r.json()["content"])
+                    if len(raw) != exp_len or hashlib.sha256(raw).hexdigest() != exp_sha:
+                        raise ValueError(f"Chunk integrity mismatch: {cname}")
+                    return raw
+                except Exception:
+                    if attempt == 4 and u_try == urls[-1]:
+                        raise
+            time.sleep(1.0 * (attempt + 1))
+        raise RuntimeError(f"Failed to fetch chunk {cname}")
 
     saved_paths = {}
     for tag, meta in manifest.items():
+        dst = out_dir / f"actor_{tag}_u{meta['update']:04d}.pt"
+        alias = out_dir / ("actor_best_val.pt" if tag == "best_val" else "actor_latest.pt")
+        if dst.is_file() and dst.stat().st_size == meta["raw_size"]:
+            if hashlib.sha256(dst.read_bytes()).hexdigest() == meta["sha256"]:
+                if not alias.is_file() or alias.stat().st_size != meta["raw_size"]:
+                    shutil.copyfile(dst, alias)
+                print(f"ALREADY_UP_TO_DATE [{tag}] u={meta['update']} -> {alias}", flush=True)
+                saved_paths[tag] = {
+                    "path": str(alias),
+                    "versioned_path": str(dst),
+                    "update": meta["update"],
+                    "sha256": meta["sha256"],
+                }
+                continue
         t_dl = time.perf_counter()
         with ThreadPoolExecutor(max_workers=int(args.streams)) as pool:
             parts = list(pool.map(_fetch_chunk, meta["chunks"]))
@@ -621,7 +659,11 @@ print("MANIFEST_JSON:" + json.dumps(manifest))
             "sha256": meta["sha256"],
         }
 
-    conn["exec"]("import shutil; shutil.rmtree('/crrl_dl_stage', ignore_errors=True)", timeout_sec=20)
+    conn["exec"](
+        "import shutil, pathlib; shutil.rmtree('/content/crrl_dl_stage', ignore_errors=True); "
+        "p=pathlib.Path('/crrl_dl_stage'); p.unlink() if p.is_symlink() else shutil.rmtree(p, ignore_errors=True)",
+        timeout_sec=20,
+    )
     (out_dir / "manifest.json").write_text(json.dumps(saved_paths, indent=2), encoding="utf-8")
     print("ALL_DOWNLOADS_VERIFIED_OK", flush=True)
     return 0
