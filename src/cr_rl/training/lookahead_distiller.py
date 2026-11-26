@@ -32,10 +32,10 @@ from cr_rl.training.test_time_search import (
     run_batched_lookahead,
 )
 
-MAX_DISTILL_KL = 0.02
-MAX_DISTILL_WAIT_DRIFT = 0.020
-MIN_DISTILL_MEAN_P_WAIT = 0.65
-MAX_DISTILL_MEAN_P_WAIT = 0.93
+MAX_DISTILL_KL = 0.010
+MAX_DISTILL_WAIT_DRIFT = 0.006
+MIN_DISTILL_MEAN_P_WAIT = 0.81
+MAX_DISTILL_MEAN_P_WAIT = 0.90
 MAX_DISTILL_LR = 3e-5
 
 
@@ -148,10 +148,10 @@ def lookahead_frame_weights(
     if override_only:
         w = np.zeros(len(acts), dtype=np.float64)
     elif pure_override:
-        # Zero weight on unsearched garbage plays; preserve MCTS-verified optimal plays (0.35) so >=5-cost cores stay sharp!
-        w = np.zeros(len(acts), dtype=np.float64)
+        # Zero weight on unsearched garbage PLAYs; keep 0.16 WAIT patience baseline to prevent anti-WAIT erosion!
+        w = np.where(acts == 0, 0.16, 0.0)
         w = np.where(searched & ~overridden & (acts > 0), 0.35, w)
-        w = np.where(searched & ~overridden & (acts == 0), 0.06, w)
+        w = np.where(searched & ~overridden & (acts == 0), 0.20, w)
     else:
         # Balanced non-override baseline (prevents 10x anti-WAIT erosion across updates)
         w = np.where(acts > 0, 0.35, 0.15)
@@ -1076,6 +1076,7 @@ class LookaheadDistiller:
                 if (
                     abs(wait_delta) > MAX_DISTILL_WAIT_DRIFT
                     or (wait_delta > 0.0 and cand_probe["mean_p_wait"] > MAX_DISTILL_MEAN_P_WAIT)
+                    or (wait_delta < 0.0 and cand_probe["mean_p_wait"] < MIN_DISTILL_MEAN_P_WAIT)
                 ):
                     step_reasons.append("mean_p_wait_drift")
                 if step_reasons:
