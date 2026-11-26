@@ -820,18 +820,31 @@ class MacroCardSearch:
             flat_beh = beh_sub.reshape(2 * a_cnt, s.actions)
             fh, fe, fm = adapter(flat_raw)
             w1_mem = reserve_step_memory(w1_mem, 128)
+            u_flat = draws_all[active_slots].reshape(-1)
             with amp_ctx:
-                logits, _, w1_mem = actor.step(
-                    torch.as_tensor(fh, device=dev),
-                    torch.as_tensor(fe, device=dev),
-                    torch.as_tensor(fm, device=dev),
-                    legal_action_mask=torch.as_tensor(flat_beh, dtype=torch.bool, device=dev),
-                    state=w1_mem,
-                    hand_card_ids=torch.as_tensor(flat_raw[:, hand_indices], device=dev),
-                    compute_value=False,
-                )
-            u_sub = torch.as_tensor(draws_all[active_slots].reshape(-1, 1), device=dev)
-            acts_sub = sample_with_uniforms(logits.float(), u_sub).reshape(a_cnt, 2)
+                if hasattr(actor, "step_sample_crn"):
+                    acts_flat, w1_mem = actor.step_sample_crn(
+                        torch.as_tensor(fh, device=dev),
+                        torch.as_tensor(fe, device=dev),
+                        torch.as_tensor(fm, device=dev),
+                        flat_beh,
+                        u_flat,
+                        state=w1_mem,
+                        hand_card_ids=torch.as_tensor(flat_raw[:, hand_indices], device=dev),
+                    )
+                    acts_sub = acts_flat.reshape(a_cnt, 2)
+                else:
+                    logits, _, w1_mem = actor.step(
+                        torch.as_tensor(fh, device=dev),
+                        torch.as_tensor(fe, device=dev),
+                        torch.as_tensor(fm, device=dev),
+                        legal_action_mask=torch.as_tensor(flat_beh, dtype=torch.bool, device=dev),
+                        state=w1_mem,
+                        hand_card_ids=torch.as_tensor(flat_raw[:, hand_indices], device=dev),
+                        compute_value=False,
+                    )
+                    u_sub = torch.as_tensor(u_flat.reshape(-1, 1), device=dev)
+                    acts_sub = sample_with_uniforms(logits.float(), u_sub).reshape(a_cnt, 2)
 
             for pos, gl in enumerate(active_slots):
                 st = w1_states[gl]
@@ -1007,18 +1020,31 @@ class MacroCardSearch:
             flat_beh = beh_sub.reshape(2 * a_cnt, s.actions)
             fh, fe, fm = adapter(flat_raw)
             w2_mem = reserve_step_memory(w2_mem, 128)
+            u_flat = draws_w2[active_w2].reshape(-1)
             with amp_ctx:
-                logits, _, w2_mem = actor.step(
-                    torch.as_tensor(fh, device=dev),
-                    torch.as_tensor(fe, device=dev),
-                    torch.as_tensor(fm, device=dev),
-                    legal_action_mask=torch.as_tensor(flat_beh, dtype=torch.bool, device=dev),
-                    state=w2_mem,
-                    hand_card_ids=torch.as_tensor(flat_raw[:, hand_indices], device=dev),
-                    compute_value=False,
-                )
-            u_sub = torch.as_tensor(draws_w2[active_w2].reshape(-1, 1), device=dev)
-            acts_sub = sample_with_uniforms(logits.float(), u_sub).reshape(a_cnt, 2)
+                if hasattr(actor, "step_sample_crn"):
+                    acts_flat, w2_mem = actor.step_sample_crn(
+                        torch.as_tensor(fh, device=dev),
+                        torch.as_tensor(fe, device=dev),
+                        torch.as_tensor(fm, device=dev),
+                        flat_beh,
+                        u_flat,
+                        state=w2_mem,
+                        hand_card_ids=torch.as_tensor(flat_raw[:, hand_indices], device=dev),
+                    )
+                    acts_sub = acts_flat.reshape(a_cnt, 2)
+                else:
+                    logits, _, w2_mem = actor.step(
+                        torch.as_tensor(fh, device=dev),
+                        torch.as_tensor(fe, device=dev),
+                        torch.as_tensor(fm, device=dev),
+                        legal_action_mask=torch.as_tensor(flat_beh, dtype=torch.bool, device=dev),
+                        state=w2_mem,
+                        hand_card_ids=torch.as_tensor(flat_raw[:, hand_indices], device=dev),
+                        compute_value=False,
+                    )
+                    u_sub = torch.as_tensor(u_flat.reshape(-1, 1), device=dev)
+                    acts_sub = sample_with_uniforms(logits.float(), u_sub).reshape(a_cnt, 2)
 
             for pos, gl in enumerate(active_w2):
                 s_idx = gl // LANES
@@ -1163,62 +1189,68 @@ class MacroCardSearch:
         branch_reports = []
         admitted_this_phase = 0
         max_threads = max(6, (os.cpu_count() or 12) - 4)
-        with (
-            CrForgeVector(LANES, min(max_threads, LANES), paths=env_paths, independent=True, arena="Arena_L", decision_ticks=8) as search_env,
-            CrForgeVector(LANES, 1, paths=env_paths, independent=True, arena="Arena_L", decision_ticks=8) as snap_env,
-        ):
-            search_env.set_autoreset(False)
-            snap_env.set_autoreset(False)
-            inference = StateInference(actor, adapter, device, 2 * LANES, compute_value=False, precision=precision)
-            found = self._scan_branch_candidates(
-                search_env,
-                inference,
-                decks,
-                forms,
-                deck_probabilities,
-                count=max(1, int(candidates)),
-                focal_deck_indices=focal_deck_indices,
-                snap_env=snap_env,
-            )
-            if found and all(br.get("prefix_obs_both") is not None for br in found):
-                eval_lanes = len(found) * LANES
-                with CrForgeVector(eval_lanes, min(max_threads, eval_lanes), paths=env_paths, independent=True, arena="Arena_L", decision_ticks=8) as eval_env:
-                    eval_env.set_autoreset(False)
-                    batch_outcomes = self._evaluate_branches_batched(
-                        snap_env, eval_env, actor, adapter, found, deck_names, float(win_margin), device, precision
-                    )
-                for ep, rep in batch_outcomes:
-                    self.searched_branches += 1
-                    branch_reports.append(rep)
-                    if ep is not None:
-                        self._save_episode(
-                            ep,
-                            dict(
-                                update=int(update),
-                                deck=rep["deck"],
-                                combo_cards=rep["combo_cards"],
-                                win_advantage=rep["best_win_advantage"],
-                            ),
+        orig_fp32 = getattr(actor, "ppo_actor_fp32", False)
+        if precision == "fp16" and torch.device(device).type == "cuda":
+            actor.ppo_actor_fp32 = False
+        try:
+            with (
+                CrForgeVector(LANES, min(max_threads, LANES), paths=env_paths, independent=True, arena="Arena_L", decision_ticks=8) as search_env,
+                CrForgeVector(LANES, 1, paths=env_paths, independent=True, arena="Arena_L", decision_ticks=8) as snap_env,
+            ):
+                search_env.set_autoreset(False)
+                snap_env.set_autoreset(False)
+                inference = StateInference(actor, adapter, device, 2 * LANES, compute_value=False, precision=precision)
+                found = self._scan_branch_candidates(
+                    search_env,
+                    inference,
+                    decks,
+                    forms,
+                    deck_probabilities,
+                    count=max(1, int(candidates)),
+                    focal_deck_indices=focal_deck_indices,
+                    snap_env=snap_env,
+                )
+                if found and all(br.get("prefix_obs_both") is not None for br in found):
+                    eval_lanes = len(found) * LANES
+                    with CrForgeVector(eval_lanes, min(max_threads, eval_lanes), paths=env_paths, independent=True, arena="Arena_L", decision_ticks=8) as eval_env:
+                        eval_env.set_autoreset(False)
+                        batch_outcomes = self._evaluate_branches_batched(
+                            snap_env, eval_env, actor, adapter, found, deck_names, float(win_margin), device, precision
                         )
-                        admitted_this_phase += 1
-                        self.admitted_total += 1
-            else:
-                for br in found:
-                    self.searched_branches += 1
-                    ep, rep = self._evaluate_branch(search_env, inference, br, decks, forms, deck_names, float(win_margin))
-                    branch_reports.append(rep)
-                    if ep is not None:
-                        self._save_episode(
-                            ep,
-                            dict(
-                                update=int(update),
-                                deck=rep["deck"],
-                                combo_cards=rep["combo_cards"],
-                                win_advantage=rep["best_win_advantage"],
-                            ),
-                        )
-                        admitted_this_phase += 1
-                        self.admitted_total += 1
+                    for ep, rep in batch_outcomes:
+                        self.searched_branches += 1
+                        branch_reports.append(rep)
+                        if ep is not None:
+                            self._save_episode(
+                                ep,
+                                dict(
+                                    update=int(update),
+                                    deck=rep["deck"],
+                                    combo_cards=rep["combo_cards"],
+                                    win_advantage=rep["best_win_advantage"],
+                                ),
+                            )
+                            admitted_this_phase += 1
+                            self.admitted_total += 1
+                else:
+                    for br in found:
+                        self.searched_branches += 1
+                        ep, rep = self._evaluate_branch(search_env, inference, br, decks, forms, deck_names, float(win_margin))
+                        branch_reports.append(rep)
+                        if ep is not None:
+                            self._save_episode(
+                                ep,
+                                dict(
+                                    update=int(update),
+                                    deck=rep["deck"],
+                                    combo_cards=rep["combo_cards"],
+                                    win_advantage=rep["best_win_advantage"],
+                                ),
+                            )
+                            admitted_this_phase += 1
+                            self.admitted_total += 1
+        finally:
+            actor.ppo_actor_fp32 = orig_fp32
 
         search_seconds = time.perf_counter() - began
         self.last_update = int(update)

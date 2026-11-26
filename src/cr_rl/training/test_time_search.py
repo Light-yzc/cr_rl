@@ -1739,18 +1739,34 @@ class LookaheadPolicyStream:
             # Opponent actions on step 0..H-1 (and own actions on step 1..H-1)
             opp_raw_b = raw_all[:, opp_seat]
             opp_mask_b = mask_all[:, opp_seat]
+            if not live.all():
+                opp_mask_b = opp_mask_b.copy()
+                opp_mask_b[~live, 1:] = False
+                opp_mask_b[~live, 0] = True
             oh, oe, om = self.adapter(opp_raw_b)
+            opp_mem = reserve_step_memory(opp_mem, 128)
             with self._autocast(for_actor=True):
-                opp_lp, _, opp_mem = self.actor.step(
-                    torch.as_tensor(oh, device=self.device),
-                    torch.as_tensor(oe, device=self.device),
-                    torch.as_tensor(om, device=self.device),
-                    torch.as_tensor(opp_mask_b, dtype=torch.bool, device=self.device),
-                    state=opp_mem,
-                    hand_card_ids=torch.as_tensor(opp_raw_b[:, self.hand_indices], device=self.device),
-                    compute_value=False,
-                )
-            opp_acts = self._sample_legal_crn(opp_lp, opp_mask_b, np.tile(crn_draws[h_step, :, 1], k))
+                if hasattr(self.actor, "step_sample_crn"):
+                    opp_acts, opp_mem = self.actor.step_sample_crn(
+                        torch.as_tensor(oh, device=self.device),
+                        torch.as_tensor(oe, device=self.device),
+                        torch.as_tensor(om, device=self.device),
+                        opp_mask_b,
+                        np.tile(crn_draws[h_step, :, 1], k),
+                        state=opp_mem,
+                        hand_card_ids=torch.as_tensor(opp_raw_b[:, self.hand_indices], device=self.device),
+                    )
+                else:
+                    opp_lp, _, opp_mem = self.actor.step(
+                        torch.as_tensor(oh, device=self.device),
+                        torch.as_tensor(oe, device=self.device),
+                        torch.as_tensor(om, device=self.device),
+                        torch.as_tensor(opp_mask_b, dtype=torch.bool, device=self.device),
+                        state=opp_mem,
+                        hand_card_ids=torch.as_tensor(opp_raw_b[:, self.hand_indices], device=self.device),
+                        compute_value=False,
+                    )
+                    opp_acts = self._sample_legal_crn(opp_lp, opp_mask_b, np.tile(crn_draws[h_step, :, 1], k))
 
             if h_step == 0:
                 # Root action was already stepped into own_mem on the real frame; bank macros start with WAIT (0)
@@ -1759,31 +1775,15 @@ class LookaheadPolicyStream:
             else:
                 own_raw_b = raw_all[:, seat]
                 own_mask_b = mask_all[:, seat]
-                sh, se, sm = self.adapter(own_raw_b)
-                sh_t = torch.as_tensor(sh, device=self.device)
-                se_t = torch.as_tensor(se, device=self.device)
-                sm_t = torch.as_tensor(sm, device=self.device)
-                with self._autocast(for_actor=True):
-                    own_lp, _, own_mem = self.actor.step(
-                        sh_t,
-                        se_t,
-                        sm_t,
-                        torch.as_tensor(own_mask_b, dtype=torch.bool, device=self.device),
-                        state=own_mem,
-                        hand_card_ids=torch.as_tensor(own_raw_b[:, self.hand_indices], device=self.device),
-                        compute_value=False,
-                    )
-                if self.critic is not None and crit_mem is not None:
-                    crit_h_steps.append(sh_t if self.critic_device == self.device else sh_t.to(self.critic_device))
-                    crit_e_steps.append(se_t if self.critic_device == self.device else se_t.to(self.critic_device))
-                    crit_m_steps.append(
-                        sm_t.bool() if self.critic_device == self.device else sm_t.to(self.critic_device, dtype=torch.bool)
-                    )
-                own_acts = self._sample_legal_crn(own_lp, own_mask_b, np.tile(crn_draws[h_step, :, 0], k))
-
-                # Enforce multi-step BANK_FOR_SLOT / HOLD_TO_FULL holds until target condition unlocks!
+                if not live.all():
+                    own_mask_b = own_mask_b.copy()
+                    own_mask_b[~live, 1:] = False
+                    own_mask_b[~live, 0] = True
+                fw_own: np.ndarray | None = None
+                fs_own: np.ndarray | None = None
                 if np.any(lane_bank_slot >= 0):
-                    own_lp_np = own_lp.detach().float().cpu().numpy()
+                    fw_own = np.zeros(lanes_used, dtype=bool)
+                    fs_own = np.full(lanes_used, -1, dtype=np.int32)
                     for lane in active:
                         bs = int(lane_bank_slot[lane])
                         if bs < 0:
@@ -1807,19 +1807,63 @@ class LookaheadPolicyStream:
                             lane_bank_slot[lane] = -1
                         elif is_hf:
                             if l_avail < 9.4 and own_mask_b[lane, 0]:
-                                own_acts[lane] = 0
+                                fw_own[lane] = True
                             elif own_mask_b[lane, lo:hi].any():
-                                slot_masked = np.where(own_mask_b[lane, lo:hi], own_lp_np[lane, lo:hi], -np.inf)
-                                own_acts[lane] = lo + int(np.argmax(slot_masked))
+                                fs_own[lane] = bs
                                 lane_bank_slot[lane] = -1
                             else:
                                 lane_bank_slot[lane] = -1
                         elif own_mask_b[lane, lo:hi].any():
-                            slot_masked = np.where(own_mask_b[lane, lo:hi], own_lp_np[lane, lo:hi], -np.inf)
-                            own_acts[lane] = lo + int(np.argmax(slot_masked))
+                            fs_own[lane] = bs
                             lane_bank_slot[lane] = -1
                         elif own_mask_b[lane, 0]:
-                            own_acts[lane] = 0
+                            fw_own[lane] = True
+
+                sh, se, sm = self.adapter(own_raw_b)
+                sh_t = torch.as_tensor(sh, device=self.device)
+                se_t = torch.as_tensor(se, device=self.device)
+                sm_t = torch.as_tensor(sm, device=self.device)
+                own_mem = reserve_step_memory(own_mem, 128)
+                with self._autocast(for_actor=True):
+                    if hasattr(self.actor, "step_sample_crn"):
+                        own_acts, own_mem = self.actor.step_sample_crn(
+                            sh_t,
+                            se_t,
+                            sm_t,
+                            own_mask_b,
+                            np.tile(crn_draws[h_step, :, 0], k),
+                            state=own_mem,
+                            hand_card_ids=torch.as_tensor(own_raw_b[:, self.hand_indices], device=self.device),
+                            force_wait=fw_own,
+                            force_slot_argmax=fs_own,
+                        )
+                    else:
+                        own_lp, _, own_mem = self.actor.step(
+                            sh_t,
+                            se_t,
+                            sm_t,
+                            torch.as_tensor(own_mask_b, dtype=torch.bool, device=self.device),
+                            state=own_mem,
+                            hand_card_ids=torch.as_tensor(own_raw_b[:, self.hand_indices], device=self.device),
+                            compute_value=False,
+                        )
+                        own_acts = self._sample_legal_crn(own_lp, own_mask_b, np.tile(crn_draws[h_step, :, 0], k))
+                        if fw_own is not None and fs_own is not None:
+                            own_lp_np = own_lp.detach().float().cpu().numpy()
+                            for lane in active:
+                                if fw_own[lane]:
+                                    own_acts[lane] = 0
+                                elif fs_own[lane] >= 0:
+                                    lo = 1 + int(fs_own[lane]) * tiles
+                                    hi = lo + tiles
+                                    slot_masked = np.where(own_mask_b[lane, lo:hi], own_lp_np[lane, lo:hi], -np.inf)
+                                    own_acts[lane] = lo + int(np.argmax(slot_masked))
+                if self.critic is not None and crit_mem is not None:
+                    crit_h_steps.append(sh_t if self.critic_device == self.device else sh_t.to(self.critic_device))
+                    crit_e_steps.append(se_t if self.critic_device == self.device else se_t.to(self.critic_device))
+                    crit_m_steps.append(
+                        sm_t.bool() if self.critic_device == self.device else sm_t.to(self.critic_device, dtype=torch.bool)
+                    )
 
             vector.actions[:lanes_used, seat] = own_acts
             vector.actions[:lanes_used, opp_seat] = opp_acts
@@ -2074,58 +2118,51 @@ def run_batched_lookahead(
 
         opp_raw_b = raw_all[lane_rows, lane_opp_seat]
         opp_mask_b = mask_all[lane_rows, lane_opp_seat]
+        if not live.all():
+            opp_mask_b = opp_mask_b.copy()
+            opp_mask_b[~live, 1:] = False
+            opp_mask_b[~live, 0] = True
 
         if h_step == 0:
             oh, oe, om = adapter(opp_raw_b)
             opp_mem = reserve_step_memory(opp_mem, 128)
             with actor_ctx:
-                opp_lp, _, opp_mem = actor.step(
-                    torch.as_tensor(oh, device=device),
-                    torch.as_tensor(oe, device=device),
-                    torch.as_tensor(om, device=device),
-                    torch.as_tensor(opp_mask_b, dtype=torch.bool, device=device),
-                    state=opp_mem,
-                    hand_card_ids=torch.as_tensor(opp_raw_b[:, hand_indices], device=device),
-                    compute_value=False,
-                )
-            opp_acts = LookaheadPolicyStream._sample_legal_crn(opp_lp, opp_mask_b, u_draws[h_step, :, 1])
+                if hasattr(actor, "step_sample_crn"):
+                    opp_acts, opp_mem = actor.step_sample_crn(
+                        torch.as_tensor(oh, device=device),
+                        torch.as_tensor(oe, device=device),
+                        torch.as_tensor(om, device=device),
+                        opp_mask_b,
+                        u_draws[h_step, :, 1],
+                        state=opp_mem,
+                        hand_card_ids=torch.as_tensor(opp_raw_b[:, hand_indices], device=device),
+                    )
+                else:
+                    opp_lp, _, opp_mem = actor.step(
+                        torch.as_tensor(oh, device=device),
+                        torch.as_tensor(oe, device=device),
+                        torch.as_tensor(om, device=device),
+                        torch.as_tensor(opp_mask_b, dtype=torch.bool, device=device),
+                        state=opp_mem,
+                        hand_card_ids=torch.as_tensor(opp_raw_b[:, hand_indices], device=device),
+                        compute_value=False,
+                    )
+                    opp_acts = LookaheadPolicyStream._sample_legal_crn(opp_lp, opp_mask_b, u_draws[h_step, :, 1])
             own_acts = root_own_acts.copy()
             both_mem = stack_memories([own_mem, opp_mem], device=device)
         else:
             own_raw_b = raw_all[lane_rows, lane_seat]
             own_mask_b = mask_all[lane_rows, lane_seat]
-            both_raw = np.concatenate([own_raw_b, opp_raw_b], axis=0)
-            both_mask = np.concatenate([own_mask_b, opp_mask_b], axis=0)
-            bh, be, bm = adapter(both_raw)
-            bh_t = torch.as_tensor(bh, device=device)
-            be_t = torch.as_tensor(be, device=device)
-            bm_t = torch.as_tensor(bm, device=device)
-            both_mem = reserve_step_memory(both_mem, 128)
-            with actor_ctx:
-                both_lp, _, both_mem = actor.step(
-                    bh_t,
-                    be_t,
-                    bm_t,
-                    torch.as_tensor(both_mask, dtype=torch.bool, device=device),
-                    state=both_mem,
-                    hand_card_ids=torch.as_tensor(both_raw[:, hand_indices], device=device),
-                    compute_value=False,
-                )
-            own_lp = both_lp[:total_lanes]
-            opp_lp = both_lp[total_lanes:]
-            if critic is not None and crit_mem is not None:
-                crit_h_steps.append(bh_t[:total_lanes] if critic_device == device else bh_t[:total_lanes].to(critic_device))
-                crit_e_steps.append(be_t[:total_lanes] if critic_device == device else be_t[:total_lanes].to(critic_device))
-                crit_m_steps.append(
-                    bm_t[:total_lanes].bool()
-                    if critic_device == device
-                    else bm_t[:total_lanes].to(critic_device, dtype=torch.bool)
-                )
-            opp_acts = LookaheadPolicyStream._sample_legal_crn(opp_lp, opp_mask_b, u_draws[h_step, :, 1])
-            own_acts = LookaheadPolicyStream._sample_legal_crn(own_lp, own_mask_b, u_draws[h_step, :, 0])
+            if not live.all():
+                own_mask_b = own_mask_b.copy()
+                own_mask_b[~live, 1:] = False
+                own_mask_b[~live, 0] = True
 
+            fw_both: np.ndarray | None = None
+            fs_both: np.ndarray | None = None
             if np.any(lane_bank_slot >= 0):
-                own_lp_np = own_lp.detach().float().cpu().numpy()
+                fw_both = np.zeros(2 * total_lanes, dtype=bool)
+                fs_both = np.full(2 * total_lanes, -1, dtype=np.int32)
                 for lane in active:
                     bs = int(lane_bank_slot[lane])
                     if bs < 0:
@@ -2149,19 +2186,73 @@ def run_batched_lookahead(
                         lane_bank_slot[lane] = -1
                     elif is_hf:
                         if l_avail < 9.4 and own_mask_b[lane, 0]:
-                            own_acts[lane] = 0
+                            fw_both[lane] = True
                         elif own_mask_b[lane, lo:hi].any():
-                            slot_masked = np.where(own_mask_b[lane, lo:hi], own_lp_np[lane, lo:hi], -np.inf)
-                            own_acts[lane] = lo + int(np.argmax(slot_masked))
+                            fs_both[lane] = bs
                             lane_bank_slot[lane] = -1
                         else:
                             lane_bank_slot[lane] = -1
                     elif own_mask_b[lane, lo:hi].any():
-                        slot_masked = np.where(own_mask_b[lane, lo:hi], own_lp_np[lane, lo:hi], -np.inf)
-                        own_acts[lane] = lo + int(np.argmax(slot_masked))
+                        fs_both[lane] = bs
                         lane_bank_slot[lane] = -1
                     elif own_mask_b[lane, 0]:
-                        own_acts[lane] = 0
+                        fw_both[lane] = True
+
+            both_raw = np.concatenate([own_raw_b, opp_raw_b], axis=0)
+            both_mask = np.concatenate([own_mask_b, opp_mask_b], axis=0)
+            u_both = np.concatenate([u_draws[h_step, :, 0], u_draws[h_step, :, 1]], axis=0)
+            bh, be, bm = adapter(both_raw)
+            bh_t = torch.as_tensor(bh, device=device)
+            be_t = torch.as_tensor(be, device=device)
+            bm_t = torch.as_tensor(bm, device=device)
+            both_mem = reserve_step_memory(both_mem, 128)
+            with actor_ctx:
+                if hasattr(actor, "step_sample_crn"):
+                    both_acts, both_mem = actor.step_sample_crn(
+                        bh_t,
+                        be_t,
+                        bm_t,
+                        both_mask,
+                        u_both,
+                        state=both_mem,
+                        hand_card_ids=torch.as_tensor(both_raw[:, hand_indices], device=device),
+                        force_wait=fw_both,
+                        force_slot_argmax=fs_both,
+                    )
+                    own_acts = both_acts[:total_lanes]
+                    opp_acts = both_acts[total_lanes:]
+                else:
+                    both_lp, _, both_mem = actor.step(
+                        bh_t,
+                        be_t,
+                        bm_t,
+                        torch.as_tensor(both_mask, dtype=torch.bool, device=device),
+                        state=both_mem,
+                        hand_card_ids=torch.as_tensor(both_raw[:, hand_indices], device=device),
+                        compute_value=False,
+                    )
+                    own_lp = both_lp[:total_lanes]
+                    opp_lp = both_lp[total_lanes:]
+                    opp_acts = LookaheadPolicyStream._sample_legal_crn(opp_lp, opp_mask_b, u_draws[h_step, :, 1])
+                    own_acts = LookaheadPolicyStream._sample_legal_crn(own_lp, own_mask_b, u_draws[h_step, :, 0])
+                    if fw_both is not None and fs_both is not None:
+                        own_lp_np = own_lp.detach().float().cpu().numpy()
+                        for lane in active:
+                            if fw_both[lane]:
+                                own_acts[lane] = 0
+                            elif fs_both[lane] >= 0:
+                                lo = 1 + int(fs_both[lane]) * tiles
+                                hi = lo + tiles
+                                slot_masked = np.where(own_mask_b[lane, lo:hi], own_lp_np[lane, lo:hi], -np.inf)
+                                own_acts[lane] = lo + int(np.argmax(slot_masked))
+            if critic is not None and crit_mem is not None:
+                crit_h_steps.append(bh_t[:total_lanes] if critic_device == device else bh_t[:total_lanes].to(critic_device))
+                crit_e_steps.append(be_t[:total_lanes] if critic_device == device else be_t[:total_lanes].to(critic_device))
+                crit_m_steps.append(
+                    bm_t[:total_lanes].bool()
+                    if critic_device == device
+                    else bm_t[:total_lanes].to(critic_device, dtype=torch.bool)
+                )
 
         vector.actions[lane_rows, lane_seat] = own_acts
         vector.actions[lane_rows, lane_opp_seat] = opp_acts

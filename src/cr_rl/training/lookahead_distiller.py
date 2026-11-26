@@ -21,7 +21,7 @@ import numpy as np
 import torch
 
 from cr_rl.envs.crforge import CrForgeVector
-from cr_rl.models.state_policy import reserve_step_memory, slice_memory
+from cr_rl.models.state_policy import reserve_step_memory, scatter_step_memory, slice_memory
 from cr_rl.training.expert_bc_plan_b import MAX_KL, MAX_WAIT_DRIFT, _score, _train_accumulated
 from cr_rl.training.live_awbc import freeze_actor_readouts
 from cr_rl.training.macro_card_search import probe_anchor_weights
@@ -35,7 +35,7 @@ from cr_rl.training.test_time_search import (
 
 MAX_DISTILL_KL = 0.010
 MAX_DISTILL_WAIT_DRIFT = 0.008
-MIN_DISTILL_MEAN_P_WAIT = 0.75
+MIN_DISTILL_MEAN_P_WAIT = 0.65
 MAX_DISTILL_MEAN_P_WAIT = 0.90
 MAX_DISTILL_LR = 3e-5
 
@@ -597,164 +597,55 @@ class LookaheadDistiller:
             st.bind_match(seed=int(sp["seed"]), deck0=d0, deck1=d1, slots0=s0, slots1=s1, seat=seat)
             streams.append(st)
 
-        actor_ctx = (
-            torch.autocast("cuda", dtype=torch.float16)
-            if (precision == "fp16" and dev.type == "cuda" and not getattr(actor, "ppo_actor_fp32", False))
-            else nullcontext()
-        )
-        critic_ctx = (
-            torch.autocast("cuda", dtype=torch.float16)
-            if (precision == "fp16" and critic_device.type == "cuda")
-            else nullcontext()
-        )
-        with actor_ctx:
-            actor_mem = actor.initial_state(2 * w_count, device=dev)
-        if critic is not None:
-            with critic_ctx:
-                crit_mem = critic.initial_state(w_count, device=critic_device)
-        else:
-            crit_mem = None
+        orig_fp32 = getattr(actor, "ppo_actor_fp32", False)
+        if precision == "fp16" and dev.type == "cuda":
+            actor.ppo_actor_fp32 = False
 
-        traj_obs: list[list[np.ndarray]] = [[] for _ in range(w_count)]
-        traj_masks: list[list[np.ndarray]] = [[] for _ in range(w_count)]
-        traj_acts: list[list[int]] = [[] for _ in range(w_count)]
-        traj_searched: list[list[bool]] = [[] for _ in range(w_count)]
-        traj_overridden: list[list[bool]] = [[] for _ in range(w_count)]
-        traj_bank_wait: list[list[bool]] = [[] for _ in range(w_count)]
-        traj_adverse: list[list[bool]] = [[] for _ in range(w_count)]
-        traj_tactical_boost: list[list[bool]] = [[] for _ in range(w_count)]
-        traj_gains: list[list[float]] = [[] for _ in range(w_count)]
-        override_cards: list[list[str]] = [[] for _ in range(w_count)]
-        step_counts = [0] * w_count
-
-        active_slots = list(range(w_count))
-        n_search_cap = int(search_env.count)
-
-        for _step_num in range(int(max_game_steps)):
-            keep_pos = [pos for pos, g in enumerate(active_slots) if not play_env.dones[g]]
-            if not keep_pos:
-                break
-            if len(keep_pos) < len(active_slots):
-                old_a = len(active_slots)
-                actor_keep = keep_pos + [old_a + pos for pos in keep_pos]
-                actor_mem = slice_memory(actor_mem, actor_keep)
-                if crit_mem is not None:
-                    crit_mem = slice_memory(crit_mem, keep_pos)
-                active_slots = [active_slots[pos] for pos in keep_pos]
-
-            a_cnt = len(active_slots)
-            lanes_arr = np.asarray(active_slots, dtype=np.int32)
-            seats_arr = np.asarray([int(specs[g]["seat"]) for g in active_slots], dtype=np.int32)
-            opp_seats_arr = 1 - seats_arr
-
-            own_raw_b = play_env.observations[lanes_arr, seats_arr].copy()
-            own_mask_b = play_env.masks[lanes_arr, seats_arr].copy()
-            opp_raw_b = play_env.observations[lanes_arr, opp_seats_arr].copy()
-            opp_mask_b = play_env.masks[lanes_arr, opp_seats_arr].copy()
-
-            # Single fused Actor forward for both learner & mirror-opponent streams [2 * A]
-            both_raw = np.concatenate([own_raw_b, opp_raw_b], axis=0)
-            both_mask = np.concatenate([own_mask_b, opp_mask_b], axis=0)
-            bh, be, bm = adapter(both_raw)
-            bh_t = torch.as_tensor(bh, device=dev)
-            be_t = torch.as_tensor(be, device=dev)
-            bm_t = torch.as_tensor(bm, device=dev)
-            bmask_t = torch.as_tensor(both_mask, dtype=torch.bool, device=dev)
-            bhand_t = torch.as_tensor(both_raw[:, hand_indices], device=dev)
-
-            actor_mem = reserve_step_memory(actor_mem, 128)
+        try:
+            actor_ctx = (
+                torch.autocast("cuda", dtype=torch.float16)
+                if (precision == "fp16" and dev.type == "cuda" and not getattr(actor, "ppo_actor_fp32", False))
+                else nullcontext()
+            )
+            critic_ctx = (
+                torch.autocast("cuda", dtype=torch.float16)
+                if (precision == "fp16" and critic_device.type == "cuda")
+                else nullcontext()
+            )
+            mem_cap = max(128, int(max_game_steps) + 32)
             with actor_ctx:
-                both_logp, _, actor_mem = actor.step(
-                    bh_t, be_t, bm_t, bmask_t, state=actor_mem, hand_card_ids=bhand_t, compute_value=False
-                )
-            if critic is not None and crit_mem is not None:
-                ch_t = bh_t[:a_cnt] if critic_device == dev else bh_t[:a_cnt].to(critic_device)
-                ce_t = be_t[:a_cnt] if critic_device == dev else be_t[:a_cnt].to(critic_device)
-                cm_t = bm_t[:a_cnt] if critic_device == dev else bm_t[:a_cnt].to(critic_device)
-                crit_mem = reserve_step_memory(crit_mem, 128)
+                actor_mem = reserve_step_memory(actor.initial_state(2 * w_count, device=dev), mem_cap)
+            if critic is not None:
                 with critic_ctx:
-                    _, crit_mem = critic.step(ch_t, ce_t, cm_t, state=crit_mem)
+                    crit_mem = reserve_step_memory(critic.initial_state(w_count, device=critic_device), mem_cap)
+            else:
+                crit_mem = None
 
-            own_logp = both_logp[:a_cnt]
-            opp_logp = both_logp[a_cnt:]
+            traj_obs: list[list[np.ndarray]] = [[] for _ in range(w_count)]
+            traj_masks: list[list[np.ndarray]] = [[] for _ in range(w_count)]
+            traj_acts: list[list[int]] = [[] for _ in range(w_count)]
+            traj_searched: list[list[bool]] = [[] for _ in range(w_count)]
+            traj_overridden: list[list[bool]] = [[] for _ in range(w_count)]
+            traj_bank_wait: list[list[bool]] = [[] for _ in range(w_count)]
+            traj_adverse: list[list[bool]] = [[] for _ in range(w_count)]
+            traj_tactical_boost: list[list[bool]] = [[] for _ in range(w_count)]
+            traj_gains: list[list[float]] = [[] for _ in range(w_count)]
+            override_cards: list[list[str]] = [[] for _ in range(w_count)]
+            step_counts = [0] * w_count
 
-            a_own_list = [0] * a_cnt
-            a_opp_list = [0] * a_cnt
-            search_tasks: list[dict] = []
+            n_search_cap = int(search_env.count)
+            r_roll = int(cfg.rollouts_per_candidate)
+            lanes_per_game = max(1, int(cfg.max_candidates) * r_roll)
+            flush_target = max(1, n_search_cap // lanes_per_game)
+            parked_by_game: dict[int, dict] = {}
 
-            for pos, g in enumerate(active_slots):
-                sp = specs[g]
-                a_opp_list[pos] = self._sample_opp_action_from_logp(
-                    opp_logp[pos], opp_mask_b[pos], float(sp["opp_temp"]), sp["opp_rng"]
-                )
-                base_act, cands, pending = streams[g].prepare_step_from_logp(
-                    own_raw_b[pos], own_mask_b[pos], own_logp[pos]
-                )
-                if cands is not None:
-                    search_tasks.append(
-                        dict(
-                            pos=pos,
-                            mem_slot=pos,
-                            source_vector=play_env.vector,
-                            source_lane=g,
-                            stream=streams[g],
-                            candidates=cands,
-                            root_logp=own_logp[pos],
-                            root_raw=own_raw_b[pos],
-                            root_legal=own_mask_b[pos],
-                            baseline_action=base_act,
-                            pending=pending,
-                        )
-                    )
-                else:
-                    a_own_list[pos] = int(base_act)
-
-            if search_tasks:
-                # Pack concurrent search triggers into batches up to `search_env.count` lanes
-                idx_t = 0
-                r_roll = int(cfg.rollouts_per_candidate)
-                while idx_t < len(search_tasks):
-                    chunk: list[dict] = []
-                    lanes_acc = 0
-                    while idx_t < len(search_tasks):
-                        need_l = len(search_tasks[idx_t]["candidates"]) * r_roll
-                        if chunk and lanes_acc + need_l > n_search_cap:
-                            break
-                        chunk.append(search_tasks[idx_t])
-                        lanes_acc += need_l
-                        idx_t += 1
-                    t_s = time.perf_counter()
-                    batch_out = run_batched_lookahead(
-                        chunk,
-                        search_env=search_env,
-                        actor=actor,
-                        critic=critic,
-                        adapter=adapter,
-                        actor_mem=actor_mem,
-                        opp_mem_offset=a_cnt,
-                        critic_mem=crit_mem,
-                        cfg=cfg,
-                        device=dev,
-                        critic_device=critic_device,
-                        precision=precision,
-                    )
-                    per_task_sec = (time.perf_counter() - t_s) / max(1, len(chunk))
-                    for task, (raw_choice, gain) in zip(chunk, batch_out, strict=True):
-                        pos = int(task["pos"])
-                        a_own_list[pos] = task["stream"].apply_search_result(
-                            task["root_raw"], raw_choice, gain, task["pending"], per_task_sec
-                        )
-
-            for pos, g in enumerate(active_slots):
+            def _commit_game_step(g: int, raw_own: np.ndarray, mask_own: np.ndarray, a_own: int, a_opp: int) -> None:
                 seat = int(specs[g]["seat"])
                 opp_seat = 1 - seat
-                a_own = int(a_own_list[pos])
-                a_opp = int(a_opp_list[pos])
-                raw_own = own_raw_b[pos]
                 meta = streams[g].last_step_info
 
                 traj_obs[g].append(raw_own)
-                traj_masks[g].append(own_mask_b[pos])
+                traj_masks[g].append(mask_own)
                 traj_acts[g].append(a_own)
                 traj_searched[g].append(bool(meta.get("searched", False)))
                 is_ovr = bool(meta.get("overridden", False) or (meta.get("unlocked_bank_slot") is not None and a_own > 0))
@@ -763,7 +654,7 @@ class LookaheadDistiller:
                 vetoed_bad_spell = bool(
                     is_ovr
                     and def_act_m > 0
-                    and not _is_engaged_global_spell(def_act_m, raw_own, own_mask_b[pos], schema, rage_card_ids=rage_ids)
+                    and not _is_engaged_global_spell(def_act_m, raw_own, mask_own, schema, rage_card_ids=rage_ids)
                 )
                 is_tac_boost = vetoed_bad_spell
                 if is_ovr and not is_tac_boost:
@@ -807,7 +698,143 @@ class LookaheadDistiller:
                 play_env.vector.actions[g, 1] = pair_acts[1]
                 step_counts[g] += 1
 
-            play_env.vector.step_lanes(active_slots)
+            # Work-conserving search-wave parking: advance non-search frames across independent games
+            # until `flush_target` games hit a search decision (or all remaining live games are parked),
+            # collapsing ~190 sparse 1-2 game search waves into ~22 full GPU-saturating search waves!
+            while True:
+                live_games = [g for g in range(w_count) if not play_env.dones[g] and step_counts[g] < int(max_game_steps)]
+                if not live_games:
+                    break
+                ready_games = [g for g in live_games if g not in parked_by_game]
+
+                if ready_games and len(parked_by_game) < flush_target:
+                    a_cnt = len(ready_games)
+                    lanes_arr = np.asarray(ready_games, dtype=np.int32)
+                    seats_arr = np.asarray([int(specs[g]["seat"]) for g in ready_games], dtype=np.int32)
+                    opp_seats_arr = 1 - seats_arr
+
+                    own_raw_b = play_env.observations[lanes_arr, seats_arr].copy()
+                    own_mask_b = play_env.masks[lanes_arr, seats_arr].copy()
+                    opp_raw_b = play_env.observations[lanes_arr, opp_seats_arr].copy()
+                    opp_mask_b = play_env.masks[lanes_arr, opp_seats_arr].copy()
+
+                    both_raw = np.concatenate([own_raw_b, opp_raw_b], axis=0)
+                    both_mask = np.concatenate([own_mask_b, opp_mask_b], axis=0)
+                    bh, be, bm = adapter(both_raw)
+                    bh_t = torch.as_tensor(bh, device=dev)
+                    be_t = torch.as_tensor(be, device=dev)
+                    bm_t = torch.as_tensor(bm, device=dev)
+                    bmask_t = torch.as_tensor(both_mask, dtype=torch.bool, device=dev)
+                    bhand_t = torch.as_tensor(both_raw[:, hand_indices], device=dev)
+
+                    actor_idx = ready_games + [w_count + g for g in ready_games]
+                    if a_cnt == w_count:
+                        actor_mem = reserve_step_memory(actor_mem, mem_cap)
+                        with actor_ctx:
+                            both_logp, _, actor_mem = actor.step(
+                                bh_t, be_t, bm_t, bmask_t, state=actor_mem, hand_card_ids=bhand_t, compute_value=False
+                            )
+                    else:
+                        sub_actor_mem = reserve_step_memory(
+                            slice_memory(actor_mem, actor_idx, detach=True, trim_gqa=False), mem_cap
+                        )
+                        with actor_ctx:
+                            both_logp, _, sub_actor_mem = actor.step(
+                                bh_t, be_t, bm_t, bmask_t, state=sub_actor_mem, hand_card_ids=bhand_t, compute_value=False
+                            )
+                        actor_mem = scatter_step_memory(actor_mem, actor_idx, sub_actor_mem)
+
+                    if critic is not None and crit_mem is not None:
+                        ch_t = bh_t[:a_cnt] if critic_device == dev else bh_t[:a_cnt].to(critic_device)
+                        ce_t = be_t[:a_cnt] if critic_device == dev else be_t[:a_cnt].to(critic_device)
+                        cm_t = bm_t[:a_cnt] if critic_device == dev else bm_t[:a_cnt].to(critic_device)
+                        if a_cnt == w_count:
+                            crit_mem = reserve_step_memory(crit_mem, mem_cap)
+                            with critic_ctx:
+                                _, crit_mem = critic.step(ch_t, ce_t, cm_t, state=crit_mem)
+                        else:
+                            sub_crit_mem = reserve_step_memory(
+                                slice_memory(crit_mem, ready_games, detach=True, trim_gqa=False), mem_cap
+                            )
+                            with critic_ctx:
+                                _, sub_crit_mem = critic.step(ch_t, ce_t, cm_t, state=sub_crit_mem)
+                            crit_mem = scatter_step_memory(crit_mem, ready_games, sub_crit_mem)
+
+                    own_logp = both_logp[:a_cnt]
+                    opp_logp = both_logp[a_cnt:]
+                    step_now: list[int] = []
+
+                    for pos, g in enumerate(ready_games):
+                        sp = specs[g]
+                        a_opp = self._sample_opp_action_from_logp(
+                            opp_logp[pos], opp_mask_b[pos], float(sp["opp_temp"]), sp["opp_rng"]
+                        )
+                        base_act, cands, pending = streams[g].prepare_step_from_logp(
+                            own_raw_b[pos], own_mask_b[pos], own_logp[pos]
+                        )
+                        if cands is not None:
+                            parked_by_game[g] = dict(
+                                game_idx=g,
+                                mem_slot=g,
+                                source_vector=play_env.vector,
+                                source_lane=g,
+                                stream=streams[g],
+                                candidates=cands,
+                                root_logp=own_logp[pos],
+                                root_raw=own_raw_b[pos],
+                                root_legal=own_mask_b[pos],
+                                baseline_action=base_act,
+                                pending=pending,
+                                a_opp=a_opp,
+                            )
+                        else:
+                            _commit_game_step(g, own_raw_b[pos], own_mask_b[pos], int(base_act), int(a_opp))
+                            step_now.append(g)
+
+                    if step_now:
+                        play_env.vector.step_lanes(step_now)
+                elif parked_by_game:
+                    search_tasks = [parked_by_game[g] for g in sorted(parked_by_game)]
+                    parked_by_game.clear()
+                    idx_t = 0
+                    flushed_lanes: list[int] = []
+                    while idx_t < len(search_tasks):
+                        chunk: list[dict] = []
+                        lanes_acc = 0
+                        while idx_t < len(search_tasks):
+                            need_l = len(search_tasks[idx_t]["candidates"]) * r_roll
+                            if chunk and lanes_acc + need_l > n_search_cap:
+                                break
+                            chunk.append(search_tasks[idx_t])
+                            lanes_acc += need_l
+                            idx_t += 1
+                        t_s = time.perf_counter()
+                        batch_out = run_batched_lookahead(
+                            chunk,
+                            search_env=search_env,
+                            actor=actor,
+                            critic=critic,
+                            adapter=adapter,
+                            actor_mem=actor_mem,
+                            opp_mem_offset=w_count,
+                            critic_mem=crit_mem,
+                            cfg=cfg,
+                            device=dev,
+                            critic_device=critic_device,
+                            precision=precision,
+                        )
+                        per_task_sec = (time.perf_counter() - t_s) / max(1, len(chunk))
+                        for task, (raw_choice, gain) in zip(chunk, batch_out, strict=True):
+                            g = int(task["game_idx"])
+                            a_own = task["stream"].apply_search_result(
+                                task["root_raw"], raw_choice, gain, task["pending"], per_task_sec
+                            )
+                            _commit_game_step(g, task["root_raw"], task["root_legal"], int(a_own), int(task["a_opp"]))
+                            flushed_lanes.append(g)
+                    if flushed_lanes:
+                        play_env.vector.step_lanes(flushed_lanes)
+        finally:
+            actor.ppo_actor_fp32 = orig_fp32
 
         results: list[tuple[dict | None, dict]] = []
         for g_idx, sp in enumerate(specs):

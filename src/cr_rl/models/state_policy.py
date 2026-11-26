@@ -246,6 +246,189 @@ class StateActorCritic(_RecurrentStateMixin, ActorCritic):
             compute_value=compute_value)
         return output[:,0],value[:,0],state
 
+    def step_sample_crn(
+        self,
+        header,
+        entities,
+        entity_mask,
+        legal_action_mask,
+        u_draws,
+        *,
+        state=None,
+        hand_card_ids=None,
+        force_wait=None,
+        force_slot_argmax=None,
+    ):
+        """Exact two-stage hierarchical CRN sampler for lookahead/macro rollouts.
+
+        Samples the 7-way macro choice (WAIT, slot 0..3, ability 0..1) from `card_logp`
+        first, skipping `learned_placement` entirely on WAIT/ability rows (~80-94% of frames)
+        and running 1-slot `forward_gt` only on rows that actually sample a card play.
+        """
+        if getattr(self, "ppo_actor_fp32", False):
+            with torch.autocast(header.device.type, enabled=False):
+                return self._step_sample_crn_impl(
+                    header,
+                    entities,
+                    entity_mask,
+                    legal_action_mask,
+                    u_draws,
+                    state=state,
+                    hand_card_ids=hand_card_ids,
+                    force_wait=force_wait,
+                    force_slot_argmax=force_slot_argmax,
+                )
+        return self._step_sample_crn_impl(
+            header,
+            entities,
+            entity_mask,
+            legal_action_mask,
+            u_draws,
+            state=state,
+            hand_card_ids=hand_card_ids,
+            force_wait=force_wait,
+            force_slot_argmax=force_slot_argmax,
+        )
+
+    def _step_sample_crn_impl(
+        self,
+        header,
+        entities,
+        entity_mask,
+        legal_action_mask,
+        u_draws,
+        *,
+        state=None,
+        hand_card_ids=None,
+        force_wait=None,
+        force_slot_argmax=None,
+    ):
+        import numpy as np
+
+        context, token, flat_e, flat_m, memory, batch, _, _, _ = self._encode_state_sequence(
+            header[:, None], entities[:, None], entity_mask[:, None], state=state
+        )
+        dev = header.device
+        if hand_card_ids is None:
+            hands = torch.full((batch, 4), -1, dtype=torch.long, device=dev)
+        else:
+            hands = hand_card_ids.reshape(batch, 4)
+        card_features = self.card_embedding((hands.long() + 1).clamp(0, self.cfg.vocab_size)) + self.card_slot_embedding
+        context_slots = context[:, None].expand(-1, 4, -1)
+        slots_logits = self.slot_actor(torch.cat((context_slots, card_features), -1)).squeeze(-1)
+        wait_logit = self.wait_actor(context) + self.wait_hand_residual(header, slots_logits, hands)
+        card_logits = torch.cat((wait_logit, slots_logits, self.ability_actor(context)), -1).float()
+
+        if isinstance(legal_action_mask, torch.Tensor):
+            legal_t = legal_action_mask.to(device=dev, dtype=torch.bool).reshape(batch, -1)
+            legal_b = legal_t.cpu().numpy()
+        else:
+            legal_b = np.asarray(legal_action_mask, dtype=bool).reshape(batch, -1)
+            legal_t = torch.as_tensor(legal_b, dtype=torch.bool, device=dev)
+
+        tile_legal = legal_t[:, 1:2305].reshape(batch, 4, 576)
+        slot_any = tile_legal.any(dim=-1)
+        card_legal = torch.cat((legal_t[:, :1], slot_any, legal_t[:, 2305:2307]), dim=-1)
+        hand_present = (hands >= 0) if self.cfg.reserve_to_wait else None
+        compete = card_legal
+        if hand_present is not None:
+            compete = torch.cat(
+                (legal_t[:, :1], (hand_present.bool() & legal_t[:, :1]) | slot_any, legal_t[:, 2305:2307]),
+                dim=-1,
+            )
+        card_logp = torch.log_softmax(card_logits.masked_fill(~compete, -1e9), dim=-1)
+        if hand_present is not None:
+            reserved = hand_present.bool() & ~slot_any & legal_t[:, :1]
+            wait_lse = torch.cat(
+                (card_logp[:, :1], card_logp[:, 1:5].masked_fill(~reserved, float("-inf"))), dim=-1
+            ).logsumexp(-1, keepdim=True)
+            card_logp = torch.cat((wait_lse, card_logp[:, 1:5].masked_fill(reserved, -1e9), card_logp[:, 5:7]), dim=-1)
+
+        macro_probs = torch.where(card_legal, card_logp.exp(), torch.zeros_like(card_logp))
+        macro_cdf = macro_probs.cumsum(-1)
+        if isinstance(u_draws, torch.Tensor):
+            u_t = u_draws.to(device=dev, dtype=torch.float32).reshape(batch, 1).clamp(1e-6, 1.0 - 1e-6)
+        else:
+            u_t = torch.as_tensor(np.clip(u_draws, 1e-6, 1.0 - 1e-6), dtype=torch.float32, device=dev).reshape(batch, 1)
+        target = (u_t * macro_cdf[:, -1:]).clamp_min(1e-12)
+        macro_choice = torch.searchsorted(macro_cdf, target, right=False).squeeze(1).clamp(0, 6)
+
+        argmax_mode = torch.zeros(batch, dtype=torch.bool, device=dev)
+        if force_wait is not None:
+            fw_t = torch.as_tensor(force_wait, dtype=torch.bool, device=dev).reshape(batch) & legal_t[:, 0]
+            macro_choice = torch.where(fw_t, torch.zeros_like(macro_choice), macro_choice)
+        if force_slot_argmax is not None:
+            fs_t = torch.as_tensor(force_slot_argmax, dtype=torch.long, device=dev).reshape(batch)
+            valid_fs = (fs_t >= 0) & (fs_t < 4)
+            if valid_fs.any():
+                fs_rows = valid_fs.nonzero().flatten()
+                can_fs = slot_any[fs_rows, fs_t[fs_rows]]
+                ok_rows = fs_rows[can_fs]
+                if len(ok_rows):
+                    macro_choice[ok_rows] = fs_t[ok_rows] + 1
+                    argmax_mode[ok_rows] = True
+
+        acts = torch.zeros(batch, dtype=torch.int32, device=dev)
+        ab_mask = macro_choice >= 5
+        if ab_mask.any():
+            acts[ab_mask] = (2305 + (macro_choice[ab_mask] - 5)).to(torch.int32)
+
+        play_mask = (macro_choice >= 1) & (macro_choice <= 4)
+        if play_mask.any():
+            play_rows = play_mask.nonzero().flatten()
+            chosen_slots = (macro_choice[play_rows] - 1).long()
+            prev_cdf = torch.gather(macro_cdf[play_rows], 1, chosen_slots[:, None])
+            slot_mass = torch.gather(macro_probs[play_rows], 1, macro_choice[play_rows][:, None]).clamp_min(1e-12)
+            u_cond = ((target[play_rows] - prev_cdf) / slot_mass).clamp(1e-6, 1.0 - 1e-6)
+
+            if hasattr(self, "learned_placement"):
+                slot_logits_list = []
+                for s_off in range(0, len(play_rows), self.frame_microbatch):
+                    pr_sub = play_rows[s_off : s_off + self.frame_microbatch]
+                    cs_sub = chosen_slots[s_off : s_off + self.frame_microbatch]
+                    slot_logits_list.append(
+                        self.learned_placement.forward_gt(
+                            context[pr_sub],
+                            token[pr_sub],
+                            flat_m[pr_sub],
+                            card_features[pr_sub],
+                            cs_sub,
+                            entity_xy=flat_e[pr_sub, :, 4:6],
+                            card_ids=hands[pr_sub],
+                        ).float()
+                    )
+                slot_tile_logits = torch.cat(slot_logits_list, dim=0)
+            else:
+                all_t_list = []
+                for s_off in range(0, len(play_rows), self.frame_microbatch):
+                    pr_sub = play_rows[s_off : s_off + self.frame_microbatch]
+                    cs_sub = chosen_slots[s_off : s_off + self.frame_microbatch]
+                    full_tl = self.placement_logits(
+                        context[pr_sub], token[pr_sub], flat_m[pr_sub], card_features[pr_sub]
+                    ).float()
+                    all_t_list.append(full_tl[torch.arange(len(pr_sub), device=dev), cs_sub])
+                slot_tile_logits = torch.cat(all_t_list, dim=0)
+
+            slot_tile_leg = tile_legal[play_rows, chosen_slots]
+            masked_tile_logits = slot_tile_logits.masked_fill(~slot_tile_leg, -1e9)
+            slot_tile_lp = torch.log_softmax(masked_tile_logits, dim=-1)
+            slot_tile_probs = torch.where(slot_tile_leg, slot_tile_lp.exp(), torch.zeros_like(slot_tile_lp))
+            tile_cdf = slot_tile_probs.cumsum(-1)
+            tile_target = (u_cond * tile_cdf[:, -1:]).clamp_min(1e-12)
+            sampled_tiles = torch.searchsorted(tile_cdf, tile_target, right=False).squeeze(1).clamp(0, 575)
+            sub_argmax = argmax_mode[play_rows]
+            if sub_argmax.any():
+                det_tiles = masked_tile_logits.argmax(dim=-1)
+                sampled_tiles = torch.where(sub_argmax, det_tiles, sampled_tiles)
+            acts[play_rows] = (1 + chosen_slots * 576 + sampled_tiles).to(torch.int32)
+
+        acts_np = acts.cpu().numpy()
+        rows_np = np.arange(batch)
+        bad = ~legal_b[rows_np, acts_np]
+        if bad.any():
+            acts_np = np.where(bad, legal_b.argmax(axis=-1).astype(np.int32), acts_np)
+        return acts_np, memory
+
     def migrate_bc_representation(self, source):
         """Copy matching entity/action tensors, never old temporal weights/moments."""
         target = self.state_dict()
@@ -511,3 +694,41 @@ def rebind_memory(memory: PolicyMemory | None, model) -> PolicyMemory | None:
     if memory is None:
         return None
     return PolicyMemory(memory.temporal.detach(), id(model), model.memory_generation)
+
+
+def scatter_step_memory(target: PolicyMemory, indices, source: PolicyMemory) -> PolicyMemory:
+    """Write stepped `source` subset back into `target` at `indices`, leaving unstepped rows intact."""
+    idx = torch.as_tensor(indices, dtype=torch.long, device=target.temporal.positions.device)
+    if idx.numel() == 0:
+        return target
+    pos_out = target.temporal.positions.clone()
+    pos_out[idx] = source.temporal.positions
+    bound_out = max(int(target.temporal.length_bound), int(source.temporal.length_bound))
+    layers = []
+    for t_layer, s_layer in zip(target.temporal.layers, source.temporal.layers, strict=True):
+        if isinstance(t_layer, KDAState):
+            mat = t_layer.matrix.clone()
+            mat[idx] = s_layer.matrix
+            layers.append(KDAState(matrix=mat))
+        else:
+            tk, tv = t_layer.key, t_layer.value
+            sk, sv = s_layer.key, s_layer.value
+            if tk.dtype != sk.dtype:
+                tk = tk.to(dtype=sk.dtype)
+                tv = tv.to(dtype=sv.dtype)
+            s_cap = sk.shape[2]
+            if tk.shape[2] < s_cap:
+                pad = s_cap - tk.shape[2]
+                tk = F.pad(tk, (0, 0, 0, pad))
+                tv = F.pad(tv, (0, 0, 0, pad))
+            else:
+                tk = tk.clone()
+                tv = tv.clone()
+            tk[idx, :, :s_cap] = sk
+            tv[idx, :, :s_cap] = sv
+            layers.append(GQAState(key=tk, value=tv))
+    return PolicyMemory(
+        TemporalState(tuple(layers), pos_out, bound_out),
+        target.owner,
+        target.generation,
+    )

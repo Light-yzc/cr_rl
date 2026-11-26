@@ -43,20 +43,35 @@ class OriginalPlacementHead(nn.Module):
         with torch.autocast(device_type=context.device.type, enabled=False):
             context, entities, card_features = context.float(), entities.float(), card_features.float()
             n = len(context)
-            queries = (self.tile_queries.expand(n, -1, -1, -1) + self.slot_embedding +
-                card_features[:, :, None] + self.tile_context(context)[:, None, None])
-            if self.cfg.spatial_fourier:
-                queries = queries + .02 * self.tile_grid_features[None, None]
-            if self.cfg.readout_version == 2:
-                spatial = self.tile_queries + .02 * self.tile_grid_features[None, None]
-                normalized = self.tile_spatial_norm(self.tile_queries +
-                    self.tile_spatial_projection(self.tile_grid_features)[None])
-                gamma, beta = self.tile_film(card_features + self.tile_context(context)[:, None]).chunk(2, -1)
-                modulated = normalized * (1 + gamma[:, :, None]) + beta[:, :, None]
-                queries = queries + self.tile_spatial_gate.tanh() * (modulated - spatial)
+            ctx_proj = self.tile_context(context)
             if slots is not None:
-                queries = queries[torch.arange(n, device=context.device), slots]
+                row_idx = torch.arange(n, device=context.device)
+                cf_sel = card_features[row_idx, slots]
+                slot_emb = self.slot_embedding[0, slots]
+                base_q = self.tile_queries[0, slots]
+                queries = base_q + slot_emb + cf_sel[:, None] + ctx_proj[:, None]
+                if self.cfg.spatial_fourier:
+                    queries = queries + .02 * self.tile_grid_features[None]
+                if self.cfg.readout_version == 2:
+                    spatial = (self.tile_queries[0] + .02 * self.tile_grid_features[None])[slots]
+                    normalized = self.tile_spatial_norm(
+                        self.tile_queries[0] + self.tile_spatial_projection(self.tile_grid_features)[None]
+                    )[slots]
+                    gamma, beta = self.tile_film(cf_sel + ctx_proj).chunk(2, -1)
+                    modulated = normalized * (1 + gamma[:, None]) + beta[:, None]
+                    queries = queries + self.tile_spatial_gate.tanh() * (modulated - spatial)
             else:
+                queries = (self.tile_queries.expand(n, -1, -1, -1) + self.slot_embedding +
+                    card_features[:, :, None] + ctx_proj[:, None, None])
+                if self.cfg.spatial_fourier:
+                    queries = queries + .02 * self.tile_grid_features[None, None]
+                if self.cfg.readout_version == 2:
+                    spatial = self.tile_queries + .02 * self.tile_grid_features[None, None]
+                    normalized = self.tile_spatial_norm(self.tile_queries +
+                        self.tile_spatial_projection(self.tile_grid_features)[None])
+                    gamma, beta = self.tile_film(card_features + ctx_proj[:, None]).chunk(2, -1)
+                    modulated = normalized * (1 + gamma[:, :, None]) + beta[:, :, None]
+                    queries = queries + self.tile_spatial_gate.tanh() * (modulated - spatial)
                 queries = queries.reshape(n, 4*TILES, -1)
             features, _ = self.tile_cross_attention(queries, entities, entities,
                 key_padding_mask=~entity_mask.bool(), need_weights=False)
@@ -72,6 +87,26 @@ class OriginalPlacementHead(nn.Module):
         with torch.autocast(device_type=context.device.type, enabled=False):
             features = self.features(context, entities, entity_mask, card_features, slots=slots)
             return self.tile_actor(features).squeeze(-1)
+
+    def legal_forward(self, context, entities, entity_mask, card_features, legal_slots):
+        with torch.autocast(device_type=context.device.type, enabled=False):
+            frames = len(context)
+            slots, rows = legal_slots.transpose(0, 1).nonzero(as_tuple=True)
+            logits = context.new_zeros(frames * 4, TILES, dtype=torch.float32)
+            if len(rows):
+                residuals = []
+                for chunk_rows, chunk_slots in zip(rows.split(frames), slots.split(frames), strict=True):
+                    residuals.append(
+                        self.forward(
+                            context[chunk_rows],
+                            entities[chunk_rows],
+                            entity_mask[chunk_rows],
+                            card_features[chunk_rows],
+                            chunk_slots,
+                        )
+                    )
+                logits = logits.index_copy(0, rows * 4 + slots, torch.cat(residuals))
+            return logits.reshape(frames, 4, TILES)
 
 
 class _WideReadout(nn.Module):
@@ -286,13 +321,22 @@ class PlacementAdapter(nn.Module):
     def forward(self, context, entities, entity_mask, card_features, entity_xy=None, card_ids=None, *,
                 legal_slots=None):
         self._validate(context, entities, entity_mask, card_features, entity_xy, card_ids)
+        if legal_slots is not None and (
+            legal_slots.shape != (len(context), 4)
+            or legal_slots.dtype != torch.bool
+            or legal_slots.device != context.device
+        ):
+            raise ValueError('Expected a boolean legal slot mask [B,4] on the placement device')
         variant, decoder = self.definition['variant'], self.decoder
         base = decoder
         if variant == 'card_prior_cnn_001':
             base = decoder.original.original
         elif variant.startswith('card_prior') or variant == 'spatial_cnn':
             base = decoder.original
-        output = base.forward_all(context, entities, entity_mask, card_features)
+        if legal_slots is not None and hasattr(base, 'legal_forward'):
+            output = base.legal_forward(context, entities, entity_mask, card_features, legal_slots)
+        else:
+            output = base.forward_all(context, entities, entity_mask, card_features)
         if variant.startswith('card_prior'):
             prior = decoder.original if variant == 'card_prior_cnn_001' else decoder
             output = output + prior.prior_logits(card_ids)
@@ -304,10 +348,6 @@ class PlacementAdapter(nn.Module):
                     for slot in range(4)]
                 output = output + torch.stack(residuals, 1)
             else:
-                # These callers mask unavailable slots from the joint distribution.
-                if (legal_slots.shape != (len(context), 4) or legal_slots.dtype != torch.bool
-                        or legal_slots.device != context.device):
-                    raise ValueError('Expected a boolean legal slot mask [B,4] on the placement device')
                 output = output + spatial.legal_residual_logits(
                     context, entities, entity_mask, card_features, entity_xy, legal_slots)
         return output / self.definition['temperature']
