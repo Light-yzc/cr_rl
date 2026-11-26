@@ -148,10 +148,10 @@ def lookahead_frame_weights(
     if override_only:
         w = np.zeros(len(acts), dtype=np.float64)
     elif pure_override:
-        # Zero weight on unsearched garbage plays in winning games; tiny anchor on MCTS-verified optimal plays!
+        # Zero weight on unsearched garbage plays; preserve MCTS-verified optimal plays (0.35) so >=5-cost cores stay sharp!
         w = np.zeros(len(acts), dtype=np.float64)
-        w = np.where(searched & ~overridden & (acts > 0), 0.08, w)
-        w = np.where(searched & ~overridden & (acts == 0), 0.04, w)
+        w = np.where(searched & ~overridden & (acts > 0), 0.35, w)
+        w = np.where(searched & ~overridden & (acts == 0), 0.06, w)
     else:
         # Balanced non-override baseline (prevents 10x anti-WAIT erosion across updates)
         w = np.where(acts > 0, 0.35, 0.15)
@@ -725,7 +725,7 @@ class LookaheadDistiller:
                 traj_masks[g].append(own_mask_b[pos])
                 traj_acts[g].append(a_own)
                 traj_searched[g].append(bool(meta.get("searched", False)))
-                is_ovr = bool(meta.get("overridden", False))
+                is_ovr = bool(meta.get("overridden", False) or (meta.get("unlocked_bank_slot") is not None and a_own > 0))
                 is_bank_w = bool(meta.get("bank_wait", False))
                 traj_overridden[g].append(is_ovr)
                 traj_bank_wait[g].append(is_bank_w)
@@ -1054,11 +1054,11 @@ class LookaheadDistiller:
             temporal_params = [parameters[n] for n in names if n.startswith("temporal.")]
             param_groups = [{"params": readout_params, "lr": lr}]
             if tile_params:
-                # Unfreeze spatial cross-attention + CNN residual at 0.45x LR so tactical placements converge fast
-                param_groups.append({"params": tile_params, "lr": lr * 0.45})
+                # Unfreeze spatial cross-attention + CNN residual at 0.22x LR so tactical placements stay sharp
+                param_groups.append({"params": tile_params, "lr": lr * 0.22})
             if temporal_params:
-                # Top temporal blocks learn cross-step multi-card synergy & elixir counting at 0.25x LR
-                param_groups.append({"params": temporal_params, "lr": lr * 0.25})
+                # Top temporal blocks learn cross-step multi-card synergy & elixir counting at 0.15x LR
+                param_groups.append({"params": temporal_params, "lr": lr * 0.15})
             optimizer = torch.optim.AdamW(param_groups, weight_decay=0.0)
             scaler = torch.amp.GradScaler("cuda", enabled=torch.device(device).type == "cuda", init_scale=128.0)
             if torch.device(device).type == "cuda":

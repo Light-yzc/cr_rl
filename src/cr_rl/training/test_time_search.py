@@ -551,7 +551,11 @@ def _engaged_push_rage_action(
     left_eng = engaged[engaged[:, e["x"]] < width_u * 0.5]
     right_eng = engaged[engaged[:, e["x"]] >= width_u * 0.5]
     cluster = left_eng if int(left_eng[:, e["hp"]].sum()) >= int(right_eng[:, e["hp"]].sum()) else right_eng
-    if int(cluster[:, e["hp"]].sum()) < int(min_push_hp):
+    tot_cluster_hp = int(cluster[:, e["hp"]].sum())
+    if tot_cluster_hp < int(min_push_hp):
+        return None
+    # Require either bridge/enemy-half presence (y >= 13.5 tiles) or a heavy >=2200 HP counterpush wave
+    if not bool((cluster[:, e["y"]] >= 13.5 * tu).any()) and tot_cluster_hp < 2200:
         return None
 
     w = np.maximum(cluster[:, e["max_hp"]], cluster[:, e["hp"]]).astype(np.float64)
@@ -800,7 +804,7 @@ def select_macro_candidates(
             if len(candidates) >= max_candidates:
                 break
             pr_act = _engaged_push_rage_action(
-                slot, raw_obs, legal, schema, rage_card_ids=rage_card_ids, min_push_hp=800
+                slot, raw_obs, legal, schema, rage_card_ids=rage_card_ids, min_push_hp=1350
             )
             if pr_act is not None and pr_act not in candidates:
                 candidates.append(pr_act)

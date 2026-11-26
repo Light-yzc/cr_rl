@@ -49,7 +49,7 @@ def test_lookahead_frame_weights_and_pipeline_flags(tmp_path: Path):
         actions, keep, searched, overridden, override_boost=1.5, pure_override=True, score_gains=gains
     )
     assert w_pure[1] == 0.0  # Unsearched non-override play gets strictly ZERO weight!
-    np.testing.assert_allclose(w_pure[2:4], np.array([0.04, 0.08], dtype=np.float32))
+    np.testing.assert_allclose(w_pure[2:4], np.array([0.06, 0.35], dtype=np.float32))
     assert w_pure[5] > 3.75 * 1.7
 
     # Verify colab_pipeline ppo_command & progress integration
