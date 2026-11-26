@@ -1726,7 +1726,7 @@ def main() -> None:
             or not 0 <= args.lookahead_distill_offset < args.lookahead_distill_interval
             or not np.isfinite(args.lookahead_distill_trigger_elixir) or not (1.0 <= args.lookahead_distill_trigger_elixir <= 10.0)
             or not np.isfinite(args.lookahead_distill_margin) or args.lookahead_distill_margin < 0
-            or not np.isfinite(args.lookahead_distill_learning_rate) or not (0 < args.lookahead_distill_learning_rate <= 2e-5)
+            or not np.isfinite(args.lookahead_distill_learning_rate) or not (0 < args.lookahead_distill_learning_rate <= 3e-5)
             or not np.isfinite(args.lookahead_distill_max_kl) or not (0 < args.lookahead_distill_max_kl <= 0.02)
             or (args.lookahead_distill_temporal_blocks is not None and args.lookahead_distill_temporal_blocks < 0)):
         parser.error('Invalid lookahead-distill settings')
