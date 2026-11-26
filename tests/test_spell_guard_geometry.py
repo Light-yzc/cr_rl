@@ -147,3 +147,77 @@ def test_live_blunders_020919_goblin_barrel_pump_and_giant_push():
     )
     assert chosen2 == giant_front
 
+
+def test_live_blunders_141113_and_141742_barrel_reflex_megaknight_anchor_and_no_bridge_rage():
+    # 1) t=1553 (141113): WAIT=0.97 with GoblinBarrel on own right tower + Rage legal at 3.5 elixir -> instant Rage reflex!
+    obs = np.zeros(S.SEAT_INTS, dtype=np.int32)
+    obs[S.H_ELIXIR] = 35000
+    obs[S.H_TOWERS + 4] = 1645
+    obs[S.H_ENTITY_COUNT] = 3
+    for i, (gx, gy) in enumerate([(14500, 5200), (15500, 6800), (13500, 6800)]):
+        ent = obs[S.HEADER_INTS + i * S.ENTITY_INTS : S.HEADER_INTS + (i + 1) * S.ENTITY_INTS]
+        ent[S.E_KIND] = S.KIND_CHARACTER
+        ent[S.E_SIDE] = 1
+        ent[S.E_HP] = 323
+        ent[S.E_X] = gx
+        ent[S.E_Y] = gy
+    p = np.zeros(S.ACTIONS, dtype=np.float64)
+    leg = np.zeros(S.ACTIONS, dtype=bool)
+    leg[0] = True
+    p[0] = 0.97
+    leg[1 + 0 * S.TILES : 1 + 1 * S.TILES] = True  # Rage legal everywhere
+    p[S.play(0, 14, 7)] = 0.03
+    chosen, info = select_live_action(p, leg, obs, ("Rage", "Elixir Collector", "Giant", "MinionHorde"), selection_mode="argmax")
+    dec = S.decode_action(chosen)
+    assert dec["kind"] == "play" and dec["slot"] == 0
+    assert 13 <= dec["col"] <= 15 and 5 <= dec["row"] <= 7
+    assert info["selection_reason"] == "tower_swarm_spell_reflex"
+
+    # 2) t=1017 (141742): Naked Rage at river (3,14) on Bats + GoldenKnight with empty own board -> MUST BE VETOED!
+    obs_riv = np.zeros(S.SEAT_INTS, dtype=np.int32)
+    obs_riv[S.H_ELIXIR] = 41000
+    obs_riv[S.H_ENTITY_COUNT] = 5
+    for i in range(4):
+        b = obs_riv[S.HEADER_INTS + i * S.ENTITY_INTS : S.HEADER_INTS + (i + 1) * S.ENTITY_INTS]
+        b[S.E_KIND] = S.KIND_CHARACTER
+        b[S.E_SIDE] = 1
+        b[S.E_HP] = 130
+        b[S.E_X] = 3500
+        b[S.E_Y] = 15500
+    gk = obs_riv[S.HEADER_INTS + 4 * S.ENTITY_INTS : S.HEADER_INTS + 5 * S.ENTITY_INTS]
+    gk[S.E_KIND] = S.KIND_CHARACTER
+    gk[S.E_SIDE] = 1
+    gk[S.E_HP] = 2450
+    gk[S.E_X] = 4000
+    gk[S.E_Y] = 15800
+    assert not spell_has_target(S.play(2, 3, 14), "Rage", obs_riv)
+
+    # 3) t=3791 (141113): MegaKnight_EV1 (hp=3001) pounding our Left Tower at (3,8), raw policy heatmap peaks on RIGHT (15,14)
+    # -> MUST drop MinionHorde onto Left threat (col <= 6, row <= 10), NEVER at boundary (10,13)!
+    obs_mk = np.zeros(S.SEAT_INTS, dtype=np.int32)
+    obs_mk[S.H_TICK] = 3791
+    obs_mk[S.H_ELIXIR] = 51000
+    obs_mk[S.H_TOWERS + 2] = 109
+    obs_mk[S.H_TOWERS + 8] = 225
+    obs_mk[S.H_ENTITY_COUNT] = 1
+    mk = obs_mk[S.HEADER_INTS : S.HEADER_INTS + S.ENTITY_INTS]
+    mk[S.E_KIND] = S.KIND_CHARACTER
+    mk[S.E_SIDE] = 1
+    mk[S.E_HP] = 3001
+    mk[S.E_X] = 3749
+    mk[S.E_Y] = 8250
+    p_mk = np.zeros(S.ACTIONS, dtype=np.float64)
+    leg_mk = np.zeros(S.ACTIONS, dtype=bool)
+    leg_mk[0] = True
+    for r in range(15):
+        for c in range(18):
+            a = S.play(0, c, r)
+            leg_mk[a] = True
+            p_mk[a] = 0.0005 + (0.09 if (c in (15, 16) and r == 14) else 0.0)
+    p_mk /= p_mk.sum()
+    ch_mk, _ = select_live_action(p_mk, leg_mk, obs_mk, ("MinionHorde", "ZapMachine", "Giant", "Elixir Collector"), selection_mode="argmax")
+    d_mk = S.decode_action(ch_mk)
+    assert d_mk["kind"] == "play" and d_mk["slot"] == 0
+    assert d_mk["col"] <= 6 and d_mk["row"] <= 10
+
+
