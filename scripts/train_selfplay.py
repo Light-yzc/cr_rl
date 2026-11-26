@@ -1697,6 +1697,7 @@ def main() -> None:
     parser.add_argument('--lookahead-distill-margin', type=float, default=0.008)
     parser.add_argument('--lookahead-distill-learning-rate', type=float, default=1e-6)
     parser.add_argument('--lookahead-distill-max-kl', type=float, default=0.005)
+    parser.add_argument('--lookahead-distill-temporal-blocks', type=int, default=None)
     args = parser.parse_args()
     if (args.critic_fp16_resume_scale_cap is not None and
             not (np.isfinite(args.critic_fp16_resume_scale_cap) and args.critic_fp16_resume_scale_cap>=1)):
@@ -1726,7 +1727,8 @@ def main() -> None:
             or not np.isfinite(args.lookahead_distill_trigger_elixir) or not (1.0 <= args.lookahead_distill_trigger_elixir <= 10.0)
             or not np.isfinite(args.lookahead_distill_margin) or args.lookahead_distill_margin < 0
             or not np.isfinite(args.lookahead_distill_learning_rate) or not (0 < args.lookahead_distill_learning_rate <= 2e-5)
-            or not np.isfinite(args.lookahead_distill_max_kl) or not (0 < args.lookahead_distill_max_kl <= 0.005)):
+            or not np.isfinite(args.lookahead_distill_max_kl) or not (0 < args.lookahead_distill_max_kl <= 0.02)
+            or (args.lookahead_distill_temporal_blocks is not None and args.lookahead_distill_temporal_blocks < 0)):
         parser.error('Invalid lookahead-distill settings')
     if args.lookahead_distill and not args.v3:
         parser.error('--lookahead-distill requires architecture-v3 PPO')

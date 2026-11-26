@@ -2789,6 +2789,7 @@ class PersistentStateSelfplay:
             override_margin=getattr(self.args, 'lookahead_distill_margin', 0.008),
             lr=getattr(self.args, 'lookahead_distill_learning_rate', 1e-6),
             max_kl=getattr(self.args, 'lookahead_distill_max_kl', 0.005),
+            temporal_blocks=getattr(self.args, 'lookahead_distill_temporal_blocks', None),
             threads=(
                 int(getattr(self.args, 'lookahead_distill_threads', 0) or 0)
                 or min(44, max(8, (os.cpu_count() or 12) - 4))

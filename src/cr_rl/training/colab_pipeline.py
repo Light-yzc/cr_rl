@@ -15,11 +15,13 @@ def ppo_command(root, config, *, out=None, resume=None):
         '--bc-anchor',str(root/'prepared/anchor_actor.pt'),'--out',str(output),
         '--device','cuda:0','--critic-device','cuda:0','--opponent-device','cuda:0',
         '--precision','fp16','--decks',str(root/'prepared/source_league.yaml'),
-        '--pool-capacity','4','--history-snapshot-interval','20000',
+        '--pool-capacity',str(config.get('pool_capacity',4)),
+        '--history-snapshot-interval',str(config.get('history_snapshot_interval',20000)),
         '--opponent-cache-size',str(config.get('opponent_cache_size',4)),
         '--training-opponent-cache-size',str(config.get('training_opponent_cache_size',4)),
-        '--current-opponent-fraction','.5','--historical-opponent-fraction','.25',
-        '--anchor-opponent-fraction','.25',
+        '--current-opponent-fraction',str(config.get('current_opponent_fraction','.5')),
+        '--historical-opponent-fraction',str(config.get('historical_opponent_fraction','.25')),
+        '--anchor-opponent-fraction',str(config.get('anchor_opponent_fraction','.25')),
         '--validation-interval',str(config.get('validation_interval',0)),
         '--validation-pairs',str(config.get('validation_pairs',4)),
         '--keep-checkpoints','1','--keep-periodic-checkpoints',str(config.get('keep_periodic_checkpoints',0)),
@@ -101,7 +103,8 @@ def ppo_command(root, config, *, out=None, resume=None):
                     'lookahead_distill_horizon', 'lookahead_distill_trigger_elixir',
                     'lookahead_distill_max_searches', 'lookahead_distill_batch_episodes',
                     'lookahead_distill_steps', 'lookahead_distill_margin',
-                    'lookahead_distill_learning_rate', 'lookahead_distill_max_kl'):
+                    'lookahead_distill_learning_rate', 'lookahead_distill_max_kl',
+                    'lookahead_distill_temporal_blocks'):
             if config.get(key) is not None:
                 command += ['--' + key.replace('_', '-'), str(config[key])]
     if config.get('focal_decks') and '--focal-decks' not in command:

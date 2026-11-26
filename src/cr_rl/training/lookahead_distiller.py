@@ -32,7 +32,8 @@ from cr_rl.training.test_time_search import (
     run_batched_lookahead,
 )
 
-MAX_DISTILL_WAIT_DRIFT = 0.008
+MAX_DISTILL_KL = 0.02
+MAX_DISTILL_WAIT_DRIFT = 0.016
 MIN_DISTILL_MEAN_P_WAIT = 0.70
 MAX_DISTILL_MEAN_P_WAIT = 0.86
 MAX_DISTILL_LR = 2e-5
@@ -43,15 +44,21 @@ def unfreeze_distill_heads(
     *,
     include_placement: bool = True,
     include_last_temporal: bool = True,
+    temporal_blocks: int | None = None,
 ) -> list[str]:
-    """Unfreeze Actor readouts, spatial placement heads, and optionally the final GQA temporal block (never `.anchor`)."""
+    """Unfreeze Actor readouts, spatial placement heads, and top temporal blocks (never `.anchor`)."""
     readout_prefixes = ("wait_actor.", "slot_actor.", "ability_actor.", "wait_hand_gate.")
     has_lp = hasattr(actor, "learned_placement")
     tile_prefixes = ("learned_placement.",) if has_lp else ("tile_actor.", "tile_film.", "tile_spatial_gate")
     temporal_prefixes: tuple[str, ...] = ()
-    if include_last_temporal and hasattr(actor, "temporal") and hasattr(actor.temporal, "blocks") and len(actor.temporal.blocks) > 0:
-        last_idx = len(actor.temporal.blocks) - 1
-        temporal_prefixes = (f"temporal.blocks.{last_idx}.", "temporal.final_norm.")
+    if hasattr(actor, "temporal") and hasattr(actor.temporal, "blocks") and len(actor.temporal.blocks) > 0:
+        total_b = len(actor.temporal.blocks)
+        n_unfreeze = int(temporal_blocks) if temporal_blocks is not None else (1 if include_last_temporal else 0)
+        if n_unfreeze > 0:
+            start_idx = max(0, total_b - n_unfreeze)
+            temporal_prefixes = tuple(f"temporal.blocks.{idx}." for idx in range(start_idx, total_b)) + (
+                "temporal.final_norm.",
+            )
     names: list[str] = []
     for name, p in actor.named_parameters():
         keep = name.startswith(readout_prefixes)
@@ -128,6 +135,8 @@ def lookahead_frame_weights(
     bank_wait_mask: np.ndarray | None = None,
     adverse_mask: np.ndarray | None = None,
     override_only: bool = False,
+    pure_override: bool = False,
+    score_gains: np.ndarray | None = None,
 ) -> np.ndarray:
     """Emphasize Critic-verified lookahead overrides, elixir-banking WAITs, and adverse defense."""
     keep = np.asarray(actor_keep, dtype=bool)
@@ -138,6 +147,11 @@ def lookahead_frame_weights(
 
     if override_only:
         w = np.zeros(len(acts), dtype=np.float64)
+    elif pure_override:
+        # Zero weight on unsearched garbage plays in winning games; tiny anchor on MCTS-verified optimal plays!
+        w = np.zeros(len(acts), dtype=np.float64)
+        w = np.where(searched & ~overridden & (acts > 0), 0.08, w)
+        w = np.where(searched & ~overridden & (acts == 0), 0.04, w)
     else:
         # Balanced non-override baseline (prevents 10x anti-WAIT erosion across updates)
         w = np.where(acts > 0, 0.35, 0.15)
@@ -152,6 +166,9 @@ def lookahead_frame_weights(
         else:
             w = np.where(bank_w & (acts == 0), 2.50 * boost, w)
     w = np.where(overridden & (acts > 0), 2.50 * boost, w)
+    if score_gains is not None:
+        gains = np.clip(np.asarray(score_gains, dtype=np.float64), 0.0, 0.25)
+        w = np.where(overridden, w * (1.0 + 8.0 * gains), w)
     if adverse_mask is not None:
         adv = np.asarray(adverse_mask, dtype=bool)
         w = np.where(adv, w * 1.60, w)
@@ -356,6 +373,7 @@ class LookaheadDistiller:
         traj_overridden: list[bool] = []
         traj_bank_wait: list[bool] = []
         traj_adverse: list[bool] = []
+        traj_gains: list[float] = []
         override_cards: list[str] = []
 
         steps = 0
@@ -378,6 +396,7 @@ class LookaheadDistiller:
             traj_overridden.append(is_ovr)
             traj_bank_wait.append(is_bank_w)
             traj_adverse.append(_is_adverse_frame(raw_own, schema))
+            traj_gains.append(float(meta.get("score_gain", 0.0)))
             if is_ovr:
                 if a_own == 0:
                     bs = meta.get("bank_slot")
@@ -451,10 +470,12 @@ class LookaheadDistiller:
             keep_arr,
             np.asarray(traj_searched, dtype=bool),
             np.asarray(traj_overridden, dtype=bool),
-            override_boost=1.5,
+            override_boost=1.8,
             bank_wait_mask=np.asarray(traj_bank_wait, dtype=bool),
             adverse_mask=np.asarray(traj_adverse, dtype=bool),
             override_only=contested_adverse,
+            pure_override=not contested_adverse,
+            score_gains=np.asarray(traj_gains, dtype=np.float32),
         )
         report["status"] = "admitted_adverse_overrides" if contested_adverse else "admitted"
         episode = dict(
@@ -796,10 +817,11 @@ class LookaheadDistiller:
                 keep_arr,
                 np.asarray(traj_searched[g_idx], dtype=bool),
                 np.asarray(traj_overridden[g_idx], dtype=bool),
-                override_boost=1.5,
+                override_boost=1.8,
                 bank_wait_mask=np.asarray(traj_bank_wait[g_idx], dtype=bool),
                 adverse_mask=np.asarray(traj_adverse[g_idx], dtype=bool),
                 override_only=contested_adverse,
+                pure_override=not contested_adverse,
             )
             report["status"] = "admitted_adverse_overrides" if contested_adverse else "admitted"
             episode = dict(
@@ -833,7 +855,7 @@ class LookaheadDistiller:
         rollouts: int = 3,
         horizon_steps: int = 10,
         trigger_elixir: float = 6.0,
-        defense_elixir: float = 3.5,
+        defense_elixir: float = 2.5,
         override_margin: float = 0.008,
         max_searches_per_game: int = 16,
         max_game_steps: int = 800,
@@ -845,14 +867,17 @@ class LookaheadDistiller:
         deck_probabilities=None,
         focal_deck_indices: list[int] | None = None,
         include_placement: bool = True,
-        include_last_temporal: bool = False,
+        include_last_temporal: bool = True,
+        temporal_blocks: int | None = None,
     ) -> dict:
         if not probes or not any(np.any(ep["actor_keep"]) for ep in probes):
             return dict(ran=False, reason="no_ppo_choice_probes")
         if update <= self.last_update:
             return dict(ran=False, reason="already_processed")
-        if not 0 < lr <= MAX_DISTILL_LR or not 0 < max_kl <= MAX_KL or int(optimizer_steps) < 1:
-            raise ValueError(f"Lookahead distillation requires 0 < lr <= {MAX_DISTILL_LR}, 0 < max_kl <= 0.005, and steps >= 1")
+        if not 0 < lr <= MAX_DISTILL_LR or not 0 < max_kl <= MAX_DISTILL_KL or int(optimizer_steps) < 1:
+            raise ValueError(
+                f"Lookahead distillation requires 0 < lr <= {MAX_DISTILL_LR}, 0 < max_kl <= {MAX_DISTILL_KL}, and steps >= 1"
+            )
 
         began = time.perf_counter()
         old_mode = actor.training
@@ -866,10 +891,11 @@ class LookaheadDistiller:
             rollouts_per_candidate=max(1, int(rollouts)),
             horizon_steps=max(2, int(horizon_steps)),
             trigger_elixir=float(trigger_elixir),
-            defense_elixir=max(2.5, eff_defense),
+            defense_elixir=max(2.0, eff_defense),
             entropy_threshold=0.35,
             min_search_interval_steps=4,
             max_searches_per_game=max(1, int(max_searches_per_game)),
+            prior_weight=0.005,
             override_margin=float(override_margin),
             threads=max(2, int(threads)),
         )
@@ -879,6 +905,20 @@ class LookaheadDistiller:
         n_search_lanes = max(1, min(n_play, max(1, int(max_parallel_searches)))) * lanes_per_search
         n_decks = len(decks)
         probs = deck_probabilities if deck_probabilities is not None else np.ones(n_decks) / n_decks
+        counter_cards = {
+            "GoblinBarrel",
+            "MegaKnight",
+            "HogRider",
+            "Balloon",
+            "Princess",
+            "SkeletonArmy",
+            "WallBreakers",
+        }
+        opp_weights = np.asarray(probs, dtype=np.float64).copy()
+        for d_i, d_cards in enumerate(decks):
+            if any(str(c) in counter_cards for c in d_cards):
+                opp_weights[d_i] *= 2.5
+        opp_probs = opp_weights / max(float(opp_weights.sum()), 1e-12)
 
         all_specs: list[dict] = []
         for g_idx in range(total_games):
@@ -891,7 +931,7 @@ class LookaheadDistiller:
                 if focal_deck_indices
                 else int(self.rng.choice(n_decks, p=probs))
             )
-            opp_idx = int(self.rng.choice(n_decks, p=probs))
+            opp_idx = int(self.rng.choice(n_decks, p=opp_probs))
             opp_temp = 0.50 if ((self.games_played + g_idx) % 2 == 1) else 0.0
             all_specs.append(
                 dict(
@@ -983,8 +1023,8 @@ class LookaheadDistiller:
         chosen_entries = [self.entries[int(i)] for i in chosen_idx]
         distill_eps, distill_w = self._load_episodes(chosen_entries)
 
-        anchor_probes = list(probes[: min(len(probes), k_distill)])
-        anchor_w = [0.30 * probe_anchor_weights(ep) for ep in anchor_probes]
+        anchor_probes = list(probes[: min(len(probes), max(2, k_distill // 2))])
+        anchor_w = [0.05 * probe_anchor_weights(ep) for ep in anchor_probes]
         train_eps = distill_eps + anchor_probes
         train_w = distill_w + anchor_w
 
@@ -999,7 +1039,10 @@ class LookaheadDistiller:
 
         try:
             names = unfreeze_distill_heads(
-                actor, include_placement=include_placement, include_last_temporal=include_last_temporal
+                actor,
+                include_placement=include_placement,
+                include_last_temporal=include_last_temporal,
+                temporal_blocks=temporal_blocks,
             )
             originals = {name: parameters[name].detach().clone() for name in names}
             readout_params = [
@@ -1011,11 +1054,11 @@ class LookaheadDistiller:
             temporal_params = [parameters[n] for n in names if n.startswith("temporal.")]
             param_groups = [{"params": readout_params, "lr": lr}]
             if tile_params:
-                # Spatial tile heads span 576 logits; 0.2x LR keeps step-1 KL well inside 0.005 trust region
-                param_groups.append({"params": tile_params, "lr": lr * 0.20})
+                # Unfreeze spatial cross-attention + CNN residual at 0.45x LR so tactical placements converge fast
+                param_groups.append({"params": tile_params, "lr": lr * 0.45})
             if temporal_params:
-                # Final GQA temporal block learns cross-step multi-card synergy at conservative 0.15x LR
-                param_groups.append({"params": temporal_params, "lr": lr * 0.15})
+                # Top temporal blocks learn cross-step multi-card synergy & elixir counting at 0.25x LR
+                param_groups.append({"params": temporal_params, "lr": lr * 0.25})
             optimizer = torch.optim.AdamW(param_groups, weight_decay=0.0)
             scaler = torch.amp.GradScaler("cuda", enabled=torch.device(device).type == "cuda", init_scale=128.0)
             if torch.device(device).type == "cuda":

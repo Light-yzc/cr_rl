@@ -232,6 +232,113 @@ def test_front_tank_synergy_and_empty_rage_veto():
     assert 0 in cands
 
 
+def test_mcts_barrel_low_elixir_trigger_river_rage_veto_and_tactical_candidates():
+    @dataclass
+    class _TacSchema(_DummySchema):
+        tile_units: int = 1000
+        width_units: int = 18000
+        height_units: int = 32000
+        entity: dict = None
+        kinds: dict = None
+        flags: dict = None
+
+        def __post_init__(self):
+            super().__post_init__()
+            self.header["hand_cost"] = (11, 12, 13, 14)
+            self.entity = {"side": 0, "kind": 1, "x": 2, "y": 3, "hp": 4, "max_hp": 5, "flags": 6}
+            self.kinds = {"character": 1, "tower": 2, "projectile": 3, "area": 4}
+            self.flags = {"alive": 1, "building": 2}
+            self._ents = np.zeros((0, 7), dtype=np.int32)
+
+        def entities(self, _raw):
+            return self._ents
+
+    schema = _TacSchema()
+    raw = np.zeros(224, dtype=np.int32)
+    raw[2] = 35000  # 3.5 elixir (< 4.5 old defense_elixir!)
+    raw[7:11] = [99, 10, 3, 22]  # [Rage(2), Pump(6), Giant(5), MinionHorde(5)]
+    raw[11:15] = [2, 6, 5, 5]
+    raw[36:42] = [3600, 1645, 5800, 225, 0, 5800]  # Enemy R=0, Enemy L=225 HP!
+
+    # 1) Goblin Barrel landed on right tower (3 goblins at (14.5, 6.2)), Actor is stuck at WAIT=0.97 and puts Rage argmax in empty corner (0,0)!
+    schema._ents = np.array(
+        [
+            [1, 1, 14500, 5200, 323, 323, 1],
+            [1, 1, 15500, 6800, 323, 323, 1],
+            [1, 1, 13500, 6600, 323, 323, 1],
+        ],
+        dtype=np.int32,
+    )
+    legal = np.zeros(2307, dtype=bool)
+    legal[0] = True
+    legal[1:577] = True  # Rage legal
+    logp = torch.full((2307,), -18.0)
+    logp[0] = -0.03  # WAIT ~ 0.97 (very low entropy!)
+    logp[1 + 0] = -4.0  # Rage raw argmax at empty corner (0, 0)
+
+    cfg = LookaheadConfig(trigger_elixir=6.0, defense_elixir=4.5, entropy_threshold=0.50)
+    assert should_trigger_search(raw, legal, logp, schema, cfg, rage_card_ids=(99,)) is True
+    cands_barrel = select_macro_candidates(logp, legal, raw, schema, max_candidates=6, rage_card_ids=(99,))
+    expected_rage_barrel = 1 + 6 * 18 + 14
+    assert expected_rage_barrel in cands_barrel
+
+    # 2) River Bats + GoldenKnight at y=15500 with empty own board: naked river Rage MUST be rejected by MCTS!
+    schema._ents = np.array(
+        [
+            [1, 1, 3500, 15500, 130, 130, 1],
+            [1, 1, 3800, 15500, 130, 130, 1],
+            [1, 1, 4000, 15800, 2450, 2450, 1],
+        ],
+        dtype=np.int32,
+    )
+    river_rage = 1 + 14 * 18 + 3
+    logp_riv = torch.full((2307,), -18.0)
+    logp_riv[river_rage] = -0.1
+    logp_riv[0] = -2.0
+    cands_riv = select_macro_candidates(logp_riv, legal, raw, schema, max_candidates=6, rage_card_ids=(99,))
+    assert cands_riv == [river_rage, 0]  # default kept at idx 0 for penalty, no extra naked river Rage added!
+
+    # 3) MegaKnight at (3, 8) on Left Tower while MinionHorde raw heatmap peaks on Right bridge (15, 14):
+    # MCTS MUST propose point-blank & standoff left-lane candidates for rollout verification!
+    raw[2] = 52000
+    schema._ents = np.array([[1, 1, 3500, 8500, 3001, 3300, 1]], dtype=np.int32)
+    legal[1 + 3 * 576 : 1 + 3 * 576 + 15 * 18] = True  # MinionHorde legal on own half
+    wrong_right_horde = 1 + 3 * 576 + 14 * 18 + 15
+    logp_mk = torch.full((2307,), -16.0)
+    logp_mk[wrong_right_horde] = -0.2
+    logp_mk[0] = -2.5
+    cands_mk = select_macro_candidates(logp_mk, legal, raw, schema, max_candidates=7, rage_card_ids=(99,))
+    horde_cols = [((a - 1 - 3 * 576) % 18) for a in cands_mk if (1 + 3 * 576) <= a < (1 + 4 * 576)]
+    assert any(c <= 6 for c in horde_cols), f"Expected left-tower defense candidate in {horde_cols}"
+
+    # 4) Offensive / Counterpush Rage at 2.3 elixir!
+    # Giant (2900 HP) + Sparky (2319 HP) crossed bridge at (3.5, 19.5) engaging enemy Knight + Skeletons,
+    # Actor outputs WAIT=0.95 and puts Rage raw argmax in backfield (0, 0) -> MCTS MUST trigger at 2.3 elixir
+    # and propose Rage right on the Giant+Sparky+Skeletons combat cluster!
+    raw[2] = 23000  # Only 2.3 elixir left after deploying Giant + Sparky!
+    schema._ents = np.array(
+        [
+            [0, 1, 3500, 19500, 2900, 4090, 1],  # Own Giant across bridge
+            [0, 1, 3500, 17500, 2319, 2319, 1],  # Own Sparky behind Giant
+            [1, 1, 3800, 21000, 1700, 1700, 1],  # Enemy Knight defending
+            [1, 1, 3600, 20200, 81, 81, 1],      # Enemy Skeletons distracting Sparky/Giant
+            [1, 1, 4100, 20400, 81, 81, 1],
+        ],
+        dtype=np.int32,
+    )
+    leg_push = np.zeros(2307, dtype=bool)
+    leg_push[0] = True
+    leg_push[1:577] = True  # Only 2-cost Rage is affordable at 2.3 elixir!
+    logp_push = torch.full((2307,), -18.0)
+    logp_push[0] = -0.05  # Actor stubbornly wants WAIT (~0.95) instead of offensive Rage!
+    logp_push[1 + 0] = -3.5  # Raw Rage argmax at unengaged corner (0, 0)
+
+    assert should_trigger_search(raw, leg_push, logp_push, schema, cfg, rage_card_ids=(99,)) is True
+    cands_push = select_macro_candidates(logp_push, leg_push, raw, schema, max_candidates=5, rage_card_ids=(99,))
+    rage_push_tiles = [((a - 1) % 18, (a - 1) // 18) for a in cands_push if 1 <= a <= 576 and a != 1]
+    assert any(2 <= c <= 5 and 17 <= r <= 21 for c, r in rage_push_tiles), f"Expected push Rage tile, got {rage_push_tiles}"
+
+
 def test_hold_to_full_pump_at_6_elixir_and_urgent_balloon_wizard_bank():
     @dataclass
     class _BalloonSchema(_DummySchema):

@@ -44,6 +44,14 @@ def test_lookahead_frame_weights_and_pipeline_flags(tmp_path: Path):
     )
     np.testing.assert_allclose(w_adv_only, np.array([0.0, 0.0, 0.0, 0.0, 2.70 * 1.6, 3.75 * 1.6], dtype=np.float32))
 
+    gains = np.array([0.0, 0.0, 0.0, 0.0, 0.05, 0.10], dtype=np.float32)
+    w_pure = lookahead_frame_weights(
+        actions, keep, searched, overridden, override_boost=1.5, pure_override=True, score_gains=gains
+    )
+    assert w_pure[1] == 0.0  # Unsearched non-override play gets strictly ZERO weight!
+    np.testing.assert_allclose(w_pure[2:4], np.array([0.04, 0.08], dtype=np.float32))
+    assert w_pure[5] > 3.75 * 1.7
+
     # Verify colab_pipeline ppo_command & progress integration
     (tmp_path / "prepared/input").mkdir(parents=True)
     (tmp_path / "prepared/input/ppo_latest.pt").touch()

@@ -276,17 +276,21 @@ def _is_engaged_global_spell(
     is_rage = bool(rage_card_ids) and (card_id in rage_card_ids)
 
     if is_rage:
-        # Rage requires either an engaged friendly troop in radius + nearby enemy/tower,
-        # or low-HP enemy swarm (<=260 HP) within splash radius.
-        if len(enemy_c):
+        # Allow finishing off a critically low enemy tower (<= 170 HP) within Rage splash radius
+        if len(enemy_t):
+            d2_et = (enemy_t[:, e["x"]] - tx) ** 2 + (enemy_t[:, e["y"]] - ty) ** 2
+            if bool(((d2_et <= (2.8 * tu) ** 2) & (enemy_t[:, e["hp"]] <= 170)).any()):
+                return True
+        # Naked defensive Rage ONLY on our own tower zone (y <= 11.5 tiles) hitting >=2 low-HP swarm units (e.g. Goblin Barrel)
+        if ty <= 11.5 * tu and len(enemy_c):
             d2_ec = (enemy_c[:, e["x"]] - tx) ** 2 + (enemy_c[:, e["y"]] - ty) ** 2
-            if bool(((d2_ec <= (3.2 * tu) ** 2) & (enemy_c[:, e["hp"]] <= 260)).any()):
+            if int(((d2_ec <= (3.2 * tu) ** 2) & (enemy_c[:, e["hp"]] <= 380)).sum()) >= 2:
                 return True
         if not len(own_c):
             return False
         d2_own = (own_c[:, e["x"]] - tx) ** 2 + (own_c[:, e["y"]] - ty) ** 2
         buffed = own_c[d2_own <= (4.0 * tu) ** 2]
-        if not len(buffed):
+        if not len(buffed) or int(buffed[:, e["hp"]].sum()) < 300:
             return False
         targets = np.concatenate([enemy_c, enemy_t], axis=0) if (len(enemy_c) or len(enemy_t)) else np.empty((0, ents.shape[1]))
         if not len(targets):
@@ -409,6 +413,311 @@ def _front_tank_candidates(
     return out_acts
 
 
+def _urgent_defense_threat(raw_obs: np.ndarray, schema) -> bool:
+    """Return True when an enemy projectile/swarm threatens our tower or >=700 HP crossed the river."""
+    if not hasattr(schema, "entities"):
+        return False
+    e = schema.entity
+    ents = schema.entities(raw_obs)
+    if not len(ents):
+        return False
+    enemy = ents[ents[:, e["side"]] == 1]
+    if not len(enemy):
+        return False
+    tu = int(getattr(schema, "tile_units", 1000))
+    kinds = enemy[:, e["kind"]]
+    alive_flag = schema.flags.get("alive", 0)
+    proj_threat = (kinds == schema.kinds.get("projectile", -1)) & (enemy[:, e["y"]] <= int(13.5 * tu))
+    if bool(proj_threat.any()):
+        return True
+    chars = (kinds == schema.kinds["character"]) & (enemy[:, e["hp"]] > 0)
+    if alive_flag:
+        chars &= (enemy[:, e["flags"]] & alive_flag) != 0
+    if not bool(chars.any()):
+        return False
+    ec = enemy[chars]
+    ey = ec[:, e["y"]]
+    ehp = ec[:, e["hp"]]
+    tower_zone = ey <= int(11.5 * tu)
+    if int(tower_zone.sum()) >= 2 or bool((tower_zone & (ehp >= 450)).any()):
+        return True
+    deep = ey <= int(15.5 * tu)
+    return bool(deep.any() and int(ehp[deep].sum()) >= 700)
+
+
+def _tower_swarm_spell_action(
+    slot: int,
+    raw_obs: np.ndarray,
+    legal: np.ndarray,
+    schema,
+    *,
+    rage_card_ids: Sequence[int] = (),
+) -> int | None:
+    """When >=2 low-HP swarm units are on our tower zone, propose centering global spell `slot` on them."""
+    if not hasattr(schema, "entities"):
+        return None
+    cols = int(getattr(schema, "cols", 18))
+    rows_n = int(getattr(schema, "rows", 32))
+    tiles = cols * rows_n
+    lo = 1 + slot * tiles
+    hi = lo + tiles
+    if int(legal[lo:hi].sum()) < GLOBAL_SPELL_MIN_TILES:
+        return None
+    e = schema.entity
+    ents = schema.entities(raw_obs)
+    if not len(ents):
+        return None
+    tu = float(getattr(schema, "tile_units", 1000))
+    alive_flag = schema.flags.get("alive", 0)
+    chars = (ents[:, e["side"]] == 1) & (ents[:, e["kind"]] == schema.kinds["character"]) & (ents[:, e["hp"]] > 0)
+    if alive_flag:
+        chars &= (ents[:, e["flags"]] & alive_flag) != 0
+    sw = ents[chars & (ents[:, e["y"]] <= 11.5 * tu) & (ents[:, e["hp"]] <= 380)]
+    if len(sw) < 2:
+        return None
+    # Split by lane so dual-lane clutter never averages across the arena center
+    width_u = float(getattr(schema, "width_units", 18000))
+    left_sw = sw[sw[:, e["x"]] < width_u * 0.5]
+    right_sw = sw[sw[:, e["x"]] >= width_u * 0.5]
+    cluster = left_sw if len(left_sw) >= len(right_sw) else right_sw
+    if len(cluster) < 2:
+        return None
+    sc = int(np.clip(round(float(cluster[:, e["x"]].mean()) / tu - 0.5), 0, cols - 1))
+    sr = int(np.clip(round(float(cluster[:, e["y"]].mean()) / tu - 0.5), 0, 11))
+    act = lo + sr * cols + sc
+    if legal[act] and _is_engaged_global_spell(act, raw_obs, legal, schema, rage_card_ids=rage_card_ids):
+        return int(act)
+    return None
+
+
+def _engaged_push_rage_action(
+    slot: int,
+    raw_obs: np.ndarray,
+    legal: np.ndarray,
+    schema,
+    *,
+    rage_card_ids: Sequence[int] = (),
+    min_push_hp: int = 800,
+) -> int | None:
+    """When our push/counterpush is actively engaged with enemy units/tower, propose Rage centered on the combat wave."""
+    if not rage_card_ids or not hasattr(schema, "entities"):
+        return None
+    hand_idx = schema.header.get("hand_card")
+    if hand_idx is None or slot >= len(hand_idx):
+        return None
+    if int(raw_obs[hand_idx[slot]]) not in rage_card_ids:
+        return None
+    cols = int(getattr(schema, "cols", 18))
+    rows_n = int(getattr(schema, "rows", 32))
+    tiles = cols * rows_n
+    lo = 1 + slot * tiles
+    hi = lo + tiles
+    if int(legal[lo:hi].sum()) < GLOBAL_SPELL_MIN_TILES:
+        return None
+
+    e = schema.entity
+    ents = schema.entities(raw_obs)
+    if not len(ents):
+        return None
+    tu = float(getattr(schema, "tile_units", 1000))
+    width_u = float(getattr(schema, "width_units", 18000))
+    alive_flag = schema.flags.get("alive", 0)
+    bldg_flag = schema.flags.get("building", 0)
+
+    chars = (ents[:, e["kind"]] == schema.kinds["character"]) & (ents[:, e["hp"]] > 0)
+    if alive_flag:
+        chars &= (ents[:, e["flags"]] & alive_flag) != 0
+    own_mask = chars & (ents[:, e["side"]] == 0)
+    if bldg_flag:
+        own_mask &= (ents[:, e["flags"]] & bldg_flag) == 0
+    own_c = ents[own_mask]
+    if not len(own_c):
+        return None
+
+    enemy_c = ents[chars & (ents[:, e["side"]] == 1)]
+    towers = (ents[:, e["kind"]] == schema.kinds["tower"]) & (ents[:, e["hp"]] > 0) & (ents[:, e["side"]] == 1)
+    enemy_t = ents[towers]
+    targets = np.concatenate([enemy_c, enemy_t], axis=0) if (len(enemy_c) or len(enemy_t)) else np.empty((0, ents.shape[1]))
+    if not len(targets):
+        return None
+
+    dx = own_c[:, None, e["x"]] - targets[None, :, e["x"]]
+    dy = own_c[:, None, e["y"]] - targets[None, :, e["y"]]
+    in_combat = ((dx * dx + dy * dy) <= (6.2 * tu) ** 2).any(axis=1)
+    engaged = own_c[in_combat]
+    if not len(engaged):
+        return None
+
+    left_eng = engaged[engaged[:, e["x"]] < width_u * 0.5]
+    right_eng = engaged[engaged[:, e["x"]] >= width_u * 0.5]
+    cluster = left_eng if int(left_eng[:, e["hp"]].sum()) >= int(right_eng[:, e["hp"]].sum()) else right_eng
+    if int(cluster[:, e["hp"]].sum()) < int(min_push_hp):
+        return None
+
+    w = np.maximum(cluster[:, e["max_hp"]], cluster[:, e["hp"]]).astype(np.float64)
+    cx = float((cluster[:, e["x"]] * w).sum() / w.sum())
+    cy = float((cluster[:, e["y"]] * w).sum() / w.sum())
+
+    # Skip if an active friendly area spell (e.g. Rage) is already ticking on this push
+    area_kind = schema.kinds.get("area", -1)
+    if area_kind >= 0:
+        own_areas = ents[(ents[:, e["side"]] == 0) & (ents[:, e["kind"]] == area_kind)]
+        if len(own_areas):
+            d2_a = (own_areas[:, e["x"]] - cx) ** 2 + (own_areas[:, e["y"]] - cy) ** 2
+            if bool((d2_a <= (3.2 * tu) ** 2).any()):
+                return None
+
+    # Shift slightly toward nearby enemy distraction swarm (Skeletons/Bats/Goblins) so Rage both buffs our push & clears swarm
+    if len(enemy_c):
+        d2_sw = (enemy_c[:, e["x"]] - cx) ** 2 + (enemy_c[:, e["y"]] - cy) ** 2
+        near_sw = enemy_c[(d2_sw <= (4.2 * tu) ** 2) & (enemy_c[:, e["hp"]] <= 380)]
+        if len(near_sw):
+            sx, sy = float(near_sw[:, e["x"]].mean()), float(near_sw[:, e["y"]].mean())
+            vx, vy = 0.35 * (sx - cx), 0.35 * (sy - cy)
+            v_norm = float(np.hypot(vx, vy))
+            if v_norm > 2.2 * tu:
+                scale_v = (2.2 * tu) / v_norm
+                vx, vy = vx * scale_v, vy * scale_v
+            cx, cy = cx + vx, cy + vy
+
+    rc = int(np.clip(round(cx / tu - 0.5), 0, cols - 1))
+    rr = int(np.clip(round(cy / tu - 0.5), 0, rows_n - 1))
+    act = lo + rr * cols + rc
+    if legal[act] and _is_engaged_global_spell(act, raw_obs, legal, schema, rage_card_ids=rage_card_ids):
+        return int(act)
+    return None
+
+
+def _tactical_spatial_candidates(
+    raw_obs: np.ndarray,
+    legal: np.ndarray,
+    masked_lp: np.ndarray,
+    group_best: Sequence[tuple[float, int, int]],
+    schema,
+    *,
+    rage_card_ids: Sequence[int] = (),
+) -> list[int]:
+    """Propose threat-anchored defense & alive-tower finisher candidates for MCTS rollout verification."""
+    if not hasattr(schema, "entities"):
+        return []
+    e = schema.entity
+    ents = schema.entities(raw_obs)
+    cols = int(getattr(schema, "cols", 18))
+    rows_n = int(getattr(schema, "rows", 32))
+    tiles = cols * rows_n
+    tu = float(getattr(schema, "tile_units", 1000))
+    width_u = float(getattr(schema, "width_units", 18000))
+    mid_c = cols // 2
+    grid_idx = np.arange(tiles, dtype=np.int32)
+    grid_c = grid_idx % cols
+    grid_r = grid_idx // cols
+
+    out: list[int] = []
+
+    # 1. Tower-swarm spell reflex candidate (ensures MCTS tests centered spell even if raw argmax hit a stray target)
+    hand_slots = int(getattr(schema, "hand_slots", 4))
+    for slot in range(hand_slots):
+        sw_act = _tower_swarm_spell_action(slot, raw_obs, legal, schema, rage_card_ids=rage_card_ids)
+        if sw_act is not None and sw_act not in out:
+            out.append(sw_act)
+
+    # 2. Threat-anchored troop defense: point-blank surround vs ranged/kite standoff
+    deep_hp = 0
+    if len(ents):
+        alive_flag = schema.flags.get("alive", 0)
+        chars = (ents[:, e["side"]] == 1) & (ents[:, e["kind"]] == schema.kinds["character"]) & (ents[:, e["hp"]] > 0)
+        if alive_flag:
+            chars &= (ents[:, e["flags"]] & alive_flag) != 0
+        ec = ents[chars & (ents[:, e["y"]] <= 15.5 * tu)]
+        if len(ec):
+            deep_hp = int(ec[:, e["hp"]].sum())
+            if deep_hp >= 650:
+                left_ec = ec[ec[:, e["x"]] < width_u * 0.5]
+                right_ec = ec[ec[:, e["x"]] >= width_u * 0.5]
+                focus = left_ec if int(left_ec[:, e["hp"]].sum()) >= int(right_ec[:, e["hp"]].sum()) else right_ec
+                if len(focus):
+                    w = np.maximum(focus[:, e["hp"]], 100).astype(np.float64)
+                    tc = float((focus[:, e["x"]] * w).sum() / w.sum()) / tu - 0.5
+                    tr = float((focus[:, e["y"]] * w).sum() / w.sum()) / tu - 0.5
+                    dist = np.hypot(grid_c - tc, grid_r - tr)
+                    same_half = (grid_c < mid_c) if (tc < mid_c) else (grid_c >= mid_c)
+                    troop_slots = [
+                        slot
+                        for _sc, _pa, slot in group_best
+                        if slot >= 0 and 0 < int(legal[1 + slot * tiles : 1 + (slot + 1) * tiles].sum()) < GLOBAL_SPELL_MIN_TILES
+                    ]
+                    for slot in troop_slots[:2]:
+                        lo = 1 + slot * tiles
+                        hi = lo + tiles
+                        s_leg = legal[lo:hi]
+                        s_lp = masked_lp[lo:hi]
+                        # (a) Point-blank engage (e.g. MinionHorde / MiniPekka / DarkPrince directly on MegaKnight/Hog)
+                        engage = s_leg & same_half & (dist <= 3.2) & (grid_r <= min(14, int(round(tr)) + 2))
+                        if engage.any():
+                            a_eng = lo + int(np.argmax(np.where(engage, s_lp - 0.05 * dist, -np.inf)))
+                            if a_eng not in out:
+                                out.append(a_eng)
+                        # (b) Safe standoff / center kite (e.g. Wizard 3.5..6.2 tiles away so MK doesn't splash tower+Wizard)
+                        standoff = s_leg & same_half & (dist >= 3.4) & (dist <= 6.2) & (grid_r <= min(13, int(round(tr)) + 1))
+                        if standoff.any():
+                            a_std = lo + int(np.argmax(np.where(standoff, s_lp, -np.inf)))
+                            if a_std not in out:
+                                out.append(a_std)
+
+    # 3. Alive / critically-low enemy Princess Tower focus (prevents attacking a dead lane while other tower sits at 225 HP)
+    el_idx = schema.header.get("enemy_left_hp")
+    er_idx = schema.header.get("enemy_right_hp")
+    if el_idx and er_idx:
+        el_hp = int(raw_obs[el_idx[0]])
+        er_hp = int(raw_obs[er_idx[0]])
+        focus_left: bool | None = None
+        low_tower_hp = 99999
+        if 0 < el_hp <= 1200 and (er_hp == 0 or el_hp <= er_hp):
+            focus_left, low_tower_hp = True, el_hp
+        elif 0 < er_hp <= 1200 and (el_hp == 0 or er_hp < el_hp):
+            focus_left, low_tower_hp = False, er_hp
+        elif el_hp > 0 and er_hp == 0 and el_hp <= 3600:
+            focus_left, low_tower_hp = True, el_hp
+        elif er_hp > 0 and el_hp == 0 and er_hp <= 3600:
+            focus_left, low_tower_hp = False, er_hp
+
+        if focus_left is not None:
+            tc_tow = 3 if focus_left else (cols - 4)
+            tr_tow = 25
+            hand_idx = schema.header.get("hand_card")
+            for slot in range(hand_slots):
+                lo = 1 + slot * tiles
+                hi = lo + tiles
+                n_leg = int(legal[lo:hi].sum())
+                if n_leg >= GLOBAL_SPELL_MIN_TILES and low_tower_hp <= 550:
+                    cid = int(raw_obs[hand_idx[slot]]) if hand_idx is not None else -1
+                    if cid in rage_card_ids and low_tower_hp > 170:
+                        continue
+                    tow_act = lo + tr_tow * cols + tc_tow
+                    if legal[tow_act] and _is_engaged_global_spell(
+                        tow_act, raw_obs, legal, schema, rage_card_ids=rage_card_ids
+                    ):
+                        if tow_act not in out:
+                            out.append(tow_act)
+            if deep_hp < 900:
+                lane_mask = (grid_c < mid_c) if focus_left else (grid_c >= mid_c)
+                for _sc, pa, slot in group_best[:2]:
+                    if slot < 0:
+                        continue
+                    lo = 1 + slot * tiles
+                    hi = lo + tiles
+                    if not (0 < int(legal[lo:hi].sum()) < GLOBAL_SPELL_MIN_TILES):
+                        continue
+                    pa_c = (pa - lo) % cols
+                    if (pa_c < mid_c) != focus_left:
+                        cand_m = legal[lo:hi] & lane_mask
+                        if cand_m.any():
+                            a_lane = lo + int(np.argmax(np.where(cand_m, masked_lp[lo:hi], -np.inf)))
+                            if a_lane not in out:
+                                out.append(a_lane)
+    return out
+
+
 def select_macro_candidates(
     logp: torch.Tensor,
     legal_mask: np.ndarray,
@@ -422,7 +731,7 @@ def select_macro_candidates(
     bank_max_deficit: float = 2.2,
     rage_card_ids: Sequence[int] = (),
 ) -> list[int]:
-    """Select up to `max_candidates` macro-distinct actions (WAIT + legal slots + front-tank + bank macros + splits)."""
+    """Select up to `max_candidates` macro-distinct actions (WAIT + legal slots + front-tank + bank macros + tactical + splits)."""
     if max_candidates < 1:
         raise ValueError("max_candidates must be positive")
     legal = np.asarray(legal_mask, dtype=bool).reshape(-1)
@@ -453,7 +762,15 @@ def select_macro_candidates(
             rel = int(np.argmax(masked_lp[lo:hi]))
             act = lo + rel
             if not _is_engaged_global_spell(act, raw_obs, legal, schema, rage_card_ids=rage_card_ids):
-                continue
+                # Rescue engaged push Rage or tower-swarm spell counters when raw argmax missed the cluster!
+                rescued = _engaged_push_rage_action(
+                    slot, raw_obs, legal, schema, rage_card_ids=rage_card_ids, min_push_hp=700
+                )
+                if rescued is None:
+                    rescued = _tower_swarm_spell_action(slot, raw_obs, legal, schema, rage_card_ids=rage_card_ids)
+                if rescued is None:
+                    continue
+                act = rescued
             # Rank by total slot probability mass so spread-out tile distributions aren't penalized
             slot_lse = float(np.logaddexp.reduce(masked_lp[lo:hi][legal[lo:hi]]))
             group_best.append((slot_lse, act, slot))
@@ -476,6 +793,17 @@ def select_macro_candidates(
             break
         if ft_act not in candidates:
             candidates.append(ft_act)
+
+    # Pass 1.25: prioritize Engaged-Push / Counterpush Rage (2-cost steamroll multiplier on Giant/Sparky/MiniPekka waves!)
+    if rage_card_ids and len(candidates) < max_candidates:
+        for slot in range(hand_slots):
+            if len(candidates) >= max_candidates:
+                break
+            pr_act = _engaged_push_rage_action(
+                slot, raw_obs, legal, schema, rage_card_ids=rage_card_ids, min_push_hp=800
+            )
+            if pr_act is not None and pr_act not in candidates:
+                candidates.append(pr_act)
 
     for _score, act, _slot in group_best:
         if len(candidates) >= max_candidates:
@@ -510,6 +838,16 @@ def select_macro_candidates(
             macro_act = encode_hold_full_candidate(slot)
             if macro_act not in candidates:
                 candidates.append(macro_act)
+
+    # Pass 1.8: add tactical defense (point-blank vs standoff) & alive/low-HP tower finisher proposals for simulator rollout evaluation
+    if len(candidates) < max_candidates:
+        for tac_act in _tactical_spatial_candidates(
+            raw_obs, legal, masked_lp, group_best, schema, rage_card_ids=rage_card_ids
+        ):
+            if len(candidates) >= max_candidates:
+                break
+            if tac_act not in candidates:
+                candidates.append(tac_act)
 
     # Pass 2: fill remaining budget with spatially distinct placements (opposite lane / backline-vs-bridge)
     if len(candidates) < max_candidates and spatial_min_l1 > 0:
@@ -561,7 +899,7 @@ def should_trigger_search(
     *,
     rage_card_ids: Sequence[int] = (),
 ) -> bool:
-    """Return True on high-elixir macro turns, front-tank synergy turns, unengaged spells, or defense."""
+    """Return True on high-elixir macro turns, front-tank/push-Rage synergy turns, unengaged spells, or urgent defense."""
     legal = np.asarray(legal_mask, dtype=bool).reshape(-1)
     if not legal[1:].any():
         return False
@@ -581,6 +919,22 @@ def should_trigger_search(
     elix = float(raw_obs[schema.header["elixir"][0]])
     res = float(raw_obs[schema.header["elixir_reserved"][0]]) if "elixir_reserved" in schema.header else 0.0
     avail = (elix - res) / scale
+
+    # Unconditional urgent defense trigger at >=2.0 elixir (catches Goblin Barrel / tower rushes even when WAIT=0.97!)
+    if avail >= 2.0 and _urgent_defense_threat(raw_obs, schema):
+        return True
+
+    # Unconditional engaged-push Rage trigger at >=2.0 elixir (when Giant/Sparky/counterpush engages enemy at 2..4 elx!)
+    if avail >= 2.0 and rage_card_ids:
+        hand_slots = int(getattr(schema, "hand_slots", 4))
+        for s_r in range(hand_slots):
+            if (
+                _engaged_push_rage_action(
+                    s_r, raw_obs, legal, schema, rage_card_ids=rage_card_ids, min_push_hp=1000
+                )
+                is not None
+            ):
+                return True
 
     if avail >= cfg.trigger_elixir:
         return True
