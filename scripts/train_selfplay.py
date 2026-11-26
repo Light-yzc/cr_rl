@@ -1698,6 +1698,12 @@ def main() -> None:
     parser.add_argument('--lookahead-distill-learning-rate', type=float, default=1e-6)
     parser.add_argument('--lookahead-distill-max-kl', type=float, default=0.005)
     parser.add_argument('--lookahead-distill-temporal-blocks', type=int, default=None)
+    parser.add_argument(
+        '--lookahead-distill-placement',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Unfreeze spatial placement head during lookahead distillation (disable to lock tile precision)',
+    )
     args = parser.parse_args()
     if (args.critic_fp16_resume_scale_cap is not None and
             not (np.isfinite(args.critic_fp16_resume_scale_cap) and args.critic_fp16_resume_scale_cap>=1)):

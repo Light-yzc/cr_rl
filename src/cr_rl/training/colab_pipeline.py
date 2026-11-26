@@ -107,6 +107,12 @@ def ppo_command(root, config, *, out=None, resume=None):
                     'lookahead_distill_temporal_blocks'):
             if config.get(key) is not None:
                 command += ['--' + key.replace('_', '-'), str(config[key])]
+        if config.get('lookahead_distill_placement') is not None:
+            command.append(
+                '--lookahead-distill-placement'
+                if config['lookahead_distill_placement']
+                else '--no-lookahead-distill-placement'
+            )
     if config.get('focal_decks') and '--focal-decks' not in command:
         command += ['--focal-decks', str(config['focal_decks']), '--focal-deck-prob', str(config.get('focal_deck_prob', 1.0))]
     if config.get('expand_decks') and '--expand-decks' not in command:
@@ -119,7 +125,7 @@ def ppo_command(root, config, *, out=None, resume=None):
             '--awbc-epochs','2','--awbc-value-epochs','20','--awbc-learning-rate','1e-6','--awbc-max-kl','.01']
     if config.get('backup',True):
         command+=['--backup-dir','/content/drive/MyDrive/cr_rl_ppo/training/'+config['run_name'],
-            '--async-publication','--no-backup-hash','--publication-interval','1']
+            '--async-publication','--no-backup-hash','--publication-interval',str(config.get('publication_interval',1))]
         command.append('--checkpoint-first-update')
     if config.get('wandb',True): command.append('--wandb')
     if config.get('critic_fp16_resume_scale_cap') is not None:

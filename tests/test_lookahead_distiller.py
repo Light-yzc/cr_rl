@@ -70,10 +70,16 @@ def test_lookahead_frame_weights_and_pipeline_flags(tmp_path: Path):
             "lookahead_distill_games": 3,
             "lookahead_distill_horizon": 10,
             "lookahead_distill_margin": 0.008,
+            "lookahead_distill_placement": False,
+            "lookahead_distill_temporal_blocks": 0,
+            "publication_interval": 5,
         },
     )
     assert "--lookahead-distill" in cmd
     assert "--lookahead-distill-interval" in cmd
+    assert "--no-lookahead-distill-placement" in cmd
+    assert cmd[cmd.index("--lookahead-distill-temporal-blocks") + 1] == "0"
+    assert cmd[cmd.index("--publication-interval") + 1] == "5"
 
     run_dir = tmp_path / "runs/r1"
     run_dir.mkdir(parents=True)
@@ -214,3 +220,9 @@ def test_lookahead_distiller_end_to_end_native_and_distillation(tmp_path: Path):
     assert any(n.startswith("temporal.blocks.1.") for n in unfrozen_full)
     assert any(n.startswith("temporal.final_norm.") for n in unfrozen_full)
     assert not any(n.startswith("temporal.blocks.0.") for n in unfrozen_full)
+
+    unfrozen_locked = unfreeze_distill_heads(actor, include_placement=False, temporal_blocks=0)
+    assert any(n.startswith("slot_actor.") for n in unfrozen_locked)
+    assert any(n.startswith("wait_actor.") for n in unfrozen_locked)
+    assert not any(n.startswith("learned_placement.") for n in unfrozen_locked)
+    assert not any(n.startswith("temporal.") for n in unfrozen_locked)
