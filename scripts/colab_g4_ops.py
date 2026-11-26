@@ -176,6 +176,23 @@ from pathlib import Path
 run_name = {run_name!r}
 base = Path("/content/crrl_training/runs") / run_name
 try:
+    import os as _os, time as _time
+    _st = _os.statvfs("/")
+    _free_gib = (_st.f_bavail * _st.f_frsize) / (1024 ** 3)
+    _dfs = Path("/root/.config/Google/DriveFS")
+    if _free_gib < 140.0 and _dfs.exists():
+        _cut = _time.time() - 90.0
+        for _cc in _dfs.rglob("content_cache"):
+            if _cc.is_dir():
+                for _f in _cc.rglob("*"):
+                    try:
+                        if _f.is_file() and _f.stat().st_mtime < _cut:
+                            _f.unlink()
+                    except OSError:
+                        pass
+except Exception:
+    pass
+try:
     gpu = subprocess.check_output(
         ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,power.draw", "--format=csv,noheader"],
         text=True, timeout=5
@@ -478,7 +495,7 @@ vram_gib = props.total_memory / (1024 ** 3)
 ncpu = len(os.sched_getaffinity(0))
 if vram_gib >= 70.0:
     profile_tag = "wide_70g+"
-    cfg.update(gradient_checkpointing=False, sparse_placement=True, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=8, cache_state_frames=True, cache_reference=True, pool_capacity=12, current_opponent_fraction=0.55, historical_opponent_fraction=0.35, anchor_opponent_fraction=0.10, expert_bc=True, expert_bc_interval=12, anchor_kl_coef=0.022, card_entropy_coef=0.0001, tile_entropy_coef=-0.0002, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(32, ncpu), torch_threads=min(16, ncpu), lookahead_distill_games=20, lookahead_distill_parallel_games=20, lookahead_distill_parallel_searches=min(16, max(4, ncpu // 3)), lookahead_distill_threads=min(44, ncpu), lookahead_distill_candidates=8, lookahead_distill_horizon=38, lookahead_distill_rollouts=3, lookahead_distill_max_searches=28, lookahead_distill_batch_episodes=20, lookahead_distill_steps=4, lookahead_distill_learning_rate=8e-6, lookahead_distill_max_kl=0.005, lookahead_distill_temporal_blocks=1, validation_argmax_lanes=min(24, max(8, ncpu // 2)))
+    cfg.update(gradient_checkpointing=False, sparse_placement=True, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=8, publication_interval=5, cache_state_frames=True, cache_reference=True, pool_capacity=12, current_opponent_fraction=0.55, historical_opponent_fraction=0.35, anchor_opponent_fraction=0.10, expert_bc=True, expert_bc_interval=12, anchor_kl_coef=0.022, card_entropy_coef=0.0001, tile_entropy_coef=-0.0002, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(32, ncpu), torch_threads=min(16, ncpu), lookahead_distill_games=20, lookahead_distill_parallel_games=20, lookahead_distill_parallel_searches=min(16, max(4, ncpu // 3)), lookahead_distill_threads=min(44, ncpu), lookahead_distill_candidates=8, lookahead_distill_horizon=38, lookahead_distill_rollouts=3, lookahead_distill_max_searches=28, lookahead_distill_batch_episodes=20, lookahead_distill_steps=4, lookahead_distill_learning_rate=8e-6, lookahead_distill_max_kl=0.005, lookahead_distill_temporal_blocks=1, validation_argmax_lanes=min(24, max(8, ncpu // 2)))
 elif vram_gib >= 38.0:
     profile_tag = "mid_40g"
     cfg.update(gradient_checkpointing=True, sparse_placement=False, temporal_checkpoint_mode="block", frame_microbatch=256, actor_batch_size=2, critic_batch_size=4, cache_state_frames=True, cache_reference=True, opponent_cache_size=6, training_opponent_cache_size=4, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=12, lookahead_distill_parallel_games=12, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), validation_argmax_lanes=8)
