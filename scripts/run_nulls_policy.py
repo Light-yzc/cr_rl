@@ -76,9 +76,34 @@ NULLS_OOD_ALIASES: dict[str, str] = {
     'GoblinHero_Flag_Building': 'GoblinHut',
     'BarbLogBarbarianHero': 'Barbarian',
     'BarbLogBarbarianHeroNaked': 'Barbarian',
+    'TombstoneHero': 'Tombstone',
+    'TombstoneHero_broken_visual_dummy': 'Tombstone',
+    'TombstoneHero_visual_dummy': 'Tombstone',
     'TombstoneHeroSkeleton': 'Skeleton',
     'TombstoneHero_Monster_Passive': 'GiantSkeleton',
     'TombstoneHero_Monster_Active': 'GiantSkeleton',
+    'BalloonHero_Bomb': 'GiantSkeletonBomb',
+    'EliteArcherHero_Dummy': 'Archer',
+    'IceWizardHeroFloatingCube': 'IceWizard',
+    'IceWizardHero_IceCube': 'IceWizard',
+    'MinionHorde_EV1': 'Minion',
+    'Giant_EV1': 'Giant',
+    'ElectroGiant_EV1': 'ElectroGiant',
+    'GoblinGiant_EV1': 'GoblinGiant',
+    'IceSpirits_EV1': 'IceSpirits',
+    'Pekka_EV1': 'Pekka',
+    'Recruit_EV1': 'Recruit',
+    'RoyalGiant_EV1': 'RoyalGiant',
+    'Ghost_EV1_Clone': 'Ghost',
+    'Ghost_EV1_Summon_Base': 'Ghost',
+    'Ghost_EV1_Summon_Left': 'Ghost',
+    'Ghost_EV1_Summon_Right': 'Ghost',
+    'GoblinCage_EV1_GoblinBrawler': 'GoblinBrawler',
+    'RoyalHog_EV1_Grounded': 'RoyalHog',
+    'SkeletonArmy_EV1_General_Base': 'Skeleton',
+    'SkeletonArmy_EV1_Spectral': 'Skeleton',
+    'Witch_EV1_Healing_Skeleton': 'Skeleton',
+    'Witch_EV1_Skeleton_Interval': 'Skeleton',
 }
 
 
@@ -112,6 +137,10 @@ def parse_args(argv=None):
                    help='Alias private-server custom/hero/chef entities to trained CrForge vocabulary rows (default)')
     p.add_argument('--no-ood-aliases',dest='ood_aliases',action='store_false',
                    help='Disable private-server OOD entity aliasing')
+    p.add_argument('--reserve-to-wait',dest='reserve_to_wait',action='store_true',default=True,
+                   help='Fold unaffordable hand-card logits into WAIT so high-cost counters/tanks are banked for (default)')
+    p.add_argument('--no-reserve-to-wait',dest='reserve_to_wait',action='store_false',
+                   help='Mask unaffordable hand-card logits before softmax instead of folding into WAIT')
     p.add_argument('--auto-battle',action='store_true',help='Click verified private-server battle and result buttons')
     p.add_argument('--prompt-result',action='store_true',
                    help='After a recorded terminal, ask the operator for win/loss/draw; unknown stays unlabeled')
@@ -163,6 +192,9 @@ class PolicyRuntime:
         model, infer, ticks = build_policy_inference(
             checkpoint, str(args.device), compute_value=False,
             precision='fp16' if is_cuda else 'fp32')
+        if getattr(args, 'reserve_to_wait', True) != bool(model.cfg.reserve_to_wait):
+            from dataclasses import replace
+            model.cfg = replace(model.cfg, reserve_to_wait=bool(getattr(args, 'reserve_to_wait', True)))
         del checkpoint
         if ticks != 8:
             raise ValueError('Private-server controller requires 8-tick v3 policy')

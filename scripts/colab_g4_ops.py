@@ -639,6 +639,7 @@ cfg.update(
     army_reward=0.0,
     overflow_penalty=0.005,
     allow_reward_migration=True,
+    reserve_to_wait=True,
     focal_deck_prob=0.50,
     anchor_kl_coef=0.004,
     card_entropy_coef=0.0005,
