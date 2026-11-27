@@ -590,7 +590,7 @@ if (PREP / "validation_history.pt").is_file():
 # Shared conserved elixir-trade unit-preservation reward + full-roster meta deck expansion + anti-stall MCTS
 cfg.update(
     expand_decks=str(ROOT / "configs/decks_expansion_full_meta.yaml"),
-    validation_pairs=2,
+    validation_pairs=24,
     army_reward_mode="elixir_potential",
     army_elixir_config=str(ROOT / "configs/army_elixir_conserved.yaml"),
     army_elixir_beta=0.010,
