@@ -38,6 +38,7 @@ MAX_DISTILL_WAIT_DRIFT = 0.028
 MAX_DISTILL_WAIT_UPWARD = 0.008
 MIN_DISTILL_MEAN_P_WAIT = 0.38
 MAX_DISTILL_MEAN_P_WAIT = 0.78
+MAX_DISTILL_MEAN_P_WAIT_RESERVE = 0.93
 MAX_DISTILL_LR = 3e-5
 
 
@@ -995,6 +996,11 @@ class LookaheadDistiller:
             "WallBreakers",
             "Wallbreakers",
             "Witch",
+            "DarkWitch",
+            "Firecracker",
+            "Arrows",
+            "Zap",
+            "ElectroDragon",
             "Mortar",
             "Valkyrie",
             "InfernoDragon",
@@ -1168,10 +1174,15 @@ class LookaheadDistiller:
                 if cand_probe["reference_forward_kl"] > max_kl:
                     step_reasons.append("ppo_forward_kl_limit")
                 wait_delta = cand_probe["mean_p_wait"] - probe_before["mean_p_wait"]
+                max_mean_p_wait = (
+                    MAX_DISTILL_MEAN_P_WAIT_RESERVE
+                    if getattr(getattr(actor, "cfg", None), "reserve_to_wait", False)
+                    else MAX_DISTILL_MEAN_P_WAIT
+                )
                 if (
                     wait_delta > MAX_DISTILL_WAIT_UPWARD
                     or wait_delta < -MAX_DISTILL_WAIT_DRIFT
-                    or (wait_delta > 0.0 and cand_probe["mean_p_wait"] > MAX_DISTILL_MEAN_P_WAIT)
+                    or (wait_delta > 0.0 and cand_probe["mean_p_wait"] > max_mean_p_wait)
                     or (wait_delta < 0.0 and cand_probe["mean_p_wait"] < MIN_DISTILL_MEAN_P_WAIT)
                 ):
                     step_reasons.append("mean_p_wait_drift")

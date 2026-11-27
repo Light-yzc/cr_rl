@@ -335,11 +335,12 @@ def _is_engaged_global_spell(
             d2_et = (enemy_t[:, e["x"]] - tx) ** 2 + (enemy_t[:, e["y"]] - ty) ** 2
             if bool(((d2_et <= (2.8 * tu) ** 2) & (enemy_t[:, e["hp"]] <= 170)).any()):
                 return True
-        # Defensive swarm Rage: >=2 low-HP swarm units on tower zone (y<=11.5) OR >=5 swarm units up to river (y<=15.5, e.g. SkeletonArmy)
+        # Defensive swarm Rage: >=2 barrel/swarm units on tower (y<=10.5, hp<=340: buffs tower + 1-shots Goblins, rejects 368HP Minions) OR >=5 lethal-splash swarm up to river (y<=15.5, hp<=205)
         if ty <= 15.5 * tu and len(enemy_c):
             d2_ec = (enemy_c[:, e["x"]] - tx) ** 2 + (enemy_c[:, e["y"]] - ty) ** 2
-            swarm_cnt = int(((d2_ec <= (3.2 * tu) ** 2) & (enemy_c[:, e["hp"]] <= 380)).sum())
-            if swarm_cnt >= (2 if ty <= 11.5 * tu else 5):
+            hp_cap = 340 if ty <= 10.5 * tu else 205
+            swarm_cnt = int(((d2_ec <= (3.2 * tu) ** 2) & (enemy_c[:, e["hp"]] <= hp_cap)).sum())
+            if swarm_cnt >= (2 if ty <= 10.5 * tu else 5):
                 return True
         if low_elixir and len(enemy_c):
             unbuffed_threat = (enemy_c[:, e["y"]] <= 16.5 * tu) & (
@@ -564,7 +565,7 @@ def _tower_swarm_spell_action(
     chars = (ents[:, e["side"]] == 1) & (ents[:, e["kind"]] == schema.kinds["character"]) & (ents[:, e["hp"]] > 0)
     if alive_flag:
         chars &= (ents[:, e["flags"]] & alive_flag) != 0
-    sw = ents[chars & (ents[:, e["y"]] <= 15.5 * tu) & (ents[:, e["hp"]] <= 380)]
+    sw = ents[chars & (((ents[:, e["y"]] <= 10.5 * tu) & (ents[:, e["hp"]] <= 340)) | ((ents[:, e["y"]] <= 15.5 * tu) & (ents[:, e["hp"]] <= 205)))]
     if len(sw) < 2:
         return None
     width_u = float(getattr(schema, "width_units", 18000))
@@ -846,6 +847,50 @@ def _tactical_spatial_candidates(
                             if a_std not in out:
                                 out.append(a_std)
 
+    # 2.5 Same-lane engaged tank support (e.g. put MinionHorde/Wizard behind engaged Giant instead of naked opposite-bridge throw)
+    engaged_tank_left: bool | None = None
+    if len(ents):
+        alive_flag = schema.flags.get("alive", 0)
+        bldg_flag = schema.flags.get("building", 0)
+        own_m = (ents[:, e["side"]] == 0) & (ents[:, e["kind"]] == schema.kinds["character"]) & (ents[:, e["hp"]] >= 1000)
+        if alive_flag:
+            own_m &= (ents[:, e["flags"]] & alive_flag) != 0
+        if bldg_flag:
+            own_m &= (ents[:, e["flags"]] & bldg_flag) == 0
+        own_tanks = ents[own_m & (ents[:, e["max_hp"]] >= 2400) & (ents[:, e["y"]] >= 11.5 * tu)]
+        if len(own_tanks):
+            ene_m = (ents[:, e["side"]] == 1) & (ents[:, e["kind"]] == schema.kinds["character"]) & (ents[:, e["hp"]] > 0)
+            if alive_flag:
+                ene_m &= (ents[:, e["flags"]] & alive_flag) != 0
+            ene_c = ents[ene_m]
+            best_tank = own_tanks[int(np.argmax(own_tanks[:, e["hp"]]))]
+            tx_u, ty_u = float(best_tank[e["x"]]), float(best_tank[e["y"]])
+            tank_left = tx_u < width_u * 0.5
+            has_contest = ty_u >= 13.5 * tu
+            if not has_contest and len(ene_c):
+                d2_t = (ene_c[:, e["x"]] - tx_u) ** 2 + (ene_c[:, e["y"]] - ty_u) ** 2
+                has_contest = bool((d2_t <= (7.5 * tu) ** 2).any())
+            if has_contest:
+                engaged_tank_left = tank_left
+                tc_t = tx_u / tu - 0.5
+                tr_t = ty_u / tu - 0.5
+                same_tank_half = (grid_c < mid_c) if tank_left else (grid_c >= mid_c)
+                r_lo = min(12, max(7, int(round(tr_t)) - 8))
+                r_hi = min(14, max(12, int(round(tr_t))))
+                support_zone = same_tank_half & (grid_r >= r_lo) & (grid_r <= r_hi) & (np.abs(grid_c - tc_t) <= 4.5)
+                for _sc, pa, slot in group_best[:3]:
+                    if slot < 0:
+                        continue
+                    lo = 1 + slot * tiles
+                    hi = lo + tiles
+                    if not (0 < int(legal[lo:hi].sum()) < GLOBAL_SPELL_MIN_TILES):
+                        continue
+                    cand_sup = legal[lo:hi] & support_zone
+                    if cand_sup.any():
+                        a_sup = lo + int(np.argmax(np.where(cand_sup, masked_lp[lo:hi], -np.inf)))
+                        if a_sup not in out and a_sup != pa:
+                            out.append(a_sup)
+
     # 3. Alive / critically-low enemy Princess Tower focus (prevents attacking a dead lane while other tower sits at 225 HP)
     el_idx = schema.header.get("enemy_left_hp")
     er_idx = schema.header.get("enemy_right_hp")
@@ -881,7 +926,7 @@ def _tactical_spatial_candidates(
                     ):
                         if tow_act not in out:
                             out.append(tow_act)
-            if deep_hp < 900:
+            if deep_hp < 900 and (engaged_tank_left is None or engaged_tank_left == focus_left):
                 lane_mask = (grid_c < mid_c) if focus_left else (grid_c >= mid_c)
                 for _sc, pa, slot in group_best[:2]:
                     if slot < 0:

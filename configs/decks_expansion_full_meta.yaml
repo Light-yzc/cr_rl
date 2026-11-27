@@ -126,6 +126,15 @@ decks:
   - Poison
   - Log
   - MinionHorde
+  meta_darkwitch_ronin_firecracker_valk:
+  - Golem
+  - DarkWitch
+  - Ronin
+  - Valkyrie
+  - Firecracker
+  - ElectroSpirit
+  - Skeletons
+  - Log
 slots:
   meta_goblin_giant_machine_witch:
   - 1
@@ -250,6 +259,15 @@ slots:
   - 0
   - 2
   - 0
+  - 0
+  - 0
+  - 0
+  meta_darkwitch_ronin_firecracker_valk:
+  - 0
+  - 0
+  - 0
+  - 2
+  - 1
   - 0
   - 0
   - 0

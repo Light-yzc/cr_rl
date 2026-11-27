@@ -38,8 +38,9 @@ def _rage_has_engagement(x: float, y: float, obs: np.ndarray) -> bool:
 
     if y <= 15.0 and len(enemy_c):
         d2_ec = (enemy_c[:, S.E_X] / 1000.0 - x) ** 2 + (enemy_c[:, S.E_Y] / 1000.0 - y) ** 2
-        swarm_cnt = int(((d2_ec <= 3.2 ** 2) & (enemy_c[:, S.E_HP] <= 205)).sum())
-        if swarm_cnt >= (2 if y <= 11.5 else 6):
+        hp_cap = 340 if y <= 10.5 else 205
+        swarm_cnt = int(((d2_ec <= 3.2 ** 2) & (enemy_c[:, S.E_HP] <= hp_cap)).sum())
+        if swarm_cnt >= (2 if y <= 10.5 else 6):
             return True
 
     if low_elixir and len(enemy_c):
