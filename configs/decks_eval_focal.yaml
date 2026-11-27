@@ -72,6 +72,60 @@ decks:
   - Bats
   - Pekka
   - GoblinGang
+  meta_goblin_giant_machine_witch:
+  - GoblinGiant
+  - GoblinMachine
+  - Witch
+  - MiniPekka
+  - Rage
+  - Zap
+  - Bats
+  - SpearGoblins
+  meta_megaknight_ramrider_ronin:
+  - MegaKnight
+  - RamRider
+  - Ronin
+  - ElectroWizard
+  - Assassin
+  - Poison
+  - Zap
+  - Bats
+  meta_lavaloon_idrag_barbs:
+  - LavaHound
+  - Balloon
+  - Barbarians
+  - InfernoDragon
+  - MegaMinion
+  - Zap
+  - Fireball
+  - Tombstone
+  meta_mortar_spawner_knight_hero:
+  - Mortar
+  - FirespiritHut
+  - GoblinHut
+  - Knight
+  - SpearGoblins
+  - Poison
+  - Log
+  - MinionHorde
+  meta_recruits_cage_flyingmachine:
+  - RoyalRecruits
+  - GoblinCage
+  - DartBarrell
+  - RoyalHogs
+  - MiniSparkys
+  - BarbLog
+  - Fireball
+  - ElectroSpirit
+  meta_hog_exenado_valk:
+  - HogRider
+  - AxeMan
+  - Tornado
+  - Valkyrie
+  - Goblins
+  - IceSpirits
+  - Rocket
+  - Log
 slots:
   user_giant_sparky_pump_horde_plain:
   - 0
@@ -141,6 +195,60 @@ slots:
   - 0
   - 1
   - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_goblin_giant_machine_witch:
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_megaknight_ramrider_ronin:
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_lavaloon_idrag_barbs:
+  - 0
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_mortar_spawner_knight_hero:
+  - 1
+  - 1
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_recruits_cage_flyingmachine:
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_hog_exenado_valk:
+  - 0
+  - 1
+  - 0
+  - 2
   - 0
   - 0
   - 0

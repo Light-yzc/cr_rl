@@ -46,6 +46,8 @@ OVERLAY_SYNC_RELPATHS: tuple[str, ...] = (
     "scripts/run_nulls_policy.py",
     "scripts/cr_train_pipeline.py",
     "configs/army_elixir_conserved.yaml",
+    "configs/decks_expansion_full_meta.yaml",
+    "configs/decks_eval_focal.yaml",
 )
 
 
@@ -585,8 +587,10 @@ if cfg.get("focal_decks") and (ROOT / "configs/decks_eval_focal.yaml").is_file()
 if (PREP / "validation_history.pt").is_file():
     cfg["validation_history"] = str(PREP / "validation_history.pt")
 
-# Shared conserved elixir-trade unit-preservation reward + anti-stall MCTS defaults across all GPU tiers
+# Shared conserved elixir-trade unit-preservation reward + full-roster meta deck expansion + anti-stall MCTS
 cfg.update(
+    expand_decks=str(ROOT / "configs/decks_expansion_full_meta.yaml"),
+    validation_pairs=2,
     army_reward_mode="elixir_potential",
     army_elixir_config=str(ROOT / "configs/army_elixir_conserved.yaml"),
     army_elixir_beta=0.010,

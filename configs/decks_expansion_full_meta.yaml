@@ -1,0 +1,256 @@
+version: 2
+decks:
+  meta_goblin_giant_machine_witch:
+  - GoblinGiant
+  - GoblinMachine
+  - Witch
+  - MiniPekka
+  - Rage
+  - Zap
+  - Bats
+  - SpearGoblins
+  meta_megaknight_ramrider_ronin:
+  - MegaKnight
+  - RamRider
+  - Ronin
+  - ElectroWizard
+  - Assassin
+  - Poison
+  - Zap
+  - Bats
+  meta_megaknight_wallbreakers_lp:
+  - MegaKnight
+  - Wallbreakers
+  - Miner
+  - LittlePrince
+  - GoblinGang
+  - SpearGoblins
+  - Bats
+  - Arrows
+  meta_lavaloon_idrag_barbs:
+  - LavaHound
+  - Balloon
+  - Barbarians
+  - InfernoDragon
+  - MegaMinion
+  - Zap
+  - Fireball
+  - Tombstone
+  meta_egolem_healer_edrag:
+  - ElixirGolem
+  - BattleHealer
+  - ElectroDragon
+  - Rage
+  - Tornado
+  - BarbLog
+  - DarkWitch
+  - SkeletonDragons
+  meta_recruits_cage_flyingmachine:
+  - RoyalRecruits
+  - GoblinCage
+  - DartBarrell
+  - RoyalHogs
+  - MiniSparkys
+  - BarbLog
+  - Fireball
+  - ElectroSpirit
+  meta_hog_exenado_valk:
+  - HogRider
+  - AxeMan
+  - Tornado
+  - Valkyrie
+  - Goblins
+  - IceSpirits
+  - Rocket
+  - Log
+  meta_rg_hunter_fisherman:
+  - RoyalGiant
+  - Hunter
+  - Fisherman
+  - ElectroSpirit
+  - Skeletons
+  - Lightning
+  - BarbLog
+  - Ghost
+  meta_pekka_marcher_bridgespam:
+  - Pekka
+  - EliteArcher
+  - BattleRam
+  - Ghost
+  - ElectroWizard
+  - Assassin
+  - Zap
+  - Fireball
+  meta_goblin_demolisher_curse_bush:
+  - GoblinDemolisher
+  - SuspiciousBush
+  - GoblinCurse
+  - BossBandit
+  - Valkyrie
+  - Tesla
+  - Log
+  - FireSpirits
+  meta_runegiant_machine_hunter:
+  - GiantBuffer
+  - GoblinMachine
+  - Hunter
+  - Berserker
+  - Minions
+  - Arrows
+  - BarbLog
+  - Zap
+  meta_gs_clone_witch_barbhut:
+  - GiantSkeleton
+  - Clone
+  - Witch
+  - BarbarianHut
+  - SkeletonBalloon
+  - Bats
+  - SpearGoblins
+  - Arrows
+  meta_lumberloon_freeze_ronin:
+  - RageBarbarian
+  - Balloon
+  - Freeze
+  - InfernoDragon
+  - Bowler
+  - Tornado
+  - BarbLog
+  - Ronin
+  meta_mortar_spawner_knight_hero:
+  - Mortar
+  - FirespiritHut
+  - GoblinHut
+  - Knight
+  - SpearGoblins
+  - Poison
+  - Log
+  - MinionHorde
+slots:
+  meta_goblin_giant_machine_witch:
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_megaknight_ramrider_ronin:
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_megaknight_wallbreakers_lp:
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_lavaloon_idrag_barbs:
+  - 0
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_egolem_healer_edrag:
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_recruits_cage_flyingmachine:
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_hog_exenado_valk:
+  - 0
+  - 1
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_rg_hunter_fisherman:
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_pekka_marcher_bridgespam:
+  - 0
+  - 2
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_goblin_demolisher_curse_bush:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 2
+  - 1
+  - 0
+  - 0
+  meta_runegiant_machine_hunter:
+  - 0
+  - 0
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_gs_clone_witch_barbhut:
+  - 0
+  - 0
+  - 1
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  meta_lumberloon_freeze_ronin:
+  - 1
+  - 2
+  - 0
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_mortar_spawner_knight_hero:
+  - 1
+  - 1
+  - 0
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+split: expansion_full_meta_14

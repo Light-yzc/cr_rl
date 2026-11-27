@@ -106,6 +106,29 @@ def test_lookahead_frame_weights_and_pipeline_flags(tmp_path: Path):
     assert cmd[cmd.index("--lookahead-distill-temporal-blocks") + 1] == "0"
     assert cmd[cmd.index("--publication-interval") + 1] == "5"
 
+    # Verify _merge_expansion_decks idempotently expands family_balanced leagues to all 120 ladder cards!
+    import yaml
+    from cr_rl.training.deck_augmentation import deck_probabilities
+    from cr_rl.training.state_selfplay import _league_to_tuples, _merge_expansion_decks
+
+    repo_root = Path(__file__).resolve().parents[1]
+    sim_tables = SimulatorPaths.discover().tables
+    aug_base = yaml.safe_load((repo_root / "configs/decks_augmented.yaml").read_text(encoding="utf-8"))
+    prev_names = list(aug_base["decks"])
+    merged = _merge_expansion_decks(
+        aug_base, repo_root / "configs/decks_expansion_full_meta.yaml", sim_tables
+    )
+    _, m_names, m_cards, _ = _league_to_tuples(merged)
+    assert m_names[: len(prev_names)] == prev_names
+    assert len(m_names) > len(prev_names) + 40
+    assert len({c for d in m_cards for c in d}) >= 120
+    probs = deck_probabilities(merged, m_names)
+    assert probs is not None and np.isclose(sum(probs), 1.0)
+    merged_twice = _merge_expansion_decks(
+        merged, repo_root / "configs/decks_expansion_full_meta.yaml", sim_tables
+    )
+    assert list(merged_twice["decks"]) == m_names
+
     run_dir = tmp_path / "runs/r1"
     run_dir.mkdir(parents=True)
     (run_dir / "summary.json").write_text(

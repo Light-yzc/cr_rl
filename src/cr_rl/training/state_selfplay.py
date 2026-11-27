@@ -263,14 +263,62 @@ def _prepare_frozen_opponent(
 
 def _extract_decks(deck_path: Path) -> tuple[dict, list[str], list[list[int]], list[list[int]]]:
     league = yaml.safe_load(deck_path.read_text(encoding="utf-8"))
+    return _league_to_tuples(league, deck_path)
+
+
+def _league_to_tuples(league: dict, source: Any = "") -> tuple[dict, list[str], list[list[int]], list[list[int]]]:
     decks_map = dict(league["decks"])
     if not decks_map:
-        raise ValueError(f"Deck manifest has no decks: {deck_path}")
+        raise ValueError(f"Deck manifest has no decks: {source}")
     names = list(decks_map)
     cards = [list(decks_map[name]) for name in names]
     slots_map = league.get("slots", {})
     slots = [list(slots_map.get(name, [0] * 8)) for name in names]
     return league, names, cards, slots
+
+
+def _merge_expansion_decks(base_league: dict, expand_path: Path, tables_dir: Path) -> dict:
+    """Append new deck families (and form variants when `family_balanced`) without altering prior decks."""
+    from cr_rl.client.schema_v4 import SPELL_TABLES, load_table_rows
+    from cr_rl.training.deck_augmentation import augment_forms
+
+    merged = copy.deepcopy(base_league)
+    extra = yaml.safe_load(Path(expand_path).read_text(encoding="utf-8"))
+    if (merged.get("deck_sampling") or {}).get("mode") == "family_balanced":
+        tables_rows: dict[str, dict] = {}
+        for tbl in SPELL_TABLES:
+            t_file = Path(tables_dir) / f"{tbl}.json"
+            if t_file.is_file():
+                tables_rows.update(load_table_rows(tables_dir, tbl))
+        extra = augment_forms(extra, tables_rows)
+    decks_dst = merged.setdefault("decks", {})
+    slots_dst = merged.setdefault("slots", {})
+    existing_families = {tuple(sorted(c)) for c in decks_dst.values()}
+    extra_slots = extra.get("slots", {})
+    for name, cards in extra.get("decks", {}).items():
+        fam = tuple(sorted(cards))
+        if name in decks_dst or (
+            (merged.get("deck_sampling") or {}).get("mode") == "family_balanced"
+            and fam in existing_families
+            and name not in extra.get("decks", {})
+        ):
+            continue
+        if fam in existing_families and name not in decks_dst:
+            # Skip duplicate variants of families already present in base_league
+            has_plain = any(
+                tuple(sorted(decks_dst[n])) == fam and not any(slots_dst.get(n, [0] * 8))
+                for n in decks_dst
+            )
+            if has_plain:
+                spec = (tuple(cards), tuple(extra_slots.get(name, [0] * 8)))
+                if any(
+                    (tuple(decks_dst[n]), tuple(slots_dst.get(n, [0] * 8))) == spec
+                    for n in decks_dst
+                ):
+                    continue
+        decks_dst[name] = list(cards)
+        slots_dst[name] = list(extra_slots.get(name, [0] * 8))
+    return merged
 
 
 def _batched_sample(
@@ -994,7 +1042,11 @@ class PersistentStateSelfplay:
         self.level_profile_migrated = False
 
         deck_path = Path(getattr(args, "decks", None) or "configs/decks_ppo46.yaml")
-        self.league, self.deck_names, self.decks, self.forms = _extract_decks(deck_path)
+        base_league = yaml.safe_load(deck_path.read_text(encoding="utf-8"))
+        expand_path = getattr(args, "expand_decks", None)
+        if isinstance(expand_path, (str, Path)) and str(expand_path).strip():
+            base_league = _merge_expansion_decks(base_league, Path(expand_path), self.env.paths.tables)
+        self.league, self.deck_names, self.decks, self.forms = _league_to_tuples(base_league, deck_path)
         self.deck_probabilities = deck_probabilities(self.league, self.deck_names)
         focal = [x.strip() for x in (getattr(args, "focal_decks", "") or "").split(",") if x.strip()]
         missing = set(focal) - set(self.deck_names)

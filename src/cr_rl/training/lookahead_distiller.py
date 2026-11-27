@@ -998,6 +998,16 @@ class LookaheadDistiller:
             "Mortar",
             "Valkyrie",
             "InfernoDragon",
+            "GoblinGiant",
+            "GoblinMachine",
+            "Ronin",
+            "BossBandit",
+            "LavaHound",
+            "RoyalRecruits",
+            "ElixirGolem",
+            "RamRider",
+            "AxeMan",
+            "Hunter",
         }
         opp_weights = np.asarray(probs, dtype=np.float64).copy()
         for d_i, d_cards in enumerate(decks):
