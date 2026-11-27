@@ -35,6 +35,32 @@ from .schema_v4 import SPELL_TABLES, SchemaV4, Vocabulary, load_table_rows
 
 # Verified 16.635.1 -> 16.635.3 row name overrides (populated only from observed diffs).
 DEFAULT_NAME_ALIASES: dict[str, str] = {}
+
+# Purely visual attachments / floating cubes / deco entities in Nulls 16.635.1 that share
+# coordinates/HP with their parent hero/building and must never duplicate combat units in obs.
+_IGNORED_VISUAL_ENTITIES: frozenset[str] = frozenset({
+    "IceWizardHeroFloatingCube",
+    "IceWizardHero_FreezeAeo_Dummy",
+    "TombstoneHero_broken_visual_dummy",
+    "TombstoneHero_visual_dummy",
+    "EliteArcherHero_Dummy",
+    "Musketeer_hero_DummyBuilding",
+    "Gift_Delivery_Dummy",
+    "SpearGoblin_Dummy",
+    "GoblinDummy",
+    "RoyalDelivery_Dummy_crazy_1",
+    "DummyKingTower",
+    "DummyKingTower2",
+    "DummyKingTower3",
+    "DummyKingTowerAnarchy",
+})
+_IGNORED_VISUAL_SUFFIXES: tuple[str, ...] = ("Deco", "_visual_dummy", "_DummyBuilding")
+
+
+def _is_ignored_visual_entity(raw_name: str | None) -> bool:
+    if not raw_name:
+        return False
+    return raw_name in _IGNORED_VISUAL_ENTITIES or raw_name.endswith(_IGNORED_VISUAL_SUFFIXES)
 _CHAMPION_READY_STATE = 2
 _PENDING_TIMEOUT_EXTRA_TICKS = 40
 _ABILITY_CHARGE_PER_MS = 50
@@ -598,6 +624,8 @@ class NullsToSchemaV4Adapter:
         rejected_entities: list[dict[str, int | str]] = []
 
         for ent in snap.entities:
+            if _is_ignored_visual_entity(ent.name):
+                continue
             nname = self.normalize_name(ent.name)
             kind = self._entity_kind(ent, nname)
             if kind is None:

@@ -13,6 +13,23 @@ DAMAGE_SPELL_RADIUS = {
     "Vines": 4.5, "RoyalDelivery": 4.5,
 }
 
+# Conservative guaranteed 1-cast Crown Tower damage at Tournament Level 11.
+LETHAL_SPELL_TOWER_DMG_L11 = {
+    "Rage": 55,
+    "Zap": 46,
+    "Snowball": 46,
+    "Log": 56,
+    "BarbLog": 56,
+    "Tornado": 40,
+    "Freeze": 28,
+    "Arrows": 90,
+    "Fireball": 205,
+    "Poison": 180,
+    "Earthquake": 180,
+    "Lightning": 310,
+    "Rocket": 365,
+}
+
 
 def _rage_has_engagement(x: float, y: float, obs: np.ndarray) -> bool:
     """Reject casting Rage onto empty grass or starving low-elixir defense; require real engagement."""
@@ -81,6 +98,90 @@ def _best_cluster_tile(slot_probs: np.ndarray, slot_legal: np.ndarray) -> int:
     cluster = sum(pad[dr : dr + S.ROWS, dc : dc + S.COLS] for dr in range(3) for dc in range(3)).reshape(-1)
     scores = np.where(valid, cluster + 0.25 * slot_probs, -np.inf)
     return int(np.argmax(scores))
+
+
+def _orient_center_seam_tile(tile: int, slot_probs: np.ndarray, slot_legal: np.ndarray, obs: np.ndarray) -> int:
+    """Break center-line (col 8 vs 9, row <= 9) ties toward the weaker/alive enemy Princess Tower."""
+    n_leg = int(slot_legal.sum())
+    if not (0 < n_leg < 500) or len(obs) < S.H_TOWERS + 12:
+        return tile
+    row, col = divmod(int(tile), S.COLS)
+    if row > 9 or col not in (8, 9):
+        return tile
+    ene_l = int(obs[S.H_TOWERS + 8])
+    ene_r = int(obs[S.H_TOWERS + 10])
+    if ene_l > 0 and ene_r > 0 and abs(ene_l - ene_r) >= 1200:
+        target_col = 8 if ene_l < ene_r else 9
+    elif ene_l == 0 and 0 < ene_r <= 3600:
+        target_col = 9
+    elif ene_r == 0 and 0 < ene_l <= 3600:
+        target_col = 8
+    else:
+        return tile
+    if col == target_col:
+        return tile
+    alt_tile = row * S.COLS + target_col
+    if slot_legal[alt_tile] and float(slot_probs[alt_tile]) >= 0.25 * float(slot_probs[tile]):
+        return int(alt_tile)
+    return tile
+
+
+def _lethal_tower_spell_action(
+    hand_cards,
+    legal: np.ndarray,
+    tiles: np.ndarray,
+    slots: np.ndarray,
+    obs: np.ndarray,
+) -> tuple[int, int] | None:
+    """Return `(action, slot)` when a legal spell in hand can 1-cast finish an alive enemy tower."""
+    if len(obs) < S.HEADER_INTS:
+        return None
+    count = int(obs[S.H_ENTITY_COUNT])
+    if count <= 0:
+        return None
+    rows = np.asarray(obs[S.HEADER_INTS:]).reshape(S.MAX_ENTITIES, S.ENTITY_INTS)[:count]
+    enemy_t = rows[(rows[:, S.E_KIND] == S.KIND_TOWER) & (rows[:, S.E_SIDE] == 1) & (rows[:, S.E_HP] > 0)]
+    if not len(enemy_t):
+        return None
+    overtime = int(obs[S.H_OVERTIME]) > 0
+    sec_left = int(obs[S.H_SECTION_LEFT_MS])
+    urgent_clock = overtime or (0 <= sec_left <= 20000)
+
+    deck_ids = obs[S.H_DECK : S.H_DECK + S.DECK_SIZE]
+    deck_lvls = obs[S.H_DECK_LEVEL : S.H_DECK_LEVEL + S.DECK_SIZE]
+    hand_ids = obs[S.H_HAND_CARD : S.H_HAND_CARD + S.HAND_SLOTS]
+
+    for slot in range(min(4, len(hand_cards))):
+        card_name = hand_cards[slot]
+        base_dmg = LETHAL_SPELL_TOWER_DMG_L11.get(card_name)
+        if base_dmg is None:
+            continue
+        if not urgent_clock and float(slots[slot]) < 0.05:
+            continue
+        slot_legal = legal[1 + slot * S.TILES : 1 + (slot + 1) * S.TILES]
+        if not slot_legal.any():
+            continue
+        lvl = 11
+        cid = int(hand_ids[slot])
+        for d_i in range(S.DECK_SIZE):
+            if int(deck_ids[d_i]) == cid and int(deck_lvls[d_i]) > 0:
+                lvl = int(deck_lvls[d_i])
+                break
+        lethal_hp = int(base_dmg * (1.1 ** max(0, min(lvl, 16) - 11)))
+        order = sorted(range(len(enemy_t)), key=lambda i: (0 if (int(enemy_t[i, S.E_FLAGS]) & S.F_KING) else 1, int(enemy_t[i, S.E_HP])))
+        for i_t in order:
+            tow = enemy_t[i_t]
+            if int(tow[S.E_HP]) <= lethal_hp:
+                tc = int(np.clip(round(float(tow[S.E_X]) / 1000.0 - 0.5), 0, S.COLS - 1))
+                tr = int(np.clip(round(float(tow[S.E_Y]) / 1000.0 - 0.5), 0, S.ROWS - 1))
+                if card_name in ("Log", "BarbLog"):
+                    tr = min(tr, 14)
+                t_idx = tr * S.COLS + tc
+                if slot_legal[t_idx]:
+                    act = S.play_tile(slot, t_idx)
+                    if spell_has_target(act, card_name, obs):
+                        return act, slot
+    return None
 
 
 def spell_has_target(action, card_name, obs):
@@ -160,6 +261,18 @@ def select_live_action(
         valid_non_wait = float(slots.sum()) + float(skills.sum())
         near_full = int(obs[S.H_ELIXIR]) >= 95000 and valid_non_wait >= 0.05
 
+        lethal = _lethal_tower_spell_action(hand_cards, legal, tiles, slots, obs)
+        if lethal is not None:
+            l_act, l_slot = lethal
+            return l_act, {
+                "selection_mode": selection_mode,
+                "proposed_action": l_act,
+                "proposed_action_probability": float(p[l_act]),
+                "selected_slot_probability": float(slots[l_slot]),
+                "spell_vetoed": False,
+                "selection_reason": "lethal_tower_spell",
+            }
+
         if (not near_full) and legal[0] and wait_mass >= valid_non_wait:
             return 0, {
                 "selection_mode": selection_mode,
@@ -193,6 +306,7 @@ def select_live_action(
                 continue
             card_name = hand_cards[slot] if slot < len(hand_cards) else None
             tile = _best_cluster_tile(tiles[slot], slot_legal)
+            tile = _orient_center_seam_tile(tile, tiles[slot], slot_legal, obs)
             proposed = S.play_tile(slot, tile)
             if not spell_has_target(proposed, card_name, obs):
                 if first_vetoed is None:
@@ -238,6 +352,16 @@ def select_live_action(
         "effective_play_threshold": play_limit,
         "effective_slot_threshold": slot_limit,
     }
+    lethal = _lethal_tower_spell_action(hand_cards, legal, tiles, slots, obs)
+    if lethal is not None:
+        l_act, l_slot = lethal
+        info.update(
+            proposed_action=l_act,
+            proposed_action_probability=float(p[l_act]),
+            selected_slot_probability=float(slots[l_slot]),
+            selection_reason="lethal_tower_spell",
+        )
+        return l_act, info
     skills = p[S.FIRST_ABILITY :]
     skill = int(skills.argmax())
     if (
@@ -265,6 +389,7 @@ def select_live_action(
             continue
         if tile_temperature <= 1e-4:
             tile = _best_cluster_tile(tiles[slot], slot_legal)
+            tile = _orient_center_seam_tile(tile, tiles[slot], slot_legal, obs)
         else:
             rng = np.random.default_rng() if rng is None else rng
             valid = slot_legal & (tiles[slot] > 0)

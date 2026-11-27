@@ -779,6 +779,7 @@ def _tactical_spatial_candidates(
     schema,
     *,
     rage_card_ids: Sequence[int] = (),
+    collector_card_ids: Sequence[int] = (),
 ) -> list[int]:
     """Propose threat-anchored defense & alive-tower finisher candidates for MCTS rollout verification."""
     if not hasattr(schema, "entities"):
@@ -926,22 +927,33 @@ def _tactical_spatial_candidates(
                     ):
                         if tow_act not in out:
                             out.append(tow_act)
-            if deep_hp < 900 and (engaged_tank_left is None or engaged_tank_left == focus_left):
+            if deep_hp < 900 and (engaged_tank_left is None or engaged_tank_left == focus_left or low_tower_hp <= 700):
                 lane_mask = (grid_c < mid_c) if focus_left else (grid_c >= mid_c)
-                for _sc, pa, slot in group_best[:2]:
+                bridge_mask = lane_mask & (grid_r >= 11) & (grid_r <= 14)
+                for _sc, pa, slot in group_best[:3]:
                     if slot < 0:
+                        continue
+                    cid_s = int(raw_obs[hand_idx[slot]]) if (hand_idx is not None and slot < len(hand_idx)) else -1
+                    if collector_card_ids and cid_s in collector_card_ids:
                         continue
                     lo = 1 + slot * tiles
                     hi = lo + tiles
                     if not (0 < int(legal[lo:hi].sum()) < GLOBAL_SPELL_MIN_TILES):
                         continue
                     pa_c = (pa - lo) % cols
+                    pa_r = (pa - lo) // cols
                     if (pa_c < mid_c) != focus_left:
                         cand_m = legal[lo:hi] & lane_mask
                         if cand_m.any():
                             a_lane = lo + int(np.argmax(np.where(cand_m, masked_lp[lo:hi], -np.inf)))
                             if a_lane not in out:
                                 out.append(a_lane)
+                    if low_tower_hp <= 700 and ((pa_c < mid_c) != focus_left or pa_r < 10):
+                        cand_br = legal[lo:hi] & bridge_mask
+                        if cand_br.any():
+                            a_br = lo + int(np.argmax(np.where(cand_br, masked_lp[lo:hi], -np.inf)))
+                            if a_br not in out:
+                                out.append(a_br)
     return out
 
 
@@ -1083,7 +1095,13 @@ def select_macro_candidates(
     # Pass 1.8: add tactical defense (point-blank vs standoff) & alive/low-HP tower finisher proposals for simulator rollout evaluation
     if len(candidates) < max_candidates:
         for tac_act in _tactical_spatial_candidates(
-            raw_obs, legal, masked_lp, group_best, schema, rage_card_ids=rage_card_ids
+            raw_obs,
+            legal,
+            masked_lp,
+            group_best,
+            schema,
+            rage_card_ids=rage_card_ids,
+            collector_card_ids=collector_card_ids,
         ):
             if len(candidates) >= max_candidates:
                 break
@@ -1166,6 +1184,13 @@ def should_trigger_search(
     # Unconditional urgent defense trigger at >=2.0 elixir (catches Goblin Barrel / SkeletonArmy / tower rushes!)
     if avail >= 2.0 and _urgent_defense_threat(raw_obs, schema):
         return True
+
+    # Unconditional low-HP enemy tower finisher trigger at >=2.0 elixir (never miss <=700 HP crown closeouts!)
+    if avail >= 2.0:
+        for t_key in ("enemy_left_hp", "enemy_right_hp", "enemy_king_hp"):
+            t_idx = schema.header.get(t_key)
+            if t_idx and 0 < int(raw_obs[t_idx[0]]) <= 700:
+                return True
 
     # Unconditional engaged / bridge-push Rage trigger at >=2.0 elixir
     if avail >= 2.0 and rage_card_ids:
