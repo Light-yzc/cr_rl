@@ -388,9 +388,17 @@ def _build_local_overlay_b64() -> str:
     import io
     import zipfile
 
+    rels: set[str] = set(OVERLAY_SYNC_RELPATHS)
+    for sub, pat in (("src/cr_rl", "*.py"), ("scripts", "*.py"), ("configs", "*.yaml")):
+        base_d = repo_root / sub
+        if base_d.is_dir():
+            for fp in base_d.rglob(pat):
+                if "__pycache__" not in fp.parts and fp.is_file():
+                    rels.add(fp.relative_to(repo_root).as_posix())
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for rel in OVERLAY_SYNC_RELPATHS:
+        for rel in sorted(rels):
             p = repo_root / rel
             if p.is_file():
                 zf.write(p, arcname=rel)
@@ -524,7 +532,7 @@ import torch, yaml
 from cr_rl.training.fast_publication import restore_latest
 
 run_drv = DRIVE / "training" / RUN_NAME
-ckpt_path = restore_latest(run_drv, RUN_DIR) if (run_drv / "latest.json").is_file() else None
+ckpt_path = (RUN_DIR / "ppo_latest.pt") if (RUN_DIR / "ppo_latest.pt").is_file() else (restore_latest(run_drv, RUN_DIR) if (run_drv / "latest.json").is_file() else None)
 seeded_fresh_from_u1940 = False
 if ckpt_path is None or not Path(ckpt_path).is_file():
     # Bootstrap fresh conserved-reward run from latest SEED_SOURCE_RUN generation (avoiding stale u=1740 best_validation!)
