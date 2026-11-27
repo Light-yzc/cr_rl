@@ -22,48 +22,67 @@ from cr_rl.models.state_policy import StateActorCritic, StateValueNetwork
 from cr_rl.models.state_temporal import StateTemporalConfig
 from cr_rl.models.learned_placement import PlacementAdapter, definition_for
 from cr_rl.training.colab_pipeline import ppo_command, progress
-from cr_rl.training.lookahead_distiller import LookaheadDistiller, lookahead_frame_weights, unfreeze_distill_heads
+from cr_rl.training.lookahead_distiller import (
+    MAX_DISTILL_MEAN_P_WAIT,
+    MAX_DISTILL_WAIT_UPWARD,
+    MIN_DISTILL_MEAN_P_WAIT,
+    LookaheadDistiller,
+    lookahead_frame_weights,
+    unfreeze_distill_heads,
+)
 
 
 def test_lookahead_frame_weights_and_pipeline_flags(tmp_path: Path):
+    assert MIN_DISTILL_MEAN_P_WAIT == 0.38
+    assert MAX_DISTILL_MEAN_P_WAIT == 0.78
+    assert MAX_DISTILL_WAIT_UPWARD == 0.008
+
     actions = np.array([0, 120, 0, 650, 0, 12], dtype=np.int64)
     keep = np.array([False, True, True, True, True, True], dtype=bool)
     searched = np.array([False, False, True, True, True, True], dtype=bool)
     overridden = np.array([False, False, False, False, True, True], dtype=bool)
 
     w = lookahead_frame_weights(actions, keep, searched, overridden)
-    np.testing.assert_allclose(w, np.array([0.0, 0.35, 0.20, 0.50, 1.80, 2.50], dtype=np.float32))
+    np.testing.assert_allclose(w, np.array([0.0, 0.45, 0.12, 0.60, 0.80, 2.60], dtype=np.float32))
 
     bank_mask = np.array([False, False, True, False, True, False], dtype=bool)
     w_bank = lookahead_frame_weights(actions, keep, searched, overridden, override_boost=1.5, bank_wait_mask=bank_mask)
-    np.testing.assert_allclose(w_bank, np.array([0.0, 0.35, 3.75, 0.50, 3.75, 3.75], dtype=np.float32))
+    np.testing.assert_allclose(w_bank, np.array([0.0, 0.45, 1.125, 0.60, 1.125, 3.90], dtype=np.float32))
 
     adv_mask = np.array([False, False, False, False, True, True], dtype=bool)
     w_adv_only = lookahead_frame_weights(
         actions, keep, searched, overridden, override_boost=1.5, adverse_mask=adv_mask, override_only=True
     )
-    np.testing.assert_allclose(w_adv_only, np.array([0.0, 0.0, 0.0, 0.0, 2.70 * 1.6, 3.75 * 1.6], dtype=np.float32))
+    np.testing.assert_allclose(w_adv_only, np.array([0.0, 0.0, 0.0, 0.0, 1.20 * 1.6, 3.90 * 1.6], dtype=np.float32))
 
     gains = np.array([0.0, 0.0, 0.0, 0.0, 0.05, 0.10], dtype=np.float32)
     w_pure = lookahead_frame_weights(
         actions, keep, searched, overridden, override_boost=1.5, pure_override=True, score_gains=gains
     )
     assert w_pure[1] == 0.0  # Unsearched non-override play gets strictly ZERO weight!
-    np.testing.assert_allclose(w_pure[2:4], np.array([0.24, 0.35], dtype=np.float32))
-    assert w_pure[5] > 3.75 * 1.7
+    np.testing.assert_allclose(w_pure[2:4], np.array([0.10, 0.55], dtype=np.float32))
+    assert w_pure[5] > 3.90 * 1.7
 
-    # Verify colab_pipeline ppo_command & progress integration
+    # Verify colab_pipeline ppo_command & conserved elixir reward migration integration
     (tmp_path / "prepared/input").mkdir(parents=True)
     (tmp_path / "prepared/input/ppo_latest.pt").touch()
     (tmp_path / "prepared/anchor_actor.pt").touch()
     (tmp_path / "prepared/source_league.yaml").touch()
-    (tmp_path / "prepared/source_metadata.json").write_text(json.dumps({"training_args": {"gamma": 0.9995}}))
+    (tmp_path / "prepared/source_metadata.json").write_text(
+        json.dumps({"training_args": {"gamma": 0.9995, "army_reward": 0.02}})
+    )
     (tmp_path / "prepared/full_dataset.json").write_text(json.dumps({"local_path": str(tmp_path / "ds")}))
 
     cmd = ppo_command(
         tmp_path,
         {
             "run_name": "r1",
+            "army_reward_mode": "elixir_potential",
+            "army_elixir_config": "configs/army_elixir_conserved.yaml",
+            "army_elixir_beta": 0.010,
+            "army_elixir_bar_factor": 0.75,
+            "overflow_penalty": 0.005,
+            "allow_reward_migration": True,
             "lookahead_distill": True,
             "lookahead_distill_interval": 3,
             "lookahead_distill_offset": 1,
@@ -78,6 +97,12 @@ def test_lookahead_frame_weights_and_pipeline_flags(tmp_path: Path):
     assert "--lookahead-distill" in cmd
     assert "--lookahead-distill-interval" in cmd
     assert "--no-lookahead-distill-placement" in cmd
+    assert "--allow-reward-migration" in cmd
+    assert cmd[cmd.index("--army-reward-mode") + 1] == "elixir_potential"
+    assert cmd[cmd.index("--army-reward") + 1] == "0.0"
+    assert cmd[cmd.index("--army-elixir-beta") + 1] == "0.01"
+    assert cmd[cmd.index("--army-elixir-bar-factor") + 1] == "0.75"
+    assert cmd[cmd.index("--overflow-penalty") + 1] == "0.005"
     assert cmd[cmd.index("--lookahead-distill-temporal-blocks") + 1] == "0"
     assert cmd[cmd.index("--publication-interval") + 1] == "5"
 

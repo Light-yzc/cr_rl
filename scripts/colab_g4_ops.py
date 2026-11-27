@@ -30,7 +30,23 @@ import time
 import zlib
 
 
-DEFAULT_RUN_NAME = "longrun_sparky_u1740_deepmcts"
+DEFAULT_RUN_NAME = "longrun_sparky_u1940_conserved"
+SEED_SOURCE_RUN_NAME = "longrun_sparky_u1740_deepmcts"
+
+OVERLAY_SYNC_RELPATHS: tuple[str, ...] = (
+    "src/cr_rl/client/action_selection.py",
+    "src/cr_rl/training/test_time_search.py",
+    "src/cr_rl/training/lookahead_distiller.py",
+    "src/cr_rl/training/colab_pipeline.py",
+    "src/cr_rl/training/state_selfplay.py",
+    "src/cr_rl/training/army_elixir.py",
+    "src/cr_rl/training/rewards.py",
+    "scripts/train_selfplay.py",
+    "scripts/evaluate_state_policy.py",
+    "scripts/run_nulls_policy.py",
+    "scripts/cr_train_pipeline.py",
+    "configs/army_elixir_conserved.yaml",
+)
 
 
 def _connect_existing_colab():
@@ -365,22 +381,41 @@ print(res.stdout, res.stderr)
     return 0
 
 
+def _build_local_overlay_b64() -> str:
+    repo_root = Path(__file__).resolve().parents[1]
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for rel in OVERLAY_SYNC_RELPATHS:
+            p = repo_root / rel
+            if p.is_file():
+                zf.write(p, arcname=rel)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 def cmd_restore_and_start(args) -> int:
     conn = _connect_existing_colab()
     if conn is None:
         print("NO_EXISTING_COLAB_INSTANCE", flush=True)
         return 2
+    overlay_b64 = _build_local_overlay_b64()
     remote_code = f'''
+import base64
 from concurrent.futures import ThreadPoolExecutor
-import importlib.util, json, os, shutil, subprocess, sys, time, zipfile
+import importlib.util, io, json, os, shutil, subprocess, sys, time, zipfile
 from pathlib import Path
 
 t0 = time.perf_counter()
+os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 DRIVE = Path("/content/drive/MyDrive/cr_rl_ppo")
 if not DRIVE.is_dir():
     raise RuntimeError("Mount Google Drive at /content/drive first")
 
 RUN_NAME = {args.run!r}
+SEED_SOURCE_RUN = {SEED_SOURCE_RUN_NAME!r}
+LOCAL_OVERLAY_B64 = {overlay_b64!r}
 ROOT = Path("/content/crrl_training")
 PREP = ROOT / "prepared"
 RUN_DIR = ROOT / "runs" / RUN_NAME
@@ -441,6 +476,27 @@ for z_local in (Path("/content/crrl_base_code.zip"), Path("/content/crrl_rt_over
         with zipfile.ZipFile(z_local) as zf:
             zf.extractall(ROOT)
 
+if LOCAL_OVERLAY_B64:
+    overlay_bytes = base64.b64decode(LOCAL_OVERLAY_B64)
+    with zipfile.ZipFile(io.BytesIO(overlay_bytes)) as zf:
+        zf.extractall(ROOT)
+    # Persist merged overlay back onto Google Drive so future VM restarts never revert to stale code!
+    merged_buf = io.BytesIO()
+    with zipfile.ZipFile(merged_buf, "w", compression=zipfile.ZIP_DEFLATED) as mzf:
+        if Path("/content/crrl_mcts_overlay.zip").is_file():
+            with zipfile.ZipFile("/content/crrl_mcts_overlay.zip") as old_zf, zipfile.ZipFile(io.BytesIO(overlay_bytes)) as new_zf:
+                new_names = set(new_zf.namelist())
+                for info in old_zf.infolist():
+                    if info.filename not in new_names:
+                        mzf.writestr(info, old_zf.read(info.filename))
+        with zipfile.ZipFile(io.BytesIO(overlay_bytes)) as new_zf:
+            for info in new_zf.infolist():
+                mzf.writestr(info, new_zf.read(info.filename))
+    mcts_overlay_src.parent.mkdir(parents=True, exist_ok=True)
+    tmp_ov = mcts_overlay_src.with_name(mcts_overlay_src.name + ".tmp")
+    tmp_ov.write_bytes(merged_buf.getvalue())
+    tmp_ov.replace(mcts_overlay_src)
+
 env_bin = ROOT / ".cache/vendor/crforge/env/build/install/env/bin/env"
 if env_bin.is_file():
     env_bin.chmod(0o755)
@@ -462,12 +518,49 @@ if pip_proc is not None and pip_proc.wait() != 0:
     raise RuntimeError("pip install failed")
 
 sys.path.insert(0, str(ROOT / "src"))
-from cr_rl.training.fast_publication import restore_latest
-ckpt_path = restore_latest(DRIVE / "training" / RUN_NAME, RUN_DIR)
-if ckpt_path is None or not Path(ckpt_path).is_file():
-    raise RuntimeError("Failed to restore latest checkpoint")
-
 import torch, yaml
+from cr_rl.training.fast_publication import restore_latest
+
+run_drv = DRIVE / "training" / RUN_NAME
+ckpt_path = restore_latest(run_drv, RUN_DIR) if (run_drv / "latest.json").is_file() else None
+seeded_fresh_from_u1940 = False
+if ckpt_path is None or not Path(ckpt_path).is_file():
+    # Bootstrap fresh conserved-reward run from u=1940 best_validation champion (wiping old HOLD_TO_FULL distill buffers!)
+    src_drv = DRIVE / "training" / SEED_SOURCE_RUN
+    seed_src = src_drv / "best_validation/ppo_best_val.pt"
+    if seed_src.is_file():
+        _copy_atomic(seed_src, RUN_DIR / "ppo_latest.pt")
+        if (src_drv / "best_validation/actor_best_val.pt").is_file():
+            _copy_atomic(src_drv / "best_validation/actor_best_val.pt", RUN_DIR / "actor_export.pt")
+        # Copy opponent pool from latest generation of SEED_SOURCE_RUN if available
+        if (src_drv / "latest.json").is_file():
+            lat_meta = json.loads((src_drv / "latest.json").read_text())
+            gen_rel = Path(lat_meta.get("checkpoint", "")).parent
+            gen_dir = src_drv / gen_rel
+            if (gen_dir / "opponent_pool.json").is_file():
+                _copy_atomic(gen_dir / "opponent_pool.json", RUN_DIR / "opponent_pool.json")
+            if (gen_dir / "opponents").is_dir():
+                for op_f in (gen_dir / "opponents").glob("*.pt"):
+                    _copy_atomic(op_f, RUN_DIR / "opponents" / op_f.name)
+    else:
+        ckpt_fb = restore_latest(src_drv, RUN_DIR)
+        if ckpt_fb is None or not Path(ckpt_fb).is_file():
+            raise RuntimeError(f"Failed to restore checkpoint from {{run_drv}} or {{src_drv}}")
+    raw_seed = torch.load(RUN_DIR / "ppo_latest.pt", map_location="cpu", weights_only=False)
+    raw_seed.pop("lookahead_distill", None)
+    raw_seed.pop("macro_search", None)
+    for opt_k in ("optimizer", "actor_optimizer", "critic_optimizer"):
+        opt_s = raw_seed.get(opt_k)
+        if isinstance(opt_s, dict) and isinstance(opt_s.get("state"), dict):
+            for st_v in opt_s["state"].values():
+                if isinstance(st_v, dict) and "exp_avg" in st_v and torch.is_tensor(st_v["exp_avg"]):
+                    st_v["exp_avg"].zero_()
+    tmp_seed = RUN_DIR / "ppo_latest.pt.clean"
+    torch.save(raw_seed, tmp_seed)
+    tmp_seed.replace(RUN_DIR / "ppo_latest.pt")
+    del raw_seed
+    seeded_fresh_from_u1940 = True
+
 snap = torch.load(RUN_DIR / "ppo_latest.pt", map_location="cpu", mmap=True, weights_only=False)
 restored_update = int(snap["updates"])
 (PREP / "source_metadata.json").write_text(json.dumps({{k: snap.get(k) for k in ("updates", "model_architecture_version", "decision_ticks", "training_args", "reward_config", "level_profile")}}, indent=2) + "\\n")
@@ -484,9 +577,7 @@ if (RUN_DIR / "opponent_pool.json").is_file() and not seed_pool.is_file():
 
 drv_cfg_path = DRIVE / "preparation/sparky_value_bc_v2/cr_train_config_g4.json"
 cfg = json.loads(drv_cfg_path.read_text())
-if cfg.get("focal_decks") and cfg.get("validation_decks") != "/content/crrl_training/configs/decks_eval_focal.yaml":
-    cfg["validation_decks"] = "/content/crrl_training/configs/decks_eval_focal.yaml"
-    drv_cfg_path.write_text(json.dumps(cfg, indent=2) + "\\n")
+cfg["run_name"] = RUN_NAME
 cfg["trainer_entry"] = str(ROOT / "scripts/train_selfplay.py")
 cfg["expert_bc_dataset"] = str(BC_PLAN_B)
 if cfg.get("focal_decks") and (ROOT / "configs/decks_eval_focal.yaml").is_file():
@@ -494,28 +585,52 @@ if cfg.get("focal_decks") and (ROOT / "configs/decks_eval_focal.yaml").is_file()
 if (PREP / "validation_history.pt").is_file():
     cfg["validation_history"] = str(PREP / "validation_history.pt")
 
+# Shared conserved elixir-trade unit-preservation reward + anti-stall MCTS defaults across all GPU tiers
+cfg.update(
+    army_reward_mode="elixir_potential",
+    army_elixir_config=str(ROOT / "configs/army_elixir_conserved.yaml"),
+    army_elixir_beta=0.010,
+    army_elixir_bar_factor=0.75,
+    army_reward=0.0,
+    overflow_penalty=0.005,
+    allow_reward_migration=True,
+    focal_deck_prob=0.50,
+    anchor_kl_coef=0.004,
+    card_entropy_coef=0.0005,
+    tile_entropy_coef=-0.0005,
+    lookahead_distill=True,
+    lookahead_distill_placement=False,
+    lookahead_distill_temporal_blocks=0,
+    lookahead_distill_trigger_elixir=5.5,
+    lookahead_distill_interval=3,
+    lookahead_distill_offset=0,
+    lookahead_distill_learning_rate=3.5e-6,
+    lookahead_distill_max_kl=0.005,
+)
+
 props = torch.cuda.get_device_properties(0)
 vram_gib = props.total_memory / (1024 ** 3)
 ncpu = len(os.sched_getaffinity(0))
 if vram_gib >= 70.0:
     profile_tag = "wide_70g+"
-    cfg.update(gradient_checkpointing=False, sparse_placement=True, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=8, publication_interval=5, cache_state_frames=True, cache_reference=True, pool_capacity=12, current_opponent_fraction=0.55, historical_opponent_fraction=0.35, anchor_opponent_fraction=0.10, focal_deck_prob=0.60, expert_bc=True, expert_bc_interval=12, anchor_kl_coef=0.025, card_entropy_coef=0.0001, tile_entropy_coef=-0.0005, target_card_kl=0.008, target_tile_kl=0.010, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(32, ncpu), torch_threads=min(16, ncpu), lookahead_distill_interval=2, lookahead_distill_offset=0, lookahead_distill_placement=False, lookahead_distill_temporal_blocks=0, lookahead_distill_games=20, lookahead_distill_parallel_games=20, lookahead_distill_parallel_searches=min(16, max(4, ncpu // 3)), lookahead_distill_threads=min(44, ncpu), lookahead_distill_candidates=8, lookahead_distill_horizon=38, lookahead_distill_rollouts=3, lookahead_distill_max_searches=28, lookahead_distill_batch_episodes=20, lookahead_distill_steps=4, lookahead_distill_learning_rate=8e-6, lookahead_distill_max_kl=0.005, macro_search_interval=4, macro_search_offset=1, validation_argmax_lanes=min(24, max(8, ncpu // 2)))
+    cfg.update(gradient_checkpointing=False, sparse_placement=True, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=8, publication_interval=5, cache_state_frames=True, cache_reference=True, pool_capacity=12, current_opponent_fraction=0.55, historical_opponent_fraction=0.35, anchor_opponent_fraction=0.10, expert_bc=True, expert_bc_interval=15, target_card_kl=0.008, target_tile_kl=0.010, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(32, ncpu), torch_threads=min(16, ncpu), lookahead_distill_games=20, lookahead_distill_parallel_games=20, lookahead_distill_parallel_searches=min(16, max(4, ncpu // 3)), lookahead_distill_threads=min(44, ncpu), lookahead_distill_candidates=8, lookahead_distill_horizon=38, lookahead_distill_rollouts=3, lookahead_distill_max_searches=28, lookahead_distill_batch_episodes=20, lookahead_distill_steps=2, macro_search_interval=4, macro_search_offset=1, validation_argmax_lanes=min(24, max(8, ncpu // 2)))
 elif vram_gib >= 38.0:
     profile_tag = "mid_40g"
-    cfg.update(gradient_checkpointing=True, sparse_placement=False, temporal_checkpoint_mode="block", frame_microbatch=256, actor_batch_size=2, critic_batch_size=4, cache_state_frames=True, cache_reference=True, opponent_cache_size=6, training_opponent_cache_size=4, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=12, lookahead_distill_parallel_games=12, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), validation_argmax_lanes=8)
+    cfg.update(gradient_checkpointing=True, sparse_placement=True, temporal_checkpoint_mode="block", frame_microbatch=256, actor_batch_size=2, critic_batch_size=4, publication_interval=5, cache_state_frames=True, cache_reference=True, opponent_cache_size=6, training_opponent_cache_size=4, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=12, lookahead_distill_parallel_games=12, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), lookahead_distill_candidates=8, lookahead_distill_horizon=30, lookahead_distill_rollouts=3, lookahead_distill_steps=2, validation_argmax_lanes=8)
 elif vram_gib >= 20.0:
     profile_tag = "l4_22g"
-    cfg.update(gradient_checkpointing=True, sparse_placement=True, temporal_checkpoint_mode="block", frame_microbatch=128, actor_batch_size=2, critic_batch_size=2, cache_state_frames=False, cache_reference=False, opponent_cache_size=4, training_opponent_cache_size=2, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=8, lookahead_distill_parallel_games=8, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), lookahead_distill_candidates=8, lookahead_distill_rollouts=2, lookahead_distill_horizon=14, lookahead_distill_batch_episodes=8, lookahead_distill_steps=3, macro_search_candidates=6, macro_search_batch_episodes=6, validation_argmax_lanes=8)
+    cfg.update(gradient_checkpointing=True, sparse_placement=True, temporal_checkpoint_mode="block", frame_microbatch=128, actor_batch_size=2, critic_batch_size=2, publication_interval=5, cache_state_frames=False, cache_reference=False, opponent_cache_size=4, training_opponent_cache_size=2, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=8, lookahead_distill_parallel_games=8, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), lookahead_distill_candidates=8, lookahead_distill_rollouts=2, lookahead_distill_horizon=20, lookahead_distill_batch_episodes=8, lookahead_distill_steps=2, macro_search_candidates=6, macro_search_batch_episodes=6, validation_argmax_lanes=8)
 else:
     profile_tag = "compact_t4_15g"
-    cfg.update(gradient_checkpointing=True, sparse_placement=True, temporal_checkpoint_mode="block", frame_microbatch=32, actor_batch_size=1, critic_batch_size=1, cache_state_frames=False, cache_reference=False, opponent_cache_size=4, training_opponent_cache_size=1, env_threads=min(8, ncpu), torch_threads=min(4, ncpu), lookahead_distill_games=8, lookahead_distill_parallel_games=8, lookahead_distill_parallel_searches=2, lookahead_distill_threads=min(8, ncpu), lookahead_distill_candidates=8, lookahead_distill_rollouts=2, lookahead_distill_horizon=14, lookahead_distill_batch_episodes=8, lookahead_distill_steps=3, macro_search_candidates=4, macro_search_batch_episodes=4, validation_argmax_lanes=8)
+    cfg.update(gradient_checkpointing=True, sparse_placement=True, temporal_checkpoint_mode="block", frame_microbatch=32, actor_batch_size=1, critic_batch_size=1, publication_interval=5, cache_state_frames=False, cache_reference=False, opponent_cache_size=4, training_opponent_cache_size=1, env_threads=min(8, ncpu), torch_threads=min(4, ncpu), lookahead_distill_games=8, lookahead_distill_parallel_games=8, lookahead_distill_parallel_searches=2, lookahead_distill_threads=min(8, ncpu), lookahead_distill_candidates=8, lookahead_distill_rollouts=2, lookahead_distill_horizon=20, lookahead_distill_batch_episodes=8, lookahead_distill_steps=2, macro_search_candidates=4, macro_search_batch_episodes=4, validation_argmax_lanes=8)
 
 (PREP / "cr_train_config.json").write_text(json.dumps(cfg, indent=2) + "\\n")
 env = dict(os.environ, PYTHONPATH=f"{{ROOT / 'src'}}:{{ROOT / '.cache/vendor/crforge/python'}}", PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+env.pop("CUDA_VISIBLE_DEVICES", None)
 if cfg.get("sparse_placement"):
     env["CRRL_SPARSE_PLACEMENT"] = "1"
 res = subprocess.run([sys.executable, str(ROOT / "scripts/cr_train_pipeline.py"), "start"], cwd=ROOT, env=env, capture_output=True, text=True, check=True)
-print(json.dumps({{"status": "RESTORED_AND_STARTED_OK", "gpu": props.name, "vram_gib": round(vram_gib, 1), "cpus": ncpu, "profile": profile_tag, "restored_from_update": restored_update, "elapsed_sec": round(time.perf_counter() - t0, 1), "pipeline": json.loads(res.stdout.strip())}}, indent=2))
+print(json.dumps({{"status": "RESTORED_AND_STARTED_OK", "gpu": props.name, "vram_gib": round(vram_gib, 1), "cpus": ncpu, "profile": profile_tag, "run_name": RUN_NAME, "seeded_fresh_from_u1940": seeded_fresh_from_u1940, "restored_from_update": restored_update, "elapsed_sec": round(time.perf_counter() - t0, 1), "pipeline": json.loads(res.stdout.strip())}}, indent=2))
 '''
     print(conn["exec"](remote_code, timeout_sec=420), flush=True)
     return 0

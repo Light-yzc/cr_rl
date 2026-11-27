@@ -183,7 +183,22 @@ class PolicyStream:
             raise FloatingPointError("Nonfinite frozen-policy log probabilities")
         if self.action_mode == "argmax":
             mask = torch.as_tensor(legal, device=self.device, dtype=torch.bool)
-            action = int(logp.masked_fill(~mask, -torch.inf).argmax(dim=-1).item())
+            masked_1d = logp.reshape(-1).float().masked_fill(~mask, -torch.inf)
+            wait_lp = masked_1d[0]
+            if "elixir" in schema.header and int(raw[schema.header["elixir"][0]]) >= 95000 and bool(mask[1:].any()):
+                wait_lp = torch.tensor(-torch.inf, device=self.device)
+            non_wait_lp = torch.logsumexp(masked_1d[1:], dim=-1)
+            if bool(mask[0]) and float(wait_lp.item()) >= float(non_wait_lp.item()):
+                action = 0
+            else:
+                slot_tiles = masked_1d[1:2305].reshape(4, 576)
+                slot_lp = torch.logsumexp(slot_tiles, dim=-1)
+                abil_lp = masked_1d[2305:]
+                choice = int(torch.cat((slot_lp, abil_lp), dim=-1).argmax(dim=-1).item())
+                if choice < 4:
+                    action = 1 + choice * 576 + int(slot_tiles[choice].argmax(dim=-1).item())
+                else:
+                    action = 2305 + (choice - 4)
         else:
             probabilities=logp.float().exp()
             action=int(torch.multinomial(probabilities,1,generator=self.generator).cpu().item())
@@ -230,23 +245,26 @@ class BatchedArgmaxStream:
         wait_lp = masked[:, 0:1].clone()
         if "elixir" in self.adapter.schema.header:
             elix_idx = self.adapter.schema.header["elixir"][0]
-            near_full = torch.as_tensor(raw[:, elix_idx] >= 97000, device=self.device, dtype=torch.bool)
+            near_full = torch.as_tensor(raw[:, elix_idx] >= 95000, device=self.device, dtype=torch.bool)
             has_non_wait = mask[:, 1:].any(dim=-1)
             wait_lp = torch.where((near_full & has_non_wait)[:, None], torch.full_like(wait_lp, -torch.inf), wait_lp)
+        non_wait_lp = torch.logsumexp(masked[:, 1:], dim=-1, keepdim=True)
+        should_play = (~mask[:, 0:1]) | (non_wait_lp > wait_lp)
         slot_tiles = masked[:, 1:2305].reshape(bsz, 4, 576)
         slot_lp = torch.logsumexp(slot_tiles, dim=-1)
         abil_lp = masked[:, 2305:]
-        macro_choice = torch.cat((wait_lp, slot_lp, abil_lp), dim=-1).argmax(dim=-1)
+        play_choice = torch.cat((slot_lp, abil_lp), dim=-1).argmax(dim=-1)
         best_tile_per_slot = slot_tiles.argmax(dim=-1)
         actions_t = torch.zeros(bsz, dtype=torch.long, device=self.device)
-        is_slot = (macro_choice >= 1) & (macro_choice <= 4)
+        play_rows = should_play.squeeze(-1)
+        is_slot = play_rows & (play_choice < 4)
         if is_slot.any():
-            sl = macro_choice[is_slot] - 1
+            sl = play_choice[is_slot]
             tl = best_tile_per_slot[is_slot, sl]
             actions_t[is_slot] = 1 + sl * 576 + tl
-        is_abil = macro_choice >= 5
+        is_abil = play_rows & (play_choice >= 4)
         if is_abil.any():
-            actions_t[is_abil] = 2305 + (macro_choice[is_abil] - 5)
+            actions_t[is_abil] = 2305 + (play_choice[is_abil] - 4)
         actions = actions_t.cpu().numpy()
         if not legal[np.arange(bsz), actions].all():
             raise ValueError("Frozen policy selected an illegal action")

@@ -46,7 +46,10 @@ def ppo_command(root, config, *, out=None, resume=None):
                 'temporal_checkpoint_mode','tbptt_chunk','target_kl','target_card_kl','target_tile_kl',
                 'learning_rate','resume_actor_learning_rate','resume_critic_learning_rate',
                 'actor_effective_batch_size','critic_effective_batch_size'):
-        value = config.get(key, saved.get(key))
+        if key == 'army_reward' and config.get('army_reward_mode') == 'elixir_potential':
+            value = config.get(key, 0.0)
+        else:
+            value = config.get(key, saved.get(key))
         if value is not None: command+=['--'+key.replace('_','-'),str(value)]
     for key in ('ppo_actor_fp32','cache_state_frames','reserve_to_wait','tower_shaping','continue_after_kl_reject'):
         if config.get(key, saved.get(key)): command.append('--'+key.replace('_','-'))

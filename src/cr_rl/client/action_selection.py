@@ -15,10 +15,15 @@ DAMAGE_SPELL_RADIUS = {
 
 
 def _rage_has_engagement(x: float, y: float, obs: np.ndarray) -> bool:
-    """Reject casting Rage onto empty grass; require engaged friendly troops, low tower, or tower swarm."""
+    """Reject casting Rage onto empty grass or starving low-elixir defense; require real engagement."""
     count = int(obs[S.H_ENTITY_COUNT])
     if count <= 0:
         return False
+    elix_raw = int(obs[S.H_ELIXIR]) if len(obs) > S.H_ELIXIR else 0
+    res_raw = max(0, int(obs[S.H_ELIXIR_RESERVED])) if len(obs) > S.H_ELIXIR_RESERVED else 0
+    avail_bars = float(elix_raw - res_raw) / float(S.ELIXIR_SCALE)
+    low_elixir = 1.9 <= avail_bars < 4.2
+
     rows = np.asarray(obs[S.HEADER_INTS:]).reshape(S.MAX_ENTITIES, S.ENTITY_INTS)[:count]
     alive = rows[:, S.E_HP] > 0
     chars = alive & (rows[:, S.E_KIND] == S.KIND_CHARACTER)
@@ -37,13 +42,23 @@ def _rage_has_engagement(x: float, y: float, obs: np.ndarray) -> bool:
         if swarm_cnt >= (2 if y <= 11.5 else 6):
             return True
 
+    if low_elixir and len(enemy_c):
+        unbuffed_threat = (enemy_c[:, S.E_Y] / 1000.0 <= 16.5) & (
+            ((enemy_c[:, S.E_X] / 1000.0 - x) ** 2 + (enemy_c[:, S.E_Y] / 1000.0 - y) ** 2) > 5.5 ** 2
+        )
+        if int(enemy_c[unbuffed_threat, S.E_HP].sum()) >= 600:
+            return False
+
     own_troop = chars & (rows[:, S.E_SIDE] == 0) & ((rows[:, S.E_FLAGS] & S.F_BUILDING) == 0)
     own_c = rows[own_troop]
     if not len(own_c):
         return False
     d2_own = (own_c[:, S.E_X] / 1000.0 - x) ** 2 + (own_c[:, S.E_Y] / 1000.0 - y) ** 2
     buffed = own_c[d2_own <= 3.8 ** 2]
-    if not len(buffed) or int(buffed[:, S.E_HP].sum()) < 300:
+    min_hp = 1800 if low_elixir else 450
+    if not len(buffed) or int(buffed[:, S.E_HP].sum()) < min_hp:
+        return False
+    if low_elixir and float(buffed[:, S.E_Y].max()) / 1000.0 < 13.5:
         return False
     if int(buffed[:, S.E_HP].sum()) >= 1200 and float(buffed[:, S.E_Y].max()) / 1000.0 >= 13.5 and len(enemy_t):
         return True
@@ -141,10 +156,10 @@ def select_live_action(
         tiles = p[1 : S.FIRST_ABILITY].reshape(4, S.TILES)
         slots = tiles.sum(-1)
         skills = p[S.FIRST_ABILITY :]
-        non_wait_max = max(float(slots.max()), float(skills.max()))
-        near_full = int(obs[S.H_ELIXIR]) >= 97000 and (slots.sum() + skills.sum()) >= 0.05
+        valid_non_wait = float(slots.sum()) + float(skills.sum())
+        near_full = int(obs[S.H_ELIXIR]) >= 95000 and valid_non_wait >= 0.05
 
-        if (not near_full) and legal[0] and wait_mass >= non_wait_max:
+        if (not near_full) and legal[0] and wait_mass >= valid_non_wait:
             return 0, {
                 "selection_mode": selection_mode,
                 "proposed_action": 0,
@@ -169,10 +184,11 @@ def select_live_action(
             slot = int(slot)
             if slots[slot] <= 0:
                 break
-            if first_vetoed is not None and not near_full and slots[slot] < max(wait_mass, 0.22):
+            if first_vetoed is not None and (not near_full) and legal[0] and wait_mass >= valid_non_wait:
                 break
             slot_legal = legal[1 + slot * S.TILES : 1 + (slot + 1) * S.TILES]
             if not slot_legal.any():
+                valid_non_wait = max(0.0, valid_non_wait - float(slots[slot]))
                 continue
             card_name = hand_cards[slot] if slot < len(hand_cards) else None
             tile = _best_cluster_tile(tiles[slot], slot_legal)
@@ -180,8 +196,9 @@ def select_live_action(
             if not spell_has_target(proposed, card_name, obs):
                 if first_vetoed is None:
                     first_vetoed = proposed
+                valid_non_wait = max(0.0, valid_non_wait - float(slots[slot]))
                 continue
-            reason = "leak_guard_play" if (near_full and wait_mass >= non_wait_max) else "play"
+            reason = "leak_guard_play" if (near_full and wait_mass >= valid_non_wait) else "play"
             return proposed, {
                 "selection_mode": selection_mode,
                 "proposed_action": proposed,

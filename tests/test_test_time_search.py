@@ -382,8 +382,11 @@ def test_hold_to_full_pump_at_6_elixir_and_urgent_balloon_wizard_bank():
     cands_quiet = select_macro_candidates(
         logp, legal, raw, schema, max_candidates=7, include_bank_macros=True, rage_card_ids=(99,)
     )
-    assert encode_hold_full_candidate(1) in cands_quiet and decode_hold_full_candidate(encode_hold_full_candidate(1)) == 1
-    assert encode_hold_full_candidate(2) in cands_quiet and decode_hold_full_candidate(encode_hold_full_candidate(2)) == 2
+    #HOLD_TO_FULL is intentionally disabled on playable hands so MCTS never teaches stalling 6->9.4 elixir!
+    assert encode_hold_full_candidate(1) not in cands_quiet
+    assert encode_hold_full_candidate(2) not in cands_quiet
+    assert (1 + 1 * 576 + 18) in cands_quiet and (1 + 2 * 576 + 10) in cands_quiet
+    assert decode_hold_full_candidate(encode_hold_full_candidate(2)) == 2
     assert decode_bank_candidate(encode_hold_full_candidate(2)) is None
 
     # Part 2: Enemy Balloon crossing bridge (y=15000 <= 18000 -> emergency!) at 4.10 elixir!
@@ -402,7 +405,7 @@ def test_hold_to_full_pump_at_6_elixir_and_urgent_balloon_wizard_bank():
     cfg = LookaheadConfig(trigger_elixir=6.0, bank_min_elixir=3.8, bank_min_card_cost=5.0, bank_max_deficit=2.2)
     assert should_trigger_search(raw, legal_def, logp_def, schema, cfg) is True
     cands_def = select_macro_candidates(
-        logp_def, legal_def, raw, schema, max_candidates=6, include_bank_macros=True
+        logp_def, legal_def, raw, schema, max_candidates=6, include_bank_macros=True, bank_max_deficit=2.2
     )
     # Wizard (slot 1, deficit 0.9 <= 1.2) MUST be offered as BANK->Wizard, while 6-cost cards (deficit 1.9 > 1.2) are excluded!
     assert encode_bank_candidate(1) in cands_def
@@ -920,6 +923,83 @@ def test_hierarchical_default_naked_rage_skeleton_army_giant_bank_and_corner_pum
     )
     safe_left_corner = 1 + 1 * 576 + 1 * 18 + 1
     assert safe_left_corner in cands_col
+
+
+def test_split_vote_argmax_fix_low_elixir_rage_guard_and_conserved_potential():
+    from cr_rl.client.action_selection import select_live_action
+    from cr_rl.client.schema_v4 import SchemaV4 as S
+    from cr_rl.training.test_time_search import _hierarchical_default_action, _potential_value
+
+    # 1) Live Match 5 dec=144 split-vote paralysis regression:
+    # P(WAIT) = 0.312, P(Rage) = 0.066, P(DarkPrince) = 0.311, P(Pump) = 0.0, P(MiniPekka) = 0.311
+    obs = np.zeros(S.SEAT_INTS, dtype=np.int32)
+    obs[S.H_ELIXIR] = 55900
+    legal = np.zeros(S.ACTIONS, dtype=bool)
+    legal[0] = True
+    legal[1:577] = True
+    legal[1 + 1 * 576 + 200] = True
+    legal[1 + 3 * 576 + 220] = True
+
+    probs = np.zeros(S.ACTIONS, dtype=np.float64)
+    probs[0] = 0.312
+    probs[1 + 100] = 0.066
+    probs[1 + 1 * 576 + 200] = 0.3105
+    probs[1 + 3 * 576 + 220] = 0.3115
+    hand = ("Rage", "DarkPrince", "Elixir Collector", "MiniPekka")
+
+    act, info = select_live_action(probs, legal, obs, hand, selection_mode="argmax")
+    assert act == 1 + 3 * 576 + 220
+    assert info["selection_reason"] == "play"
+
+    schema = _DummySchema()
+    lp = np.where(probs > 0, np.log(np.maximum(probs, 1e-30)), -30.0)
+    assert _hierarchical_default_action(lp, legal, obs, schema) == 1 + 3 * 576 + 220
+
+    # 2) Vetoed top spell must subtract its mass before deciding whether remaining slots beat WAIT!
+    probs_veto = np.zeros(S.ACTIONS, dtype=np.float64)
+    probs_veto[0] = 0.40
+    probs_veto[1 + 100] = 0.35  # Empty-grass Rage (vetoed!)
+    probs_veto[1 + 3 * 576 + 220] = 0.25  # Remaining non-wait = 0.25 < 0.40 -> should WAIT!
+    act_v, info_v = select_live_action(probs_veto, legal, obs, hand, selection_mode="argmax")
+    assert act_v == 0 and info_v["selection_reason"] == "spell_guard_veto"
+
+    # 3) Low-elixir (2.81 bars, Match 2 dec=183) Rage with lone Wizard(1206) & opposite-lane InfernoDragon(2069) MUST be vetoed!
+    obs_m2 = np.zeros(S.SEAT_INTS, dtype=np.int32)
+    obs_m2[S.H_ELIXIR] = 28100
+    obs_m2[S.H_ENTITY_COUNT] = 3
+    rows = obs_m2[S.HEADER_INTS:].reshape(S.MAX_ENTITIES, S.ENTITY_INTS)
+    # Own Wizard on left bridge (x=2800, y=15000, hp=1206 < 1800)
+    rows[0, S.E_KIND] = S.KIND_CHARACTER
+    rows[0, S.E_SIDE] = 0
+    rows[0, S.E_X], rows[0, S.E_Y], rows[0, S.E_HP] = 2800, 15000, 1206
+    # Enemy InfernoDragon rushing right lane (x=16200, y=15500, hp=2069)
+    rows[1, S.E_KIND] = S.KIND_CHARACTER
+    rows[1, S.E_SIDE] = 1
+    rows[1, S.E_X], rows[1, S.E_Y], rows[1, S.E_HP] = 16200, 15500, 2069
+    # Enemy left tower
+    rows[2, S.E_KIND] = S.KIND_TOWER
+    rows[2, S.E_SIDE] = 1
+    rows[2, S.E_X], rows[2, S.E_Y], rows[2, S.E_HP] = 3500, 25500, 4516
+
+    leg_m2 = np.zeros(S.ACTIONS, dtype=bool)
+    leg_m2[0] = True
+    leg_m2[1:577] = True
+    p_m2 = np.zeros(S.ACTIONS, dtype=np.float64)
+    p_m2[0] = 0.48
+    p_m2[1 + 15 * 18 + 2] = 0.52
+    act_m2, info_m2 = select_live_action(p_m2, leg_m2, obs_m2, ("Rage", "Elixir Collector", "Giant", "MiniPekka"), selection_mode="argmax")
+    assert act_m2 == 0 and info_m2["spell_vetoed"] is True
+
+    # 4) _potential_value does not reward sitting on unspent elixir and penalizes >=9.6 bar leaking!
+    r5 = np.zeros(224, dtype=np.int32)
+    r5[2] = 50000
+    r9 = r5.copy()
+    r9[2] = 90000
+    r10 = r5.copy()
+    r10[2] = 100000
+    assert _potential_value(r9, schema) == _potential_value(r5, schema)  # No artificial reward for passive banking!
+    assert _potential_value(r10, schema) < _potential_value(r9, schema)  # Leaking at 10.0 is penalized!
+
 
 
 

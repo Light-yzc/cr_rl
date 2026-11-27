@@ -34,9 +34,10 @@ from cr_rl.training.test_time_search import (
 )
 
 MAX_DISTILL_KL = 0.010
-MAX_DISTILL_WAIT_DRIFT = 0.014
-MIN_DISTILL_MEAN_P_WAIT = 0.65
-MAX_DISTILL_MEAN_P_WAIT = 0.90
+MAX_DISTILL_WAIT_DRIFT = 0.028
+MAX_DISTILL_WAIT_UPWARD = 0.008
+MIN_DISTILL_MEAN_P_WAIT = 0.38
+MAX_DISTILL_MEAN_P_WAIT = 0.78
 MAX_DISTILL_LR = 3e-5
 
 
@@ -150,24 +151,24 @@ def lookahead_frame_weights(
     if override_only:
         w = np.zeros(len(acts), dtype=np.float64)
     elif pure_override:
-        # Zero weight on unsearched garbage PLAYs; keep 0.24 WAIT patience baseline so wait_delta stays ~0!
-        w = np.where(acts == 0, 0.24, 0.0)
-        w = np.where(searched & ~overridden & (acts > 0), 0.35, w)
-        w = np.where(searched & ~overridden & (acts == 0), 0.24, w)
+        # Keep passive WAIT weight small so distillation actively lowers chronic stalling!
+        w = np.where(acts == 0, 0.08, 0.0)
+        w = np.where(searched & ~overridden & (acts > 0), 0.55, w)
+        w = np.where(searched & ~overridden & (acts == 0), 0.10, w)
     else:
-        # Balanced non-override baseline (prevents 10x anti-WAIT erosion across updates)
-        w = np.where(acts > 0, 0.35, 0.15)
-        w = np.where(searched & ~overridden & (acts > 0), 0.50, w)
-        w = np.where(searched & ~overridden & (acts == 0), 0.20, w)
+        # Balanced non-override baseline
+        w = np.where(acts > 0, 0.45, 0.10)
+        w = np.where(searched & ~overridden & (acts > 0), 0.60, w)
+        w = np.where(searched & ~overridden & (acts == 0), 0.12, w)
 
-    w = np.where(overridden & (acts == 0), 1.80 * boost, w)
+    w = np.where(overridden & (acts == 0), 0.80 * boost, w)
     if bank_wait_mask is not None:
         bank_w = np.asarray(bank_wait_mask, dtype=bool)
         if override_only:
-            w = np.where(bank_w & overridden & (acts == 0), 2.50 * boost, w)
+            w = np.where(bank_w & overridden & (acts == 0), 0.75 * boost, w)
         else:
-            w = np.where(bank_w & (acts == 0), 2.50 * boost, w)
-    w = np.where(overridden & (acts > 0), 2.50 * boost, w)
+            w = np.where(bank_w & (acts == 0), 0.75 * boost, w)
+    w = np.where(overridden & (acts > 0), 2.60 * boost, w)
     if tactical_boost_mask is not None:
         tac_b = np.asarray(tactical_boost_mask, dtype=bool)
         w = np.where(overridden & tac_b, w * 1.65, w)
@@ -570,7 +571,8 @@ class LookaheadDistiller:
                 "GoblinGang",
             )
         )
-        tactical_key_ids = set(rage_ids) | set(collector_ids) | set(giant_ids)
+        # Boost Collector & Giant macro overrides (never over-amplify 2-cost Rage logits)
+        tactical_key_ids = set(collector_ids) | set(giant_ids)
 
         streams: list[LookaheadPolicyStream] = []
         for g_idx, sp in enumerate(specs):
@@ -991,6 +993,11 @@ class LookaheadDistiller:
             "Princess",
             "SkeletonArmy",
             "WallBreakers",
+            "Wallbreakers",
+            "Witch",
+            "Mortar",
+            "Valkyrie",
+            "InfernoDragon",
         }
         opp_weights = np.asarray(probs, dtype=np.float64).copy()
         for d_i, d_cards in enumerate(decks):
@@ -1152,7 +1159,8 @@ class LookaheadDistiller:
                     step_reasons.append("ppo_forward_kl_limit")
                 wait_delta = cand_probe["mean_p_wait"] - probe_before["mean_p_wait"]
                 if (
-                    abs(wait_delta) > MAX_DISTILL_WAIT_DRIFT
+                    wait_delta > MAX_DISTILL_WAIT_UPWARD
+                    or wait_delta < -MAX_DISTILL_WAIT_DRIFT
                     or (wait_delta > 0.0 and cand_probe["mean_p_wait"] > MAX_DISTILL_MEAN_P_WAIT)
                     or (wait_delta < 0.0 and cand_probe["mean_p_wait"] < MIN_DISTILL_MEAN_P_WAIT)
                 ):

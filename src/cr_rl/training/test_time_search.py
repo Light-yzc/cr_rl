@@ -36,12 +36,12 @@ class LookaheadConfig:
     max_candidates: int = 4
     rollouts_per_candidate: int = 3
     horizon_steps: int = 10  # 10 * 0.4s = 4.0 seconds
-    trigger_elixir: float = 6.0
-    defense_elixir: float = 4.5
+    trigger_elixir: float = 5.5
+    defense_elixir: float = 4.0
     bank_min_elixir: float = 3.8
     bank_min_card_cost: float = 5.0
-    bank_max_deficit: float = 2.2
-    max_bank_steps: int = 16  # 16 * 0.4s = 6.4 seconds max commitment hold
+    bank_max_deficit: float = 1.5
+    max_bank_steps: int = 8  # 8 * 0.4s = 3.2 seconds max commitment hold
     entropy_threshold: float = 0.50
     min_search_interval_steps: int = 5  # 2.0s cooldown unless a new integer elixir tier unlocks
     max_searches_per_game: int = 40
@@ -251,10 +251,12 @@ def _hierarchical_default_action(lp: np.ndarray, legal: np.ndarray, raw_obs: np.
     scale = float((getattr(schema, "scales", None) or {}).get("elixir_scale", 10000))
     elix_idx = (getattr(schema, "header", None) or {}).get("elixir")
     avail_bars = (float(raw_obs[elix_idx[0]]) / scale) if elix_idx else 0.0
-    non_wait_max = max(float(slot_masses.max()) if len(slot_masses) else 0.0, float(skill_masses.max()) if len(skill_masses) else 0.0)
-    near_full = avail_bars >= 9.7 and (float(slot_masses.sum()) + float(skill_masses.sum())) >= 0.05
+    non_wait_total = (float(slot_masses.sum()) if len(slot_masses) else 0.0) + (
+        float(skill_masses.sum()) if len(skill_masses) else 0.0
+    )
+    near_full = avail_bars >= 9.5 and non_wait_total >= 0.05
 
-    if (not near_full) and legal_b[0] and wait_mass >= non_wait_max:
+    if (not near_full) and legal_b[0] and wait_mass >= non_wait_total:
         return 0
     if len(skill_masses):
         sk = int(np.argmax(skill_masses))
@@ -320,6 +322,14 @@ def _is_engaged_global_spell(
     is_rage = bool(rage_card_ids) and (card_id in rage_card_ids)
 
     if is_rage:
+        scale = float((getattr(schema, "scales", None) or {}).get("elixir_scale", 10000))
+        elix_idx = (getattr(schema, "header", None) or {}).get("elixir")
+        res_idx = (getattr(schema, "header", None) or {}).get("elixir_reserved")
+        elix_v = float(raw_obs[elix_idx[0]]) if elix_idx else 0.0
+        res_v = max(0.0, float(raw_obs[res_idx[0]])) if res_idx else 0.0
+        avail_bars = (elix_v - res_v) / scale
+        low_elixir = 1.9 <= avail_bars < 4.2
+
         # Allow finishing off a critically low enemy tower (<= 170 HP) within Rage splash radius
         if len(enemy_t):
             d2_et = (enemy_t[:, e["x"]] - tx) ** 2 + (enemy_t[:, e["y"]] - ty) ** 2
@@ -331,11 +341,20 @@ def _is_engaged_global_spell(
             swarm_cnt = int(((d2_ec <= (3.2 * tu) ** 2) & (enemy_c[:, e["hp"]] <= 380)).sum())
             if swarm_cnt >= (2 if ty <= 11.5 * tu else 5):
                 return True
+        if low_elixir and len(enemy_c):
+            unbuffed_threat = (enemy_c[:, e["y"]] <= 16.5 * tu) & (
+                ((enemy_c[:, e["x"]] - tx) ** 2 + (enemy_c[:, e["y"]] - ty) ** 2) > (5.5 * tu) ** 2
+            )
+            if int(enemy_c[unbuffed_threat, e["hp"]].sum()) >= 600:
+                return False
         if not len(own_c):
             return False
         d2_own = (own_c[:, e["x"]] - tx) ** 2 + (own_c[:, e["y"]] - ty) ** 2
         buffed = own_c[d2_own <= (4.2 * tu) ** 2]
-        if not len(buffed) or int(buffed[:, e["hp"]].sum()) < 300:
+        min_hp = 1800 if low_elixir else 450
+        if not len(buffed) or int(buffed[:, e["hp"]].sum()) < min_hp:
+            return False
+        if low_elixir and float(buffed[:, e["y"]].max()) < 13.5 * tu:
             return False
         # Proactive bridge-push Rage: >=1200 HP friendly push at/across bridge (y>=13.5) marching toward alive enemy tower
         if int(buffed[:, e["hp"]].sum()) >= 1200 and float(buffed[:, e["y"]].max()) >= 13.5 * tu and len(enemy_t):
@@ -1000,7 +1019,7 @@ def select_macro_candidates(
         if act not in candidates:
             candidates.append(act)
 
-    # Pass 1.5: add multi-step BANK_FOR_SLOT (unaffordable >=5-cost / urgent anti-air) & HOLD_TO_FULL (quiet board 6->9.4 elx Pump/Sparky/Giant)
+    # Pass 1.5: add multi-step BANK_FOR_SLOT only for genuinely unaffordable >=5-cost cards (never HOLD_TO_FULL on playable hands!)
     if include_bank_macros and len(candidates) < max_candidates:
         bank_slots = _unaffordable_bank_slots(
             raw_obs,
@@ -1013,18 +1032,6 @@ def select_macro_candidates(
             if len(candidates) >= max_candidates:
                 break
             macro_act = encode_bank_candidate(slot)
-            if macro_act not in candidates:
-                candidates.append(macro_act)
-        hold_slots = _hold_to_full_slots(
-            raw_obs,
-            legal,
-            schema,
-            min_card_cost=bank_min_card_cost,
-        )
-        for slot in hold_slots[:2]:
-            if len(candidates) >= max_candidates:
-                break
-            macro_act = encode_hold_full_candidate(slot)
             if macro_act not in candidates:
                 candidates.append(macro_act)
 
@@ -1175,13 +1182,38 @@ def should_trigger_search(
 
 
 def _potential_value(raw_obs: np.ndarray, schema) -> float:
-    """Zero-sum heuristic potential in [-1, 1] scale matching v3 reward shaping."""
+    """Zero-sum conserved battle potential (crowns + tower HP + HP-scaled board army + leak penalty)."""
     own_hp = sum(float(raw_obs[schema.header[f"own_{t}_hp"][0]]) for t in ("left", "right", "king"))
     opp_hp = sum(float(raw_obs[schema.header[f"enemy_{t}_hp"][0]]) for t in ("left", "right", "king"))
     crowns = float(raw_obs[schema.header["crowns"][0]] - raw_obs[schema.header["crowns_enemy"][0]])
     scale = float((getattr(schema, "scales", None) or {}).get("elixir_scale", 10000))
     own_elix = float(raw_obs[schema.header["elixir"][0]]) / scale
-    return 0.15 * crowns + 0.05 * ((own_hp - opp_hp) / 3000.0) + 0.003 * (own_elix - 5.0)
+
+    army_term = 0.0
+    if hasattr(schema, "entities") and hasattr(schema, "entity") and hasattr(schema, "kinds"):
+        ents = schema.entities(raw_obs)
+        if len(ents):
+            e = schema.entity
+            alive_flag = getattr(schema, "flags", {}).get("alive", 0)
+            chars = (ents[:, e["kind"]] == schema.kinds["character"]) & (ents[:, e["hp"]] > 0)
+            if alive_flag:
+                chars &= (ents[:, e["flags"]] & alive_flag) != 0
+            if bool(chars.any()):
+                ce = ents[chars]
+                hp = ce[:, e["hp"]].astype(np.float64)
+                mhp = np.maximum(ce[:, e["max_hp"]].astype(np.float64), 1.0)
+                health = 0.3 + 0.7 * np.clip(hp / mhp, 0.0, 1.0)
+                body_weight = np.clip(mhp / 1200.0, 0.25, 2.5)
+                side_sign = np.where(ce[:, e["side"]] == 0, 1.0, np.where(ce[:, e["side"]] == 1, -1.0, 0.0))
+                army_term = 0.0045 * float((health * body_weight * side_sign).sum())
+
+    elix_diff_term = 0.0
+    enemy_elix_idx = schema.header.get("enemy_elixir")
+    if enemy_elix_idx:
+        opp_elix = float(raw_obs[enemy_elix_idx[0]]) / scale
+        elix_diff_term = 0.0008 * (own_elix - opp_elix)
+    leak_pen = -0.005 * max(0.0, own_elix - 9.5)
+    return 0.15 * crowns + 0.06 * ((own_hp - opp_hp) / 3000.0) + army_term + elix_diff_term + leak_pen
 
 
 def _eval_critic_sequence_leaf(
