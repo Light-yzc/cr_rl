@@ -682,6 +682,15 @@ print(json.dumps({{"status": "RESTORED_AND_STARTED_OK", "gpu": props.name, "vram
     return 0
 
 
+def _link_or_copy(src: Path, dst: Path) -> None:
+    if dst.exists() or dst.is_symlink():
+        dst.unlink()
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copyfile(src, dst)
+
+
 def cmd_download_actors(args) -> int:
     conn = _connect_existing_colab()
     if conn is None:
@@ -802,7 +811,7 @@ print("MANIFEST_JSON:" + json.dumps(manifest))
         if dst.is_file() and dst.stat().st_size == meta["raw_size"]:
             if hashlib.sha256(dst.read_bytes()).hexdigest() == meta["sha256"]:
                 if not alias.is_file() or alias.stat().st_size != meta["raw_size"]:
-                    shutil.copyfile(dst, alias)
+                    _link_or_copy(dst, alias)
                 print(f"ALREADY_UP_TO_DATE [{tag}] u={meta['update']} -> {alias}", flush=True)
                 saved_paths[tag] = {
                     "path": str(alias),
@@ -826,7 +835,7 @@ print("MANIFEST_JSON:" + json.dumps(manifest))
         tmp.write_bytes(raw_bytes)
         del raw_bytes
         tmp.replace(dst)
-        shutil.copyfile(dst, alias)
+        _link_or_copy(dst, alias)
         dt = time.perf_counter() - t_dl
         mb = meta["raw_size"] / 1048576.0
         print(
