@@ -527,27 +527,57 @@ run_drv = DRIVE / "training" / RUN_NAME
 ckpt_path = restore_latest(run_drv, RUN_DIR) if (run_drv / "latest.json").is_file() else None
 seeded_fresh_from_u1940 = False
 if ckpt_path is None or not Path(ckpt_path).is_file():
-    # Bootstrap fresh conserved-reward run from u=1940 best_validation champion (wiping old HOLD_TO_FULL distill buffers!)
+    # Bootstrap fresh conserved-reward run from latest SEED_SOURCE_RUN generation (avoiding stale u=1740 best_validation!)
     src_drv = DRIVE / "training" / SEED_SOURCE_RUN
+    ssd_stage = Path("/content/crrl_u1950_stage")
+    lat_u = json.loads((src_drv / "latest.json").read_text()).get("update", 0) if (src_drv / "latest.json").is_file() else 0
+    bv_u = json.loads((src_drv / "best_validation/best_validation.json").read_text()).get("update", 0) if (src_drv / "best_validation/best_validation.json").is_file() else 0
     seed_src = src_drv / "best_validation/ppo_best_val.pt"
-    if seed_src.is_file():
+    if ssd_stage.is_dir() and (ssd_stage / "ppo_latest.pt").is_file():
+        shutil.move(str(ssd_stage / "ppo_latest.pt"), str(RUN_DIR / "ppo_latest.pt"))
+        if (ssd_stage / "actor_export.pt").is_file():
+            shutil.move(str(ssd_stage / "actor_export.pt"), str(RUN_DIR / "actor_export.pt"))
+        if (ssd_stage / "opponent_pool.json").is_file():
+            pool_data = json.loads((ssd_stage / "opponent_pool.json").read_text())
+            (RUN_DIR / "opponents").mkdir(parents=True, exist_ok=True)
+            for row in pool_data.get("entries", []):
+                rel = Path(row["checkpoint"])
+                st_op = ssd_stage / rel
+                dst_op = RUN_DIR / "opponents" / rel.name
+                if st_op.is_file() and not dst_op.is_file():
+                    shutil.move(str(st_op), str(dst_op))
+                elif not dst_op.is_file() and (src_drv / rel).is_file():
+                    _copy_atomic(src_drv / rel, dst_op)
+                row["checkpoint"] = str(dst_op.resolve())
+            (RUN_DIR / "opponent_pool.json").write_text(json.dumps(pool_data, indent=2) + "\\n")
+        shutil.rmtree(ssd_stage, ignore_errors=True)
+    elif seed_src.is_file() and bv_u >= max(1900, lat_u - 25):
         _copy_atomic(seed_src, RUN_DIR / "ppo_latest.pt")
         if (src_drv / "best_validation/actor_best_val.pt").is_file():
             _copy_atomic(src_drv / "best_validation/actor_best_val.pt", RUN_DIR / "actor_export.pt")
-        # Copy opponent pool from latest generation of SEED_SOURCE_RUN if available
         if (src_drv / "latest.json").is_file():
             lat_meta = json.loads((src_drv / "latest.json").read_text())
-            gen_rel = Path(lat_meta.get("checkpoint", "")).parent
+            gen_rel = lat_meta.get("generation") or str(Path(lat_meta.get("checkpoint", "")).parent)
             gen_dir = src_drv / gen_rel
             if (gen_dir / "opponent_pool.json").is_file():
-                _copy_atomic(gen_dir / "opponent_pool.json", RUN_DIR / "opponent_pool.json")
-            if (gen_dir / "opponents").is_dir():
-                for op_f in (gen_dir / "opponents").glob("*.pt"):
-                    _copy_atomic(op_f, RUN_DIR / "opponents" / op_f.name)
+                pool_data = json.loads((gen_dir / "opponent_pool.json").read_text())
+                (RUN_DIR / "opponents").mkdir(parents=True, exist_ok=True)
+                for row in pool_data.get("entries", []):
+                    rel = Path(row["checkpoint"])
+                    dst_op = RUN_DIR / "opponents" / rel.name
+                    if (src_drv / rel).is_file():
+                        _copy_atomic(src_drv / rel, dst_op)
+                    row["checkpoint"] = str(dst_op.resolve())
+                (RUN_DIR / "opponent_pool.json").write_text(json.dumps(pool_data, indent=2) + "\\n")
     else:
         ckpt_fb = restore_latest(src_drv, RUN_DIR)
         if ckpt_fb is None or not Path(ckpt_fb).is_file():
             raise RuntimeError(f"Failed to restore checkpoint from {{run_drv}} or {{src_drv}}")
+    # Wipe polluted disk & checkpoint distillation/macro buffers + reset Adam first-order momentum
+    shutil.rmtree(RUN_DIR / "macro_search_buffer", ignore_errors=True)
+    shutil.rmtree(RUN_DIR / "lookahead_distill_buffer", ignore_errors=True)
+    for meta_fn in ("summary.json", "progress.jsonl", "run_config.json", "wandb_run.json"):
+        (RUN_DIR / meta_fn).unlink(missing_ok=True)
     raw_seed = torch.load(RUN_DIR / "ppo_latest.pt", map_location="cpu", weights_only=False)
     raw_seed.pop("lookahead_distill", None)
     raw_seed.pop("macro_search", None)
@@ -572,9 +602,11 @@ ckpt_dir = RUN_DIR / "checkpoints"
 ckpt_dir.mkdir(parents=True, exist_ok=True)
 seed_ckpt = ckpt_dir / f"update_{{restored_update:06d}}.pt"
 seed_pool = ckpt_dir / f"update_{{restored_update:06d}}.pool.json"
+if seeded_fresh_from_u1940 and seed_ckpt.exists():
+    seed_ckpt.unlink()
 if not seed_ckpt.is_file():
     os.link(RUN_DIR / "ppo_latest.pt", seed_ckpt)
-if (RUN_DIR / "opponent_pool.json").is_file() and not seed_pool.is_file():
+if (RUN_DIR / "opponent_pool.json").is_file() and (seeded_fresh_from_u1940 or not seed_pool.is_file()):
     shutil.copyfile(RUN_DIR / "opponent_pool.json", seed_pool)
 
 drv_cfg_path = DRIVE / "preparation/sparky_value_bc_v2/cr_train_config_g4.json"
