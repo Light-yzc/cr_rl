@@ -631,6 +631,7 @@ if (PREP / "validation_history.pt").is_file():
 cfg.update(
     expand_decks=str(ROOT / "configs/decks_expansion_full_meta.yaml"),
     validation_pairs=24,
+    trainer_max_restarts=20,
     army_reward_mode="elixir_potential",
     army_elixir_config=str(ROOT / "configs/army_elixir_conserved.yaml"),
     army_elixir_beta=0.010,
