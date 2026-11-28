@@ -62,7 +62,14 @@ def prepare_private_device(serial, *, adb='adb', run=subprocess.run):
     # must already be connected; no discovery or modification of other devices.
     if serial.startswith('127.0.0.1:'):
         command('connect',serial)
-    identity=command('-s',serial,'shell','id','-u')
+    try:
+        identity=command('-s',serial,'shell','id','-u')
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        if not serial.startswith('127.0.0.1:'):
+            raise
+        time.sleep(0.5)
+        command('connect',serial)
+        identity=command('-s',serial,'shell','id','-u')
     changed=False
     if identity!='0':
         command('-s',serial,'root')

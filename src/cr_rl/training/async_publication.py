@@ -97,7 +97,7 @@ class BoundedAsyncPublisher:
             began = time.perf_counter()
             if not self.checksum:
                 from cr_rl.training.fast_publication import publish_snapshot
-                manifest = publish_snapshot(snapshot, self.destination, update, keep_generations=1)
+                manifest = publish_snapshot(snapshot, self.destination, update, keep_generations=2)
                 seconds = time.perf_counter() - began
                 if after_publish is not None:
                     after_publish(manifest, seconds, snapshot_seconds, backpressure_seconds)

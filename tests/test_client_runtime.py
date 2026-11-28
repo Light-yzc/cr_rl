@@ -28,6 +28,23 @@ def test_no_restart_if_root_and_no_fake_success_on_denial():
         prepare_private_device('127.0.0.1:16416',run=denied)
 
 
+def test_prepare_private_device_retries_once_on_transient_loopback_disconnect():
+    calls=[]
+    id_attempts=0
+    def run(argv,**kwargs):
+        nonlocal id_attempts
+        calls.append(argv)
+        if argv[-2:]==['id','-u']:
+            id_attempts+=1
+            if id_attempts==1:
+                raise subprocess.CalledProcessError(1,argv)
+            return SimpleNamespace(stdout='0')
+        return SimpleNamespace(stdout='connected')
+    res=prepare_private_device('127.0.0.1:16416',adb='adb',run=run)
+    assert res['uid']==0
+    assert calls.count(['adb','connect','127.0.0.1:16416'])==2
+
+
 def test_reconnects_only_requested_transport_and_verifies_state():
     calls=[]
     connected=False

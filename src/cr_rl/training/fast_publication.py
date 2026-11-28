@@ -11,6 +11,12 @@ def copy_once(source, target):
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_name(target.name+'.partial')
     shutil.copyfile(source, temp)
+    try:
+        with temp.open('rb+') as fh:
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError:
+        pass
     if temp.stat().st_size != source.stat().st_size:
         raise IOError('Incomplete copy: '+target.name)
     temp.replace(target)
@@ -45,9 +51,12 @@ def publish_snapshot(snapshot, destination, update, *, keep_generations=2):
     atomic_json(destination/'latest.json',dict(update=update,
         generation=str(generation.relative_to(destination)),checksum_scans=False,**actor_receipt))
     generations = sorted(p for p in (destination/'generations').glob('update_*')
-                         if (p/'opponent_pool.json').is_file() and (p/'ppo_latest.pt').is_file())
+                         if (p/'opponent_pool.json').is_file() and (p/'ppo_latest.pt').is_file()
+                         and (p/'ppo_latest.pt').stat().st_size > 0)
     if keep_generations<1: raise ValueError('At least one restore generation is required')
     retained = generations[-keep_generations:]
+    if generation not in retained:
+        return dict(update=update,checksum_scans=False,generation=str(generation))
     active = set()
     for path in retained:
         for row in json.loads((path/'opponent_pool.json').read_text())['entries']:

@@ -322,43 +322,36 @@ def _is_engaged_global_spell(
     is_rage = bool(rage_card_ids) and (card_id in rage_card_ids)
 
     if is_rage:
-        scale = float((getattr(schema, "scales", None) or {}).get("elixir_scale", 10000))
-        elix_idx = (getattr(schema, "header", None) or {}).get("elixir")
-        res_idx = (getattr(schema, "header", None) or {}).get("elixir_reserved")
-        elix_v = float(raw_obs[elix_idx[0]]) if elix_idx else 0.0
-        res_v = max(0.0, float(raw_obs[res_idx[0]])) if res_idx else 0.0
-        avail_bars = (elix_v - res_v) / scale
-        low_elixir = 1.9 <= avail_bars < 4.2
-
-        # Allow finishing off a critically low enemy tower (<= 170 HP) within Rage splash radius
+        # 1. Allow finishing off a critically low enemy tower (<= 170 HP) within Rage splash radius
         if len(enemy_t):
             d2_et = (enemy_t[:, e["x"]] - tx) ** 2 + (enemy_t[:, e["y"]] - ty) ** 2
             if bool(((d2_et <= (2.8 * tu) ** 2) & (enemy_t[:, e["hp"]] <= 170)).any()):
                 return True
-        # Defensive swarm Rage: >=2 barrel/swarm units on tower (y<=10.5, hp<=340: buffs tower + 1-shots Goblins, rejects 368HP Minions) OR >=5 lethal-splash swarm up to river (y<=15.5, hp<=205)
-        if ty <= 15.5 * tu and len(enemy_c):
+        # 2. Avoid double-stacking onto an already-active friendly area spell (e.g. Rage)
+        area_kind = schema.kinds.get("area", -1)
+        if area_kind >= 0:
+            own_areas = ents[(ents[:, e["side"]] == 0) & (ents[:, e["kind"]] == area_kind)]
+            if len(own_areas):
+                d2_a = (own_areas[:, e["x"]] - tx) ** 2 + (own_areas[:, e["y"]] - ty) ** 2
+                if bool((d2_a <= (3.0 * tu) ** 2).any()):
+                    return False
+        # 3. Swarm clear: >=2 barrel/swarm units on own side (y<=12.0, hp<=340) OR >=5 lethal-splash swarm anywhere (y<=26.0, hp<=205)
+        if ty <= 26.0 * tu and len(enemy_c):
             d2_ec = (enemy_c[:, e["x"]] - tx) ** 2 + (enemy_c[:, e["y"]] - ty) ** 2
-            hp_cap = 340 if ty <= 10.5 * tu else 205
+            hp_cap = 340 if ty <= 12.0 * tu else 205
             swarm_cnt = int(((d2_ec <= (3.2 * tu) ** 2) & (enemy_c[:, e["hp"]] <= hp_cap)).sum())
-            if swarm_cnt >= (2 if ty <= 10.5 * tu else 5):
+            if swarm_cnt >= (2 if ty <= 12.0 * tu else 5):
                 return True
-        if low_elixir and len(enemy_c):
-            unbuffed_threat = (enemy_c[:, e["y"]] <= 16.5 * tu) & (
-                ((enemy_c[:, e["x"]] - tx) ** 2 + (enemy_c[:, e["y"]] - ty) ** 2) > (5.5 * tu) ** 2
-            )
-            if int(enemy_c[unbuffed_threat, e["hp"]].sum()) >= 600:
-                return False
+        # 4. Engaged friendly troops (any elixir >= 2.0, offense or defense) OR proactive heavy bridge push
         if not len(own_c):
             return False
         d2_own = (own_c[:, e["x"]] - tx) ** 2 + (own_c[:, e["y"]] - ty) ** 2
         buffed = own_c[d2_own <= (4.2 * tu) ** 2]
-        min_hp = 1800 if low_elixir else 450
-        if not len(buffed) or int(buffed[:, e["hp"]].sum()) < min_hp:
+        buffed_hp = int(buffed[:, e["hp"]].sum()) if len(buffed) else 0
+        if buffed_hp < 600:
             return False
-        if low_elixir and float(buffed[:, e["y"]].max()) < 13.5 * tu:
-            return False
-        # Proactive bridge-push Rage: >=1200 HP friendly push at/across bridge (y>=13.5) marching toward alive enemy tower
-        if int(buffed[:, e["hp"]].sum()) >= 1200 and float(buffed[:, e["y"]].max()) >= 13.5 * tu and len(enemy_t):
+        # Proactive heavy bridge push (>=1800 HP at/past bridge marching toward alive enemy tower)
+        if buffed_hp >= 1800 and float(buffed[:, e["y"]].max()) >= 13.5 * tu and len(enemy_t):
             return True
         targets = np.concatenate([enemy_c, enemy_t], axis=0) if (len(enemy_c) or len(enemy_t)) else np.empty((0, ents.shape[1]))
         if not len(targets):
@@ -714,7 +707,7 @@ def _engaged_push_rage_action(
         right_eng = engaged[engaged[:, e["x"]] >= width_u * 0.5]
         cand_cl = left_eng if int(left_eng[:, e["hp"]].sum()) >= int(right_eng[:, e["hp"]].sum()) else right_eng
         tot_hp = int(cand_cl[:, e["hp"]].sum())
-        if tot_hp >= int(min_push_hp) and (bool((cand_cl[:, e["y"]] >= 13.5 * tu).any()) or tot_hp >= 2200):
+        if tot_hp >= min(int(min_push_hp), 650):
             cluster = cand_cl
 
     # Proactive bridge-push path: heavy push (>=1800 HP) already at/past bridge (y>=13.5) marching toward alive enemy tower
@@ -738,8 +731,11 @@ def _engaged_push_rage_action(
     w = np.maximum(cluster[:, e["max_hp"]], cluster[:, e["hp"]]).astype(np.float64)
     cx = float((cluster[:, e["x"]] * w).sum() / w.sum())
     cy = float((cluster[:, e["y"]] * w).sum() / w.sum())
+    # Account for Rage's 1.0s deploy delay by leading advancing pushes forward toward enemy side
     if proactive_lead:
-        cy = min(cy + 1.5 * tu, 25.0 * tu)
+        cy = min(cy + 1.6 * tu, 25.0 * tu)
+    elif cy >= 11.0 * tu:
+        cy = min(cy + 1.2 * tu, 25.0 * tu)
 
     # Skip if an active friendly area spell (e.g. Rage) is already ticking on this push
     area_kind = schema.kinds.get("area", -1)
@@ -879,8 +875,12 @@ def _tactical_spatial_candidates(
                 r_lo = min(12, max(7, int(round(tr_t)) - 8))
                 r_hi = min(14, max(12, int(round(tr_t))))
                 support_zone = same_tank_half & (grid_r >= r_lo) & (grid_r <= r_hi) & (np.abs(grid_c - tc_t) <= 4.5)
+                hand_idx_sup = schema.header.get("hand_card")
                 for _sc, pa, slot in group_best[:3]:
                     if slot < 0:
+                        continue
+                    cid_sup = int(raw_obs[hand_idx_sup[slot]]) if (hand_idx_sup is not None and slot < len(hand_idx_sup)) else -1
+                    if collector_card_ids and cid_sup in collector_card_ids:
                         continue
                     lo = 1 + slot * tiles
                     hi = lo + tiles

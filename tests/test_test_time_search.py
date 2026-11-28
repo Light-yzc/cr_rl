@@ -1001,5 +1001,78 @@ def test_split_vote_argmax_fix_low_elixir_rage_guard_and_conserved_potential():
     assert _potential_value(r10, schema) < _potential_value(r9, schema)  # Leaking at 10.0 is penalized!
 
 
+def test_mcts_unburdened_low_elixir_engaged_rage_and_collector_tank_support_exclusion():
+    from cr_rl.training.test_time_search import _engaged_push_rage_action, _is_engaged_global_spell
+
+    @dataclass
+    class _RageSchema(_DummySchema):
+        tile_units: int = 1000
+        width_units: int = 18000
+        height_units: int = 32000
+        entity: dict = None
+        kinds: dict = None
+        flags: dict = None
+
+        def __post_init__(self):
+            super().__post_init__()
+            self.header["hand_cost"] = (11, 12, 13, 14)
+            self.entity = {"side": 0, "kind": 1, "x": 2, "y": 3, "hp": 4, "max_hp": 5, "flags": 6}
+            self.kinds = {"character": 1, "tower": 2, "projectile": 3, "area": 4}
+            self.flags = {"alive": 1, "building": 2}
+            self._ents = np.zeros((0, 7), dtype=np.int32)
+
+        def entities(self, _raw):
+            return self._ents
+
+    schema = _RageSchema()
+    raw = np.zeros(224, dtype=np.int32)
+    raw[2] = 24000  # 2.4 elixir (previously blocked by low_elixir < 4.2!)
+    raw[7:11] = [99, 10, 3, 27]  # [Rage(2), Collector(6), Giant(5), DarkPrince(4)]
+    raw[11:15] = [2, 6, 5, 4]
+    # Own DarkPrince (1500 HP) fighting enemy Knight at y=11.5, plus enemy unit in opposite lane
+    schema._ents = np.array(
+        [
+            [0, 1, 3500, 11500, 1500, 1500, 1],
+            [1, 1, 3800, 13200, 1400, 1400, 1],
+            [1, 1, 15000, 14000, 1200, 1200, 1],
+        ],
+        dtype=np.int32,
+    )
+    legal = np.zeros(2307, dtype=bool)
+    legal[0] = True
+    legal[1:577] = True
+
+    act = _engaged_push_rage_action(0, raw, legal, schema, rage_card_ids=(99,))
+    assert act is not None and 1 <= act <= 576
+    # Forward lead should place Rage slightly ahead of y=11.5 (row >= 12)
+    r_act = (act - 1) // 18
+    assert 11 <= r_act <= 14
+    assert _is_engaged_global_spell(act, raw, legal, schema, rage_card_ids=(99,)) is True
+
+    # Adding an active friendly Rage area right there suppresses duplicate Rage!
+    schema._ents = np.vstack([schema._ents, np.array([[0, 4, 3500, 12500, 1, 1, 1]], dtype=np.int32)])
+    assert _engaged_push_rage_action(0, raw, legal, schema, rage_card_ids=(99,)) is None
+    assert _is_engaged_global_spell(act, raw, legal, schema, rage_card_ids=(99,)) is False
+
+    # Engaged Giant tank support MUST skip Elixir Collector (id=10)
+    raw[2] = 70000
+    schema._ents = np.array(
+        [
+            [0, 1, 3500, 14500, 3200, 4090, 1],  # Engaged Giant at left bridge
+            [1, 1, 4000, 17500, 1500, 1500, 1],
+        ],
+        dtype=np.int32,
+    )
+    legal_sup = np.zeros(2307, dtype=bool)
+    legal_sup[0] = True
+    legal_sup[1 + 1 * 576 : 1 + 1 * 576 + 270] = True  # Collector slot 1
+    lp_sup = torch.full((2307,), -15.0)
+    lp_sup[1 + 1 * 576 + 1 * 18 + 1] = -0.5  # Collector raw argmax in safe back corner
+    lp_sup[0] = -2.0
+    cands_sup = select_macro_candidates(lp_sup, legal_sup, raw, schema, max_candidates=6, collector_card_ids=(10,))
+    collector_bridge = [a for a in cands_sup if (1 + 1 * 576) <= a < (1 + 2 * 576) and ((a - 1 - 576) // 18) >= 7]
+    assert collector_bridge == []
+
+
 
 

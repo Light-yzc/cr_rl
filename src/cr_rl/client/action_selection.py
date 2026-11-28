@@ -32,14 +32,10 @@ LETHAL_SPELL_TOWER_DMG_L11 = {
 
 
 def _rage_has_engagement(x: float, y: float, obs: np.ndarray) -> bool:
-    """Reject casting Rage onto empty grass or starving low-elixir defense; require real engagement."""
+    """Reject empty-grass or duplicate-stacked Rage; allow real combat, swarm splash, and heavy bridge pushes."""
     count = int(obs[S.H_ENTITY_COUNT])
     if count <= 0:
         return False
-    elix_raw = int(obs[S.H_ELIXIR]) if len(obs) > S.H_ELIXIR else 0
-    res_raw = max(0, int(obs[S.H_ELIXIR_RESERVED])) if len(obs) > S.H_ELIXIR_RESERVED else 0
-    avail_bars = float(elix_raw - res_raw) / float(S.ELIXIR_SCALE)
-    low_elixir = 1.9 <= avail_bars < 4.2
 
     rows = np.asarray(obs[S.HEADER_INTS:]).reshape(S.MAX_ENTITIES, S.ENTITY_INTS)[:count]
     alive = rows[:, S.E_HP] > 0
@@ -48,37 +44,39 @@ def _rage_has_engagement(x: float, y: float, obs: np.ndarray) -> bool:
     enemy_c = rows[chars & (rows[:, S.E_SIDE] == 1)]
     enemy_t = rows[towers & (rows[:, S.E_SIDE] == 1)]
 
+    # 1. Critically low enemy tower finish within Rage splash radius
     if len(enemy_t):
         d2_et = (enemy_t[:, S.E_X] / 1000.0 - x) ** 2 + (enemy_t[:, S.E_Y] / 1000.0 - y) ** 2
         if bool(((d2_et <= 2.8 ** 2) & (enemy_t[:, S.E_HP] <= 170)).any()):
             return True
 
-    if y <= 15.0 and len(enemy_c):
-        d2_ec = (enemy_c[:, S.E_X] / 1000.0 - x) ** 2 + (enemy_c[:, S.E_Y] / 1000.0 - y) ** 2
-        hp_cap = 340 if y <= 10.5 else 205
-        swarm_cnt = int(((d2_ec <= 3.2 ** 2) & (enemy_c[:, S.E_HP] <= hp_cap)).sum())
-        if swarm_cnt >= (2 if y <= 10.5 else 6):
-            return True
-
-    if low_elixir and len(enemy_c):
-        unbuffed_threat = (enemy_c[:, S.E_Y] / 1000.0 <= 16.5) & (
-            ((enemy_c[:, S.E_X] / 1000.0 - x) ** 2 + (enemy_c[:, S.E_Y] / 1000.0 - y) ** 2) > 5.5 ** 2
-        )
-        if int(enemy_c[unbuffed_threat, S.E_HP].sum()) >= 600:
+    # 2. Avoid double-stacking Rage onto an already-active friendly area spell
+    own_areas = rows[(rows[:, S.E_SIDE] == 0) & (rows[:, S.E_KIND] == S.KIND_AREA)]
+    if len(own_areas):
+        d2_a = (own_areas[:, S.E_X] / 1000.0 - x) ** 2 + (own_areas[:, S.E_Y] / 1000.0 - y) ** 2
+        if bool((d2_a <= 3.0 ** 2).any()):
             return False
 
+    # 3. Swarm clear: >=2 barrel/swarm units on own side (y<=12.0, hp<=340) OR >=5 lethal-splash swarm anywhere (y<=26.0, hp<=205)
+    if y <= 26.0 and len(enemy_c):
+        d2_ec = (enemy_c[:, S.E_X] / 1000.0 - x) ** 2 + (enemy_c[:, S.E_Y] / 1000.0 - y) ** 2
+        hp_cap = 340 if y <= 12.0 else 205
+        swarm_cnt = int(((d2_ec <= 3.2 ** 2) & (enemy_c[:, S.E_HP] <= hp_cap)).sum())
+        if swarm_cnt >= (2 if y <= 12.0 else 5):
+            return True
+
+    # 4. Friendly troop engagement (any elixir >= 2.0, offense or defense) OR proactive heavy bridge push
     own_troop = chars & (rows[:, S.E_SIDE] == 0) & ((rows[:, S.E_FLAGS] & S.F_BUILDING) == 0)
     own_c = rows[own_troop]
     if not len(own_c):
         return False
     d2_own = (own_c[:, S.E_X] / 1000.0 - x) ** 2 + (own_c[:, S.E_Y] / 1000.0 - y) ** 2
     buffed = own_c[d2_own <= 3.8 ** 2]
-    min_hp = 1800 if low_elixir else 450
-    if not len(buffed) or int(buffed[:, S.E_HP].sum()) < min_hp:
+    buffed_hp = int(buffed[:, S.E_HP].sum()) if len(buffed) else 0
+    if buffed_hp < 600:
         return False
-    if low_elixir and float(buffed[:, S.E_Y].max()) / 1000.0 < 13.5:
-        return False
-    if int(buffed[:, S.E_HP].sum()) >= 1200 and float(buffed[:, S.E_Y].max()) / 1000.0 >= 13.5 and len(enemy_t):
+    # Proactive heavy bridge push (>=1800 HP already at/past bridge marching toward alive enemy tower)
+    if buffed_hp >= 1800 and float(buffed[:, S.E_Y].max()) / 1000.0 >= 13.5 and len(enemy_t):
         return True
     targets = np.concatenate([enemy_c, enemy_t], axis=0) if (len(enemy_c) or len(enemy_t)) else np.empty((0, S.ENTITY_INTS))
     if not len(targets):
@@ -86,6 +84,159 @@ def _rage_has_engagement(x: float, y: float, obs: np.ndarray) -> bool:
     dx = buffed[:, None, S.E_X] / 1000.0 - targets[None, :, S.E_X] / 1000.0
     dy = buffed[:, None, S.E_Y] / 1000.0 - targets[None, :, S.E_Y] / 1000.0
     return bool(((dx * dx + dy * dy) <= 7.0 ** 2).any())
+
+
+class HazardTempoState:
+    """Stateful cumulative-intent integrator for balanced `hazard` deployment tempo.
+
+    Bridges the binary cliff of single-frame `argmax` (ultra-passive below 50%, snap-play above 50%)
+    and the noisy single-frame randomness of `policy_sample`.
+    """
+
+    def __init__(
+        self,
+        *,
+        instant_play: float = 0.55,
+        instant_slot: float = 0.45,
+        min_step_play: float = 0.22,
+        hazard_trigger: float = 0.65,
+    ):
+        self.instant_play = float(instant_play)
+        self.instant_slot = float(instant_slot)
+        self.min_step_play = float(min_step_play)
+        self.hazard_trigger = float(hazard_trigger)
+        self.accum_hazard: float = 0.0
+        self.sticky_slot: int | None = None
+        self.sticky_frames: int = 0
+
+    def reset(self) -> None:
+        self.accum_hazard = 0.0
+        self.sticky_slot = None
+        self.sticky_frames = 0
+
+    def step(self, play_mass: float, top_slot: int | None, top_slot_mass: float, elixir_bars: float) -> tuple[bool, str]:
+        """Update cumulative play hazard and return `(should_play, reason_hint)`."""
+        # Smoothly ease thresholds as elixir approaches 10.0 so there is no abrupt 9.5-bar cliff
+        if elixir_bars >= 9.0:
+            frac = min(1.0, max(0.0, (elixir_bars - 9.0) / 0.5))
+            inst_p = self.instant_play - 0.20 * frac
+            inst_s = self.instant_slot - 0.15 * frac
+            trig = self.hazard_trigger - 0.25 * frac
+            min_step = self.min_step_play * (1.0 - 0.5 * frac)
+        else:
+            inst_p = self.instant_play
+            inst_s = self.instant_slot
+            trig = self.hazard_trigger
+            min_step = self.min_step_play
+
+        if play_mass >= inst_p or top_slot_mass >= inst_s:
+            return True, "hazard_instant"
+
+        if play_mass < min_step or top_slot is None:
+            self.accum_hazard *= 0.40
+            if self.accum_hazard < 0.05:
+                self.reset()
+            return False, "hazard_wait"
+
+        if self.sticky_slot is not None and top_slot != self.sticky_slot:
+            self.accum_hazard *= 0.50
+            self.sticky_frames = 0
+        self.sticky_slot = top_slot
+        self.sticky_frames += 1
+        self.accum_hazard = 1.0 - (1.0 - self.accum_hazard) * (1.0 - min(0.95, play_mass))
+        if self.accum_hazard >= trig:
+            return True, "hazard_accum"
+        return False, "hazard_wait"
+
+
+def _refine_rage_tile(tile: int, slot_probs: np.ndarray, slot_legal: np.ndarray, obs: np.ndarray) -> int:
+    """Nudge Rage within local high-probability neighborhood (+1..2 lead / swarm cover) without overriding intent."""
+    count = int(obs[S.H_ENTITY_COUNT]) if len(obs) > S.H_ENTITY_COUNT else 0
+    if count <= 0:
+        return tile
+    rows = np.asarray(obs[S.HEADER_INTS:]).reshape(S.MAX_ENTITIES, S.ENTITY_INTS)[:count]
+    chars = (rows[:, S.E_HP] > 0) & (rows[:, S.E_KIND] == S.KIND_CHARACTER)
+    own_c = rows[chars & (rows[:, S.E_SIDE] == 0) & ((rows[:, S.E_FLAGS] & S.F_BUILDING) == 0)]
+    ene_sw = rows[chars & (rows[:, S.E_SIDE] == 1) & (rows[:, S.E_HP] <= 340)]
+    if not len(own_c) and not len(ene_sw):
+        return tile
+    base_r, base_c = divmod(int(tile), S.COLS)
+    base_p = float(slot_probs[tile])
+    if base_p <= 0:
+        return tile
+    best_tile = int(tile)
+    best_score = -1e9
+    for dr in (-1, 0, 1, 2):
+        for dc in (-1, 0, 1):
+            if abs(dr) + abs(dc) > 2:
+                continue
+            nr, nc = base_r + dr, base_c + dc
+            if not (0 <= nr < S.ROWS and 0 <= nc < S.COLS):
+                continue
+            cand = nr * S.COLS + nc
+            if not slot_legal[cand] or float(slot_probs[cand]) < 0.25 * base_p:
+                continue
+            cx, cy = nc + 0.5, nr + 0.5
+            score = 0.0
+            if len(own_c):
+                # Reward leading advancing troops (+1.2 tiles ahead in y when moving toward enemy)
+                lead_y = np.where(own_c[:, S.E_Y] >= 11000, np.minimum(own_c[:, S.E_Y] / 1000.0 + 1.2, 25.0), own_c[:, S.E_Y] / 1000.0)
+                d2_o = (own_c[:, S.E_X] / 1000.0 - cx) ** 2 + (lead_y - cy) ** 2
+                covered_hp = float(own_c[d2_o <= 3.0 ** 2, S.E_HP].sum())
+                score += covered_hp / 1000.0
+            if len(ene_sw):
+                d2_s = (ene_sw[:, S.E_X] / 1000.0 - cx) ** 2 + (ene_sw[:, S.E_Y] / 1000.0 - cy) ** 2
+                score += 0.45 * float((d2_s <= 3.0 ** 2).sum())
+            score += 0.20 * (float(slot_probs[cand]) / base_p)
+            if score > best_score:
+                best_score = score
+                best_tile = cand
+    return best_tile
+
+
+def _avoid_endgame_backline_tile(
+    tile: int,
+    slot_probs: np.ndarray,
+    slot_legal: np.ndarray,
+    obs: np.ndarray,
+    card_name: str | None,
+) -> int:
+    """In the final 12s when behind/tied and an enemy tower is <=500 HP, avoid slow backline (row<=5) drops."""
+    if card_name in ("Elixir Collector", None) or len(obs) < S.H_TOWERS + 12:
+        return tile
+    n_leg = int(slot_legal.sum())
+    if not (0 < n_leg < 500):
+        return tile
+    overtime = int(obs[S.H_OVERTIME]) > 0
+    sec_left = int(obs[S.H_SECTION_LEFT_MS])
+    if overtime or not (0 < sec_left <= 12000):
+        return tile
+    own_crowns = int(obs[S.H_CROWNS_OWN]) if hasattr(S, "H_CROWNS_OWN") else int(obs[4])
+    ene_crowns = int(obs[S.H_CROWNS_ENEMY]) if hasattr(S, "H_CROWNS_ENEMY") else int(obs[5])
+    if own_crowns > ene_crowns:
+        return tile
+    row, _col = divmod(int(tile), S.COLS)
+    if row > 5:
+        return tile
+    ene_l = int(obs[S.H_TOWERS + 8])
+    ene_r = int(obs[S.H_TOWERS + 10])
+    if 0 < ene_l <= 500 and (ene_r == 0 or ene_l <= ene_r):
+        want_left = True
+    elif 0 < ene_r <= 500 and (ene_l == 0 or ene_r < ene_l):
+        want_left = False
+    else:
+        return tile
+    grid_idx = np.arange(S.TILES, dtype=np.int32)
+    grid_r = grid_idx // S.COLS
+    grid_c = grid_idx % S.COLS
+    lane = (grid_c < S.COLS // 2) if want_left else (grid_c >= S.COLS // 2)
+    bridge = slot_legal & lane & (grid_r >= 11) & (grid_r <= 14)
+    if not bridge.any():
+        return tile
+    cand = int(np.argmax(np.where(bridge, slot_probs, -np.inf)))
+    if float(slot_probs[cand]) >= 0.02 * max(float(slot_probs[tile]), 1e-9):
+        return cand
+    return tile
 
 
 def _best_cluster_tile(slot_probs: np.ndarray, slot_legal: np.ndarray) -> int:
@@ -220,9 +371,10 @@ def select_live_action(
     rng=None,
     ability_threshold=0.28,
     selection_mode="confidence",
+    tempo_state: HazardTempoState | None = None,
 ):
-    """Select an action directly from model probabilities with empty-spell sanity veto."""
-    if selection_mode not in ("policy_sample", "confidence", "argmax"):
+    """Select an action directly from model probabilities with physical empty-spell veto."""
+    if selection_mode not in ("policy_sample", "confidence", "argmax", "hazard"):
         raise ValueError("Unknown live selection mode")
     p = np.asarray(probabilities, dtype=np.float64).copy()
     legal = np.asarray(legal_mask, dtype=bool)
@@ -253,17 +405,20 @@ def select_live_action(
             info["selection_reason"] = "ability"
         return proposed, info
 
-    if selection_mode == "argmax":
+    if selection_mode in ("argmax", "hazard"):
         wait_mass = float(p[0])
         tiles = p[1 : S.FIRST_ABILITY].reshape(4, S.TILES)
         slots = tiles.sum(-1)
         skills = p[S.FIRST_ABILITY :]
         valid_non_wait = float(slots.sum()) + float(skills.sum())
+        elixir_bars = float(obs[S.H_ELIXIR]) / float(S.ELIXIR_SCALE) if len(obs) > S.H_ELIXIR else 0.0
         near_full = int(obs[S.H_ELIXIR]) >= 95000 and valid_non_wait >= 0.05
 
         lethal = _lethal_tower_spell_action(hand_cards, legal, tiles, slots, obs)
         if lethal is not None:
             l_act, l_slot = lethal
+            if tempo_state is not None:
+                tempo_state.reset()
             return l_act, {
                 "selection_mode": selection_mode,
                 "proposed_action": l_act,
@@ -273,7 +428,23 @@ def select_live_action(
                 "selection_reason": "lethal_tower_spell",
             }
 
-        if (not near_full) and legal[0] and wait_mass >= valid_non_wait:
+        hazard_hint = None
+        if selection_mode == "hazard":
+            st = tempo_state if tempo_state is not None else HazardTempoState()
+            top_slot = int(np.argmax(slots)) if float(slots.max()) > 0 else None
+            top_slot_mass = float(slots[top_slot]) if top_slot is not None else 0.0
+            should_play, hazard_hint = st.step(valid_non_wait, top_slot, top_slot_mass, elixir_bars)
+            if (not near_full) and (not should_play) and legal[0]:
+                return 0, {
+                    "selection_mode": selection_mode,
+                    "proposed_action": 0,
+                    "proposed_action_probability": wait_mass,
+                    "spell_vetoed": False,
+                    "selection_reason": "hazard_wait",
+                    "hazard_accum": round(float(st.accum_hazard), 4),
+                    "hazard_sticky_frames": int(st.sticky_frames),
+                }
+        elif (not near_full) and legal[0] and wait_mass >= valid_non_wait:
             return 0, {
                 "selection_mode": selection_mode,
                 "proposed_action": 0,
@@ -285,6 +456,8 @@ def select_live_action(
         skill = int(skills.argmax())
         if skills[skill] >= float(slots.max()) and skills[skill] > 0 and legal[S.FIRST_ABILITY + skill]:
             ab_act = S.FIRST_ABILITY + skill
+            if tempo_state is not None:
+                tempo_state.reset()
             return ab_act, {
                 "selection_mode": selection_mode,
                 "proposed_action": ab_act,
@@ -298,22 +471,36 @@ def select_live_action(
             slot = int(slot)
             if slots[slot] <= 0:
                 break
-            if first_vetoed is not None and (not near_full) and legal[0] and wait_mass >= valid_non_wait:
-                break
+            if first_vetoed is not None and (not near_full) and legal[0]:
+                if selection_mode == "argmax" and wait_mass >= valid_non_wait:
+                    break
+                if selection_mode == "hazard" and valid_non_wait < 0.22:
+                    break
             slot_legal = legal[1 + slot * S.TILES : 1 + (slot + 1) * S.TILES]
             if not slot_legal.any():
                 valid_non_wait = max(0.0, valid_non_wait - float(slots[slot]))
                 continue
             card_name = hand_cards[slot] if slot < len(hand_cards) else None
             tile = _best_cluster_tile(tiles[slot], slot_legal)
-            tile = _orient_center_seam_tile(tile, tiles[slot], slot_legal, obs)
+            if card_name == "Rage":
+                tile = _refine_rage_tile(tile, tiles[slot], slot_legal, obs)
+            else:
+                tile = _orient_center_seam_tile(tile, tiles[slot], slot_legal, obs)
+                tile = _avoid_endgame_backline_tile(tile, tiles[slot], slot_legal, obs, card_name)
             proposed = S.play_tile(slot, tile)
             if not spell_has_target(proposed, card_name, obs):
                 if first_vetoed is None:
                     first_vetoed = proposed
                 valid_non_wait = max(0.0, valid_non_wait - float(slots[slot]))
                 continue
-            reason = "leak_guard_play" if (near_full and wait_mass >= valid_non_wait) else "play"
+            if tempo_state is not None:
+                tempo_state.reset()
+            if near_full and ((selection_mode == "argmax" and wait_mass >= valid_non_wait) or hazard_hint == "hazard_wait"):
+                reason = "leak_guard_play"
+            elif selection_mode == "hazard" and hazard_hint == "hazard_accum":
+                reason = "hazard_play"
+            else:
+                reason = "play"
             return proposed, {
                 "selection_mode": selection_mode,
                 "proposed_action": proposed,
@@ -324,6 +511,8 @@ def select_live_action(
             }
 
         if first_vetoed is not None:
+            if tempo_state is not None:
+                tempo_state.reset()
             return 0, {
                 "selection_mode": selection_mode,
                 "proposed_action": first_vetoed,
@@ -337,7 +526,7 @@ def select_live_action(
             "proposed_action": 0,
             "proposed_action_probability": wait_mass,
             "spell_vetoed": False,
-            "selection_reason": "policy_wait",
+            "selection_reason": "hazard_wait" if selection_mode == "hazard" else "policy_wait",
         }
 
     tiles = p[1 : S.FIRST_ABILITY].reshape(4, S.TILES)
@@ -387,9 +576,14 @@ def select_live_action(
         slot_legal = legal[1 + slot * S.TILES : 1 + (slot + 1) * S.TILES]
         if not slot_legal.any():
             continue
+        card_name = hand_cards[slot] if slot < len(hand_cards) else None
         if tile_temperature <= 1e-4:
             tile = _best_cluster_tile(tiles[slot], slot_legal)
-            tile = _orient_center_seam_tile(tile, tiles[slot], slot_legal, obs)
+            if card_name == "Rage":
+                tile = _refine_rage_tile(tile, tiles[slot], slot_legal, obs)
+            else:
+                tile = _orient_center_seam_tile(tile, tiles[slot], slot_legal, obs)
+                tile = _avoid_endgame_backline_tile(tile, tiles[slot], slot_legal, obs, card_name)
         else:
             rng = np.random.default_rng() if rng is None else rng
             valid = slot_legal & (tiles[slot] > 0)
@@ -398,7 +592,6 @@ def select_live_action(
             weights = np.exp(logp - logp.max())
             tile = int(rng.choice(S.TILES, p=weights / weights.sum()))
         action = S.play_tile(slot, tile)
-        card_name = hand_cards[slot] if slot < len(hand_cards) else None
         if not spell_has_target(action, card_name, obs):
             if first_vetoed is None:
                 first_vetoed = action

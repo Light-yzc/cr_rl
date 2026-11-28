@@ -30,7 +30,7 @@ from cr_rl.client.schema_adapter import NullsToSchemaV4Adapter
 from cr_rl.client.schema_v4 import SchemaV4
 from cr_rl.client.live_control import (PendingPlay,PendingAbility,reconcile_play,reconcile_ability,
                                       BattleClockGate,pending_targets_for)
-from cr_rl.client.action_selection import select_live_action
+from cr_rl.client.action_selection import HazardTempoState, select_live_action
 from cr_rl.client.diagnostics import DiagnosticRecorder,decision_reason,model_input_quality
 from cr_rl.client.persistent_touch import PersistentAdbTouch
 from cr_rl.client.runtime import prepare_private_device
@@ -145,10 +145,10 @@ def parse_args(argv=None):
     p.add_argument('--max-state-age',type=float,default=.4)
     p.add_argument('--seed',type=int,default=20261115)
     p.add_argument('--touch-transport',choices=['auto','persistent','shell'],default='auto')
-    p.add_argument('--selection-mode',choices=['policy_sample','confidence','argmax'],default='policy_sample',
-                   help='Sample the trained joint policy, take pure argmax, or use confidence thresholds')
-    p.add_argument('--action-mode',choices=['argmax','policy_sample','confidence'],default=None,
-                   help='Alias overriding --selection-mode (e.g. --action-mode argmax)')
+    p.add_argument('--selection-mode',choices=['policy_sample','confidence','argmax','hazard'],default='policy_sample',
+                   help='Sample the trained joint policy, take pure argmax, use cumulative hazard tempo, or confidence thresholds')
+    p.add_argument('--action-mode',choices=['argmax','policy_sample','confidence','hazard'],default=None,
+                   help='Alias overriding --selection-mode (e.g. --action-mode hazard)')
     p.add_argument('--play-threshold',type=float,default=.45)
     p.add_argument('--slot-threshold',type=float,default=.28)
     p.add_argument('--tile-temperature',type=float,default=0.0)
@@ -157,10 +157,10 @@ def parse_args(argv=None):
                    help='Alias private-server custom/hero/chef entities to trained CrForge vocabulary rows (default)')
     p.add_argument('--no-ood-aliases',dest='ood_aliases',action='store_false',
                    help='Disable private-server OOD entity aliasing')
-    p.add_argument('--reserve-to-wait',dest='reserve_to_wait',action='store_true',default=True,
-                   help='Fold unaffordable hand-card logits into WAIT so high-cost counters/tanks are banked for (default)')
+    p.add_argument('--reserve-to-wait',dest='reserve_to_wait',action='store_true',default=None,
+                   help='Force folding unaffordable hand-card logits into WAIT (default: match checkpoint config)')
     p.add_argument('--no-reserve-to-wait',dest='reserve_to_wait',action='store_false',
-                   help='Mask unaffordable hand-card logits before softmax instead of folding into WAIT')
+                   help='Force masking unaffordable hand-card logits before softmax instead of folding into WAIT')
     p.add_argument('--auto-battle',action='store_true',help='Click verified private-server battle and result buttons')
     p.add_argument('--prompt-result',action='store_true',
                    help='After a recorded terminal, ask the operator for win/loss/draw; unknown stays unlabeled')
@@ -212,9 +212,10 @@ class PolicyRuntime:
         model, infer, ticks = build_policy_inference(
             checkpoint, str(args.device), compute_value=False,
             precision='fp16' if is_cuda else 'fp32')
-        if getattr(args, 'reserve_to_wait', True) != bool(model.cfg.reserve_to_wait):
+        rtw_override = getattr(args, 'reserve_to_wait', None)
+        if rtw_override is not None and bool(rtw_override) != bool(model.cfg.reserve_to_wait):
             from dataclasses import replace
-            model.cfg = replace(model.cfg, reserve_to_wait=bool(getattr(args, 'reserve_to_wait', True)))
+            model.cfg = replace(model.cfg, reserve_to_wait=bool(rtw_override))
         del checkpoint
         if ticks != 8:
             raise ValueError('Private-server controller requires 8-tick v3 policy')
@@ -345,6 +346,7 @@ def run_battle(a, runtime, resources):
     pending=None;last_tick=-1;epoch=0;in_battle=False;plays=0;frames=0;confirmed=0
     stop_reason='time_limit';last_heartbeat=0.;wait_since=None;last_warning=0.
     clock_gate=BattleClockGate()
+    tempo_state=HazardTempoState()
     read_failures=0;terminal_record=None;previous_played_count=None
     emit('configuration',arguments=vars(a),checkpoint_sha256=runtime.checkpoint_sha,
          diagnostic_retention='complete bounded session, 32MiB segments')
@@ -431,6 +433,7 @@ def run_battle(a, runtime, resources):
                 epoch+=1;infer.reset();adapter.reset_match();pending=None
                 previous_played_count=None
                 clock_gate=BattleClockGate()
+                tempo_state.reset()
                 if bridge.pending:bridge.resolve('timed_out')
                 emit('battle_start',epoch=epoch,seat=snap.own_seat,tick=snap.tick)
             in_battle=True
@@ -496,7 +499,8 @@ def run_battle(a, runtime, resources):
             probabilities=distribution.probs[0].cpu().numpy()
             action,selection_info=select_live_action(probabilities,adapted.legal_mask,adapted.obs,
                 adapted.hand_cards,play_threshold=a.play_threshold,slot_threshold=a.slot_threshold,
-                tile_temperature=a.tile_temperature,rng=selection_rng,selection_mode=a.selection_mode)
+                tile_temperature=a.tile_temperature,rng=selection_rng,selection_mode=a.selection_mode,
+                tempo_state=tempo_state)
             proposal=int(selection_info.get('proposed_action',action))
             proposal_logp=float(distribution.log_prob(torch.as_tensor([proposal],device=logits.device))[0])
             play_probabilities=probabilities[1:2305].reshape(4,576)
