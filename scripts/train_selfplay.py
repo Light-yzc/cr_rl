@@ -1725,9 +1725,11 @@ def main() -> None:
         help='Fraction of training episodes initialized from human replay prefixes (0 disables)',
     )
     parser.add_argument('--replay-start-min-steps', type=int, default=35)
-    parser.add_argument('--replay-start-max-steps', type=int, default=240)
+    parser.add_argument('--replay-start-max-steps', type=int, default=560)
     parser.add_argument('--replay-start-counter-prob', type=float, default=0.60)
     parser.add_argument('--replay-start-sparky-prob', type=float, default=0.60)
+    parser.add_argument('--replay-start-late-prob', type=float, default=0.55)
+    parser.add_argument('--replay-start-late-min-steps', type=int, default=260)
     args = parser.parse_args()
     if (args.critic_fp16_resume_scale_cap is not None and
             not (np.isfinite(args.critic_fp16_resume_scale_cap) and args.critic_fp16_resume_scale_cap>=1)):

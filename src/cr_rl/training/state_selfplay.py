@@ -1099,9 +1099,15 @@ class PersistentStateSelfplay:
                 replay_ds,
                 schema=self.schema,
                 min_steps=int(getattr(args, "replay_start_min_steps", 35) or 35),
-                max_steps=int(getattr(args, "replay_start_max_steps", 240) or 240),
+                max_steps=int(getattr(args, "replay_start_max_steps", 560) or 560),
                 counter_prob=float(getattr(args, "replay_start_counter_prob", 0.60)),
                 sparky_prob=float(getattr(args, "replay_start_sparky_prob", 0.60)),
+                late_game_prob=float(
+                    0.55
+                    if getattr(args, "replay_start_late_prob", None) is None
+                    else args.replay_start_late_prob
+                ),
+                late_min_steps=int(getattr(args, "replay_start_late_min_steps", 260) or 260),
             )
         self._lane_replay_plan: list[Any] = [None] * args.envs
         self._lane_replay_step = np.zeros(args.envs, dtype=np.int32)
@@ -2143,6 +2149,7 @@ class PersistentStateSelfplay:
             replay_stats = {
                 "episodes": 0,
                 "counter_cuts": 0,
+                "late_cuts": 0,
                 "cut_step_sum": 0,
                 "prefix_steps": 0,
                 "prefix_plays": 0,
@@ -2155,6 +2162,7 @@ class PersistentStateSelfplay:
                 if plan is not None:
                     replay_stats["episodes"] += 1
                     replay_stats["counter_cuts"] += int(plan.is_counter_cut)
+                    replay_stats["late_cuts"] += int(getattr(plan, "is_late_cut", False))
                     replay_stats["cut_step_sum"] += int(plan.cut_step)
 
         full_episode = bool(getattr(args, "full_episode_bptt", False))
@@ -2560,6 +2568,9 @@ class PersistentStateSelfplay:
                         **replay_stats,
                         "mean_cut_step": (
                             replay_stats["cut_step_sum"] / max(1, replay_stats["episodes"])
+                        ),
+                        "late_cut_rate": (
+                            replay_stats["late_cuts"] / max(1, replay_stats["episodes"])
                         ),
                         "prefix_legal_rate": (
                             replay_stats["prefix_legal_plays"] / max(1, replay_stats["prefix_plays"])

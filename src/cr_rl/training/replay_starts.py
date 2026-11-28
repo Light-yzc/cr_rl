@@ -66,6 +66,7 @@ class ReplayStartPlan:
     towers: tuple[str, str]
     actions0: np.ndarray  # int32 [cut_step]
     actions1: np.ndarray  # int32 [cut_step]
+    is_late_cut: bool = False
 
 
 def _extract_opening_order(
@@ -128,10 +129,12 @@ class ReplayStartPool:
         *,
         schema=None,
         min_steps: int = 35,
-        max_steps: int = 240,
+        max_steps: int = 560,
         min_tail_steps: int = 30,
         counter_prob: float = 0.60,
         sparky_prob: float = 0.60,
+        late_game_prob: float = 0.0,
+        late_min_steps: int = 260,
         train_only: bool = True,
     ) -> None:
         self.root = Path(dataset).resolve()
@@ -142,6 +145,8 @@ class ReplayStartPool:
         self.min_tail_steps = max(8, int(min_tail_steps))
         self.counter_prob = float(np.clip(counter_prob, 0.0, 1.0))
         self.sparky_prob = float(np.clip(sparky_prob, 0.0, 1.0))
+        self.late_game_prob = float(np.clip(late_game_prob, 0.0, 1.0))
+        self.late_min_steps = max(self.min_steps, int(late_min_steps))
 
         manifest = json.loads((self.root / "dataset.manifest.json").read_text(encoding="utf-8"))
         metadata = json.loads((self.root / manifest["metadata"]).read_text(encoding="utf-8"))
@@ -165,6 +170,8 @@ class ReplayStartPool:
         self.snapshot_id = str(manifest.get("snapshot_id", "unknown"))
         self.episodes: list[ReplayEpisode] = []
         self.by_cohort: dict[str, list[ReplayEpisode]] = {}
+        self.late_episodes: list[ReplayEpisode] = []
+        self.late_by_cohort: dict[str, list[ReplayEpisode]] = {}
         skipped = 0
 
         for shard_idx, shard in enumerate(manifest["shards"]):
@@ -241,6 +248,9 @@ class ReplayStartPool:
             )
             self.episodes.append(ep)
             self.by_cohort.setdefault(cohort, []).append(ep)
+            if max_cut >= self.late_min_steps:
+                self.late_episodes.append(ep)
+                self.late_by_cohort.setdefault(cohort, []).append(ep)
 
         self.skipped_shards = skipped
         if not self.episodes:
@@ -254,22 +264,29 @@ class ReplayStartPool:
         return {
             "snapshot_id": self.snapshot_id,
             "episodes": len(self.episodes),
+            "late_episodes": len(self.late_episodes),
             "cohorts": {k: len(v) for k, v in sorted(self.by_cohort.items())},
             "skipped_shards": self.skipped_shards,
             "min_steps": self.min_steps,
             "max_steps": self.max_steps,
             "counter_prob": self.counter_prob,
             "sparky_prob": self.sparky_prob,
+            "late_game_prob": self.late_game_prob,
+            "late_min_steps": self.late_min_steps,
         }
 
     def sample(self, rng: np.random.Generator) -> ReplayStartPlan:
-        """Sample a human replay episode, seat, and mid-game takeover cutpoint."""
-        sparky_pool = self.by_cohort.get("sparky")
-        general_pool = self.by_cohort.get("general")
+        """Sample a human replay episode, seat, and mid/late-game takeover cutpoint."""
+        want_late = bool(self.late_episodes and float(rng.random()) < self.late_game_prob)
+        cohort_map = self.late_by_cohort if want_late else self.by_cohort
+        fallback_pool = self.late_episodes if want_late else self.episodes
+
+        sparky_pool = cohort_map.get("sparky")
+        general_pool = cohort_map.get("general")
         if sparky_pool and general_pool:
             pool = sparky_pool if float(rng.random()) < self.sparky_prob else general_pool
         else:
-            pool = self.episodes
+            pool = fallback_pool
         ep = pool[int(rng.integers(len(pool)))]
 
         # On specialist/Sparky replays, put learner on the specialist seat 75% of the time
@@ -281,15 +298,18 @@ class ReplayStartPool:
             learner_seat = int(rng.integers(0, 2))
 
         max_cut = min(self.max_steps, len(ep.actions0) - self.min_tail_steps)
+        eff_min = self.late_min_steps if (want_late and max_cut >= self.late_min_steps) else self.min_steps
         counter_cuts = (
             ep.counter_cutpoints_seat0 if learner_seat == 0 else ep.counter_cutpoints_seat1
         )
+        if eff_min > self.min_steps and len(counter_cuts) > 0:
+            counter_cuts = counter_cuts[counter_cuts >= eff_min]
         is_counter = False
         if len(counter_cuts) > 0 and float(rng.random()) < self.counter_prob:
             cut_step = int(counter_cuts[int(rng.integers(len(counter_cuts)))])
             is_counter = True
         else:
-            cut_step = int(rng.integers(self.min_steps, max_cut + 1))
+            cut_step = int(rng.integers(eff_min, max_cut + 1))
 
         return ReplayStartPlan(
             shard_index=ep.shard_index,
@@ -298,6 +318,7 @@ class ReplayStartPool:
             learner_seat=learner_seat,
             cut_step=cut_step,
             is_counter_cut=is_counter,
+            is_late_cut=bool(cut_step >= self.late_min_steps),
             deck0=list(ep.deck0),
             deck1=list(ep.deck1),
             slots0=list(ep.slots0),

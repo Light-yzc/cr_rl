@@ -266,7 +266,7 @@ for u in updates[-8:]:
     dc = d.get("decision_coverage") or {{}}
     ms_str = f"{{ms.get('accepted')}}(adm={{ms.get('admitted_this_phase')}}/{{ms.get('buffer_size')}},{{d.get('macro_search_seconds',0):.1f}}s)" if ms.get("ran") else "-"
     ld_str = f"{{ld.get('accepted')}}(adm={{ld.get('admitted_this_phase')}}/{{ld.get('buffer_size')}},ovr={{ld.get('total_overrides')}},{{d.get('lookahead_distill_seconds',0):.1f}}s)" if ld.get("ran") else "-"
-    rs_str = f"{{rs.get('episodes',0)}}(cut={{rs.get('mean_cut_step',0):.0f}},leg={{rs.get('prefix_legal_rate',1)*100:.0f}}%,win={{(rs.get('takeover_win_rate') or 0)*100:.0f}}%)" if rs else "-"
+    rs_str = f"{{rs.get('episodes',0)}}(cut={{rs.get('mean_cut_step',0):.0f}},late={{(rs.get('late_cut_rate') or 0)*100:.0f}}%,leg={{rs.get('prefix_legal_rate',1)*100:.0f}}%,win={{(rs.get('takeover_win_rate') or 0)*100:.0f}}%)" if rs else "-"
     cost_mean = dc.get("requested_card_cost_mean", 0.0)
     ge5 = (dc.get("at_least_five_cost_requests", 0) / max(1, dc.get("card_requests", 1))) * 100.0
     print(
@@ -703,11 +703,13 @@ if vram_gib >= 70.0:
         expert_bc=True,
         expert_bc_interval=15,
         replay_start_dataset=str(BC_PLAN_B),
-        replay_start_prob=0.25,
+        replay_start_prob=0.35,
         replay_start_min_steps=35,
-        replay_start_max_steps=240,
+        replay_start_max_steps=560,
         replay_start_counter_prob=0.60,
         replay_start_sparky_prob=0.60,
+        replay_start_late_prob=0.55,
+        replay_start_late_min_steps=260,
         macro_search=False,
         target_card_kl=0.008,
         target_tile_kl=0.010,

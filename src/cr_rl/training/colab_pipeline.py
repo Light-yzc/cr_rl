@@ -127,7 +127,14 @@ def ppo_command(root, config, *, out=None, resume=None):
             '--replay-start-dataset', str(config['replay_start_dataset']),
             '--replay-start-prob', str(config['replay_start_prob']),
         ]
-        for key in ('replay_start_min_steps', 'replay_start_max_steps', 'replay_start_counter_prob', 'replay_start_sparky_prob'):
+        for key in (
+            'replay_start_min_steps',
+            'replay_start_max_steps',
+            'replay_start_counter_prob',
+            'replay_start_sparky_prob',
+            'replay_start_late_prob',
+            'replay_start_late_min_steps',
+        ):
             if config.get(key) is not None:
                 command += ['--' + key.replace('_', '-'), str(config[key])]
     if config.get('validation_decks') and '--validation-decks' not in command:

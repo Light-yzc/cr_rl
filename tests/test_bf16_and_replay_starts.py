@@ -197,16 +197,75 @@ def test_bf16_amp_helpers_and_colab_pipeline_forwarding(tmp_path):
         "backup": False,
         "wandb": False,
         "replay_start_dataset": "/content/crrl_sparky_plan_b",
-        "replay_start_prob": 0.25,
+        "replay_start_prob": 0.35,
+        "replay_start_max_steps": 560,
         "replay_start_counter_prob": 0.60,
+        "replay_start_late_prob": 0.55,
+        "replay_start_late_min_steps": 260,
         "validation_history": "/content/crrl_training/prepared/validation_history.pt",
     }
     cmd = ppo_command(tmp_path, cfg)
     assert cmd[cmd.index("--precision") + 1] == "bf16"
     assert cmd[cmd.index("--replay-start-dataset") + 1] == "/content/crrl_sparky_plan_b"
-    assert cmd[cmd.index("--replay-start-prob") + 1] == "0.25"
+    assert cmd[cmd.index("--replay-start-prob") + 1] == "0.35"
+    assert cmd[cmd.index("--replay-start-max-steps") + 1] == "560"
     assert cmd[cmd.index("--replay-start-counter-prob") + 1] == "0.6"
+    assert cmd[cmd.index("--replay-start-late-prob") + 1] == "0.55"
+    assert cmd[cmd.index("--replay-start-late-min-steps") + 1] == "260"
     assert cmd[cmd.index("--validation-history") + 1] == "/content/crrl_training/prepared/validation_history.pt"
+
+
+def test_replay_start_pool_late_game_weighted_sampling(tmp_path):
+    """Verify max_steps=560 and late_game_prob=0.55 concentrate >55% of cuts in t>=260 even with short replays mixed in."""
+    schema = _make_synthetic_bc_snapshot(tmp_path)
+    # Overwrite 000000.npz (sparky) and 000002.npz (general) as full 500-step double-elixir/overtime games
+    for sh_name in ("000000.npz", "000002.npz"):
+        p = tmp_path / "games" / sh_name
+        with np.load(p) as old:
+            old_obs = old["observations"]
+            obs0 = old_obs[0].copy()
+            obs1 = old_obs[len(old_obs) // 2].copy()
+        T = 500
+        obs = np.zeros((2 * T, obs0.shape[0]), dtype=np.int32)
+        acts = np.zeros(2 * T, dtype=np.int32)
+        ticks = np.zeros(2 * T, dtype=np.int32)
+        seats = np.zeros(2 * T, dtype=np.int32)
+        for s, row_template in ((0, obs0), (1, obs1)):
+            sl = slice(s * T, (s + 1) * T)
+            seats[sl] = s
+            ticks[sl] = np.arange(T, dtype=np.int32) * 8
+            obs[sl] = row_template
+        # Add late-game plays in double elixir (t=310, 380) and overtime (t=455)
+        for play_t in (40, 180, 310, 380, 455):
+            acts[play_t] = 12
+            acts[T + play_t] = 25
+        np.savez_compressed(p, observations=obs, actions=acts, ticks=ticks, seats=seats)
+
+    pool = ReplayStartPool(
+        tmp_path,
+        schema=schema,
+        min_steps=35,
+        max_steps=560,
+        min_tail_steps=30,
+        counter_prob=0.60,
+        sparky_prob=0.60,
+        late_game_prob=0.55,
+        late_min_steps=260,
+        train_only=True,
+    )
+    summary = pool.summary()
+    assert summary["episodes"] == 4
+    assert summary["late_episodes"] == 2
+    assert summary["max_steps"] == 560
+    assert summary["late_game_prob"] == 0.55
+
+    rng = np.random.default_rng(2026)
+    plans = [pool.sample(rng) for _ in range(400)]
+    late_rate = sum(1 for pl in plans if pl.cut_step >= 260 and pl.is_late_cut) / len(plans)
+    overtime_or_deep_2x = sum(1 for pl in plans if pl.cut_step >= 310)
+    assert late_rate >= 0.55, f"Expected >=55% late cuts (t>=260), got {late_rate:.3f}"
+    assert overtime_or_deep_2x > 80
+    assert max(pl.cut_step for pl in plans) <= 470  # T=500 - min_tail_steps=30
 
 
 def test_crforge_set_hand_order_exact_opening():
