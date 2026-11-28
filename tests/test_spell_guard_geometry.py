@@ -152,14 +152,21 @@ def test_rage_allows_engaged_low_elixir_combat_blocks_duplicate_area_and_hazard_
         a, info = select_live_action(p_noise, legal, obs_h, hand, selection_mode="hazard", tempo_state=st)
         assert a == 0 and info["selection_reason"] == "hazard_wait"
 
-    # Moderate steady intent (35%) -> waits frames 1-2, fires smoothly on frame 3!
+    # Below 7.0 elixir (5.5 bars), moderate 35% intent MUST wait so we don't dump units instead of banking!
     p_mod = np.zeros(S.ACTIONS, dtype=np.float64)
     p_mod[0], p_mod[t_act] = 0.65, 0.35
+    for _ in range(4):
+        a_low, _ = select_live_action(p_mod, legal, obs_h, hand, selection_mode="hazard", tempo_state=st)
+        assert a_low == 0
+
+    # At >= 7.0 elixir (7.5 bars), persistent 35% intent accumulates and fires cleanly by frame 4!
+    obs_h[S.H_ELIXIR] = 75000
     a1, i1 = select_live_action(p_mod, legal, obs_h, hand, selection_mode="hazard", tempo_state=st)
     a2, i2 = select_live_action(p_mod, legal, obs_h, hand, selection_mode="hazard", tempo_state=st)
     a3, i3 = select_live_action(p_mod, legal, obs_h, hand, selection_mode="hazard", tempo_state=st)
-    assert a1 == 0 and a2 == 0 and a3 == t_act
-    assert i3["selection_reason"] == "hazard_play"
+    a4, i4 = select_live_action(p_mod, legal, obs_h, hand, selection_mode="hazard", tempo_state=st)
+    assert a1 == 0 and a2 == 0 and a3 == 0 and a4 == t_act
+    assert i4["selection_reason"] == "hazard_play"
     assert st.accum_hazard == 0.0  # resets after firing
 
     # Strong intent (60%) -> fires immediately on frame 1!

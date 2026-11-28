@@ -97,14 +97,16 @@ class HazardTempoState:
         self,
         *,
         instant_play: float = 0.55,
-        instant_slot: float = 0.45,
-        min_step_play: float = 0.22,
-        hazard_trigger: float = 0.65,
+        instant_slot: float = 0.48,
+        min_step_play: float = 0.35,
+        hazard_trigger: float = 0.82,
+        min_accum_elixir: float = 7.0,
     ):
         self.instant_play = float(instant_play)
         self.instant_slot = float(instant_slot)
         self.min_step_play = float(min_step_play)
         self.hazard_trigger = float(hazard_trigger)
+        self.min_accum_elixir = float(min_accum_elixir)
         self.accum_hazard: float = 0.0
         self.sticky_slot: int | None = None
         self.sticky_frames: int = 0
@@ -119,9 +121,9 @@ class HazardTempoState:
         # Smoothly ease thresholds as elixir approaches 10.0 so there is no abrupt 9.5-bar cliff
         if elixir_bars >= 9.0:
             frac = min(1.0, max(0.0, (elixir_bars - 9.0) / 0.5))
-            inst_p = self.instant_play - 0.20 * frac
-            inst_s = self.instant_slot - 0.15 * frac
-            trig = self.hazard_trigger - 0.25 * frac
+            inst_p = self.instant_play - 0.18 * frac
+            inst_s = self.instant_slot - 0.14 * frac
+            trig = self.hazard_trigger - 0.30 * frac
             min_step = self.min_step_play * (1.0 - 0.5 * frac)
         else:
             inst_p = self.instant_play
@@ -132,7 +134,9 @@ class HazardTempoState:
         if play_mass >= inst_p or top_slot_mass >= inst_s:
             return True, "hazard_instant"
 
-        if play_mass < min_step or top_slot is None:
+        # Below min_accum_elixir (7.0 bars), never force a low-confidence play via hazard
+        # accumulation — preserve banking for 6-elixir core cards (Sparky/Collector) and combos.
+        if elixir_bars < self.min_accum_elixir or play_mass < min_step or top_slot is None:
             self.accum_hazard *= 0.40
             if self.accum_hazard < 0.05:
                 self.reset()

@@ -5,15 +5,15 @@ health: alive_0.3_plus_0.7_hp_fraction
 unknown: stat_two_bucket
 allow_variants: true
 universal_direct_units: true
-# Strictly < army_elixir_bar_factor (0.75) so empty-board deployments never yield
-# artificial positive instant reward; value is earned only through advantageous trades,
-# tower damage, or Elixir Collector generation.
+# Strictly < army_elixir_bar_factor (0.95) with a strong 0.25 deployment commitment spread:
+# holding elixir in the bar (flexibility/counterplay) is valued +36% above raw empty-board troops,
+# selling a 5-elixir unit costs -0.1425 (3.8x harsher with beta=0.030), and Collector (0.88) pays off big.
 category_factors:
   troop: 0.70
   split_troop: 0.62
-  collector: 0.72
+  collector: 0.88
   building: 0.65
-  spawner: 0.50
+  spawner: 0.55
   spell_summon: 0.68
 cards:
   Elixir Collector: collector

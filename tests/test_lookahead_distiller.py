@@ -33,9 +33,9 @@ from cr_rl.training.lookahead_distiller import (
 
 
 def test_lookahead_frame_weights_and_pipeline_flags(tmp_path: Path):
-    assert MIN_DISTILL_MEAN_P_WAIT == 0.38
+    assert MIN_DISTILL_MEAN_P_WAIT == 0.45
     assert MAX_DISTILL_MEAN_P_WAIT == 0.78
-    assert MAX_DISTILL_WAIT_UPWARD == 0.008
+    assert MAX_DISTILL_WAIT_UPWARD == 0.020
 
     actions = np.array([0, 120, 0, 650, 0, 12], dtype=np.int64)
     keep = np.array([False, True, True, True, True, True], dtype=bool)

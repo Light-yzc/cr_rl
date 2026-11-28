@@ -270,9 +270,9 @@ def test_conserved_v2_covers_sparky_deck_and_evolutions_without_empty_drop_freeb
         king=0.0,
         crown=0.0,
         army_reward_mode='elixir_potential',
-        army_elixir_beta=0.004,
+        army_elixir_beta=0.030,
         army_elixir_values=values,
-        army_elixir_bar_factor=0.75,
+        army_elixir_bar_factor=0.95,
     )
     with native_env() as env:
         schema = env.vector.schema
