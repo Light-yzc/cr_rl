@@ -311,10 +311,10 @@ class HistoryEncoder(nn.Module):
         # A native-FP16 probe intentionally converts the whole module.  Do
         # not feed FP32 activations into FP16 weights just because the config
         # was trained with the optional FP32 encoder path.
-        if self.cfg.frame_encoder_fp32 and self.frame.entity_in.weight.dtype != torch.float16:
+        if self.cfg.frame_encoder_fp32 and self.frame.entity_in.weight.dtype == torch.float32:
             with torch.autocast(header.device.type, enabled=False):
                 return self._encode_frames(header.float(), entities.float(), entity_mask)
-        return self._encode_frames(header, entities, entity_mask)
+        return self._encode_frames(header.to(self.frame.entity_in.weight.dtype), entities.to(self.frame.entity_in.weight.dtype), entity_mask)
 
     def _encode_frames(self, header, entities, entity_mask):
         card_context = None
@@ -588,7 +588,7 @@ class ActorCritic(HistoryEncoder):
     def placement_logits(self, context, entities, entity_mask, card_features):
         # Keep the explicit FP32 tile path for mixed precision, but allow a
         # genuinely converted FP16 module to execute the head in FP16.
-        if self.cfg.tile_head_fp32 and self.tile_context.weight.dtype != torch.float16:
+        if self.cfg.tile_head_fp32 and self.tile_context.weight.dtype == torch.float32:
             with torch.autocast(device_type=context.device.type, enabled=False):
                 return self._placement_logits(
                     context.float(), entities.float(), entity_mask, card_features.float()
