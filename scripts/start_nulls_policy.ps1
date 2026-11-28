@@ -10,8 +10,8 @@ param(
     [string]$Checkpoint = '',
     [ValidateSet('auto','persistent','shell')]
     [string]$TouchTransport = 'shell',
-    [ValidateSet('policy_sample','confidence','argmax')]
-    [string]$SelectionMode = 'argmax',
+    [ValidateSet('hazard','policy_sample','confidence','argmax')]
+    [string]$SelectionMode = 'hazard',
     [double]$PlayThreshold = 0.45,
     [double]$SlotThreshold = 0.28,
     [double]$TileTemperature = 0.0,
