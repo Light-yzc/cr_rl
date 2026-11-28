@@ -2620,7 +2620,14 @@ class PersistentStateSelfplay:
             max_grad_norm=float(args.max_grad_norm),
             critic_max_grad_norm=float(getattr(args, "critic_max_grad_norm", None) or args.max_grad_norm),
             max_initial_logp_error=(
-                0.05
+                (
+                    0.15
+                    if (
+                        self.precision == "bf16"
+                        or str(os.environ.get("CRRL_ALLOW_TF32", "")).lower() in ("1", "true", "yes")
+                    )
+                    else 0.05
+                )
                 if getattr(args, "max_initial_logp_error", None) is None
                 else args.max_initial_logp_error
             ),
