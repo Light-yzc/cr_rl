@@ -183,7 +183,7 @@ class ExpertBC:
             opt.load_state_dict(copy.deepcopy(self.optimizer_state))
             for group in opt.param_groups:
                 group['lr'] = lr
-        scaler = torch.amp.GradScaler('cuda', enabled=str(device).startswith('cuda'), init_scale=128.)
+        scaler = torch.amp.GradScaler('cuda', enabled=str(device).startswith('cuda') and precision == 'fp16', init_scale=128.)
         if self.scaler_state:
             scaler.load_state_dict(copy.deepcopy(self.scaler_state))
         baseline_opt = cpu_copy(opt.state_dict())

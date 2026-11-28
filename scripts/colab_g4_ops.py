@@ -39,6 +39,8 @@ OVERLAY_SYNC_RELPATHS: tuple[str, ...] = (
     "src/cr_rl/training/lookahead_distiller.py",
     "src/cr_rl/training/colab_pipeline.py",
     "src/cr_rl/training/state_selfplay.py",
+    "src/cr_rl/training/state_ppo.py",
+    "src/cr_rl/training/replay_starts.py",
     "src/cr_rl/training/army_elixir.py",
     "src/cr_rl/training/rewards.py",
     "scripts/train_selfplay.py",
@@ -258,16 +260,18 @@ for u in updates[-8:]:
     ebc = d.get("expert_bc") or {{}}
     ms = d.get("macro_search") or {{}}
     ld = d.get("lookahead_distill") or {{}}
+    rs = d.get("replay_starts") or {{}}
     dc = d.get("decision_coverage") or {{}}
     ms_str = f"{{ms.get('accepted')}}(adm={{ms.get('admitted_this_phase')}}/{{ms.get('buffer_size')}},{{d.get('macro_search_seconds',0):.1f}}s)" if ms.get("ran") else "-"
     ld_str = f"{{ld.get('accepted')}}(adm={{ld.get('admitted_this_phase')}}/{{ld.get('buffer_size')}},ovr={{ld.get('total_overrides')}},{{d.get('lookahead_distill_seconds',0):.1f}}s)" if ld.get("ran") else "-"
+    rs_str = f"{{rs.get('episodes',0)}}(cut={{rs.get('mean_cut_step',0):.0f}},leg={{rs.get('prefix_legal_rate',1)*100:.0f}}%,win={{(rs.get('takeover_win_rate') or 0)*100:.0f}}%)" if rs else "-"
     cost_mean = dc.get("requested_card_cost_mean", 0.0)
     ge5 = (dc.get("at_least_five_cost_requests", 0) / max(1, dc.get("card_requests", 1))) * 100.0
     print(
         f"u={{u}}: sps={{d.get('samples_per_second',0):.1f}} (roll={{d.get('rollout_samples_per_second',0):.1f}}, ppo={{d.get('ppo_optimization_seconds',0):.1f}}s, vram={{d.get('peak_cuda_allocated_gib',0):.1f}}G) "
         f"| win={{tw.get('overall_win_rate',0)*100:.1f}}% | EV={{m.get('explained_variance',0):.3f}} "
         f"| ent={{m.get('entropy',0):.3f}}({{m.get('card_entropy',0):.2f}}/{{m.get('tile_entropy',0):.2f}}) | akl={{m.get('anchor_kl',0):.3f}} "
-        f"| cost={{cost_mean:.2f}}(>=5:{{ge5:.1f}}%) | ebc={{ebc.get('accepted') if ebc.get('ran') else '-'}} | ms={{ms_str}} | ld={{ld_str}}"
+        f"| cost={{cost_mean:.2f}}(>=5:{{ge5:.1f}}%) | ebc={{ebc.get('accepted') if ebc.get('ran') else '-'}} | rs={{rs_str}} | ld={{ld_str}}"
     )
 
 val_dir = base / "validation"
@@ -464,7 +468,13 @@ if not base_code_src.is_file():
 rt_overlay_src = DRIVE / "preparation/sparky_value_bc_v2/runtime_overlay.zip"
 mcts_overlay_src = DRIVE / "preparation/sparky_value_bc_v2/g4_heavy_mcts_overlay.zip"
 plan_b_zips = sorted((DRIVE / "preparation/sparky_value_bc_v2").glob("sparky_plan_b_*.zip"))
-val_hist_drv = DRIVE / "training/ppo_phase0_baselines/u1380_and_u1340/latest_u1380/opponents/opponent_1073743204.pt"
+val_hist_u2080 = DRIVE / "preparation/validation_history_u2080.pt"
+val_hist_bv = DRIVE / "training" / RUN_NAME / "best_validation/actor_best_val.pt"
+val_hist_drv = (
+    val_hist_u2080 if val_hist_u2080.is_file()
+    else (val_hist_bv if val_hist_bv.is_file()
+          else DRIVE / "training/ppo_phase0_baselines/u1380_and_u1340/latest_u1380/opponents/opponent_1073743204.pt")
+)
 
 copy_jobs = [
     (base_code_src, Path("/content/crrl_base_code.zip")),
@@ -665,9 +675,56 @@ cfg.update(
 props = torch.cuda.get_device_properties(0)
 vram_gib = props.total_memory / (1024 ** 3)
 ncpu = len(os.sched_getaffinity(0))
+use_bf16 = bool(torch.cuda.is_bf16_supported())
 if vram_gib >= 70.0:
     profile_tag = "wide_70g+"
-    cfg.update(gradient_checkpointing=False, sparse_placement=True, frame_microbatch=1024 if vram_gib >= 88 else 512, actor_batch_size=4, critic_batch_size=8, publication_interval=5, cache_state_frames=True, cache_reference=True, pool_capacity=12, current_opponent_fraction=0.55, historical_opponent_fraction=0.35, anchor_opponent_fraction=0.10, expert_bc=True, expert_bc_interval=15, target_card_kl=0.008, target_tile_kl=0.010, opponent_cache_size=8, training_opponent_cache_size=8, env_threads=min(32, ncpu), torch_threads=min(16, ncpu), lookahead_distill_games=20, lookahead_distill_parallel_games=20, lookahead_distill_parallel_searches=min(16, max(4, ncpu // 3)), lookahead_distill_threads=min(44, ncpu), lookahead_distill_candidates=8, lookahead_distill_horizon=38, lookahead_distill_rollouts=3, lookahead_distill_max_searches=28, lookahead_distill_batch_episodes=20, lookahead_distill_steps=2, macro_search_interval=4, macro_search_offset=1, validation_argmax_lanes=min(24, max(8, ncpu // 2)))
+    cfg.update(
+        precision="bf16" if use_bf16 else "fp16",
+        allow_tf32=use_bf16,
+        ppo_actor_fp32=True,
+        gradient_checkpointing=False,
+        sparse_placement=True,
+        frame_microbatch=1024 if vram_gib >= 88 else 512,
+        actor_batch_size=4,
+        critic_batch_size=8,
+        publication_interval=5,
+        keep_periodic_checkpoints=0,
+        validation_interval=20,
+        cache_state_frames=True,
+        cache_reference=True,
+        pool_capacity=12,
+        current_opponent_fraction=0.55,
+        historical_opponent_fraction=0.35,
+        anchor_opponent_fraction=0.10,
+        learning_rate=4e-6,
+        adaptive_actor_lr_max=6e-6,
+        expert_bc=True,
+        expert_bc_interval=15,
+        replay_start_dataset=str(BC_PLAN_B),
+        replay_start_prob=0.25,
+        replay_start_min_steps=35,
+        replay_start_max_steps=240,
+        replay_start_counter_prob=0.60,
+        replay_start_sparky_prob=0.60,
+        macro_search=False,
+        target_card_kl=0.008,
+        target_tile_kl=0.010,
+        opponent_cache_size=8,
+        training_opponent_cache_size=8,
+        env_threads=min(44, ncpu),
+        torch_threads=min(16, ncpu),
+        lookahead_distill_games=20,
+        lookahead_distill_parallel_games=20,
+        lookahead_distill_parallel_searches=min(16, max(4, ncpu // 3)),
+        lookahead_distill_threads=min(44, ncpu),
+        lookahead_distill_candidates=8,
+        lookahead_distill_horizon=38,
+        lookahead_distill_rollouts=3,
+        lookahead_distill_max_searches=28,
+        lookahead_distill_batch_episodes=20,
+        lookahead_distill_steps=2,
+        validation_argmax_lanes=min(24, max(8, ncpu // 2)),
+    )
 elif vram_gib >= 38.0:
     profile_tag = "mid_40g"
     cfg.update(gradient_checkpointing=True, sparse_placement=True, temporal_checkpoint_mode="block", frame_microbatch=256, actor_batch_size=2, critic_batch_size=4, publication_interval=5, cache_state_frames=True, cache_reference=True, opponent_cache_size=6, training_opponent_cache_size=4, env_threads=min(12, ncpu), torch_threads=min(8, ncpu), lookahead_distill_games=12, lookahead_distill_parallel_games=12, lookahead_distill_parallel_searches=4, lookahead_distill_threads=min(12, ncpu), lookahead_distill_candidates=8, lookahead_distill_horizon=30, lookahead_distill_rollouts=3, lookahead_distill_steps=2, validation_argmax_lanes=8)
@@ -683,6 +740,8 @@ env = dict(os.environ, PYTHONPATH=f"{{ROOT / 'src'}}:{{ROOT / '.cache/vendor/crf
 env.pop("CUDA_VISIBLE_DEVICES", None)
 if cfg.get("sparse_placement"):
     env["CRRL_SPARSE_PLACEMENT"] = "1"
+if cfg.get("allow_tf32"):
+    env["CRRL_ALLOW_TF32"] = "1"
 res = subprocess.run([sys.executable, str(ROOT / "scripts/cr_train_pipeline.py"), "start"], cwd=ROOT, env=env, capture_output=True, text=True, check=True)
 print(json.dumps({{"status": "RESTORED_AND_STARTED_OK", "gpu": props.name, "vram_gib": round(vram_gib, 1), "cpus": ncpu, "profile": profile_tag, "run_name": RUN_NAME, "seeded_fresh_from_u1940": seeded_fresh_from_u1940, "restored_from_update": restored_update, "elapsed_sec": round(time.perf_counter() - t0, 1), "pipeline": json.loads(res.stdout.strip())}}, indent=2))
 '''

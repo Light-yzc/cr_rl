@@ -317,9 +317,13 @@ class IndependentBattles:
                 None if slots1 is None else slots1[index],
             )
 
-    def reset_env(self, index, seed, deck0=None, deck1=None, slots0=None, slots1=None, towers=None):
+    def reset_env(self, index, seed, deck0=None, deck1=None, slots0=None, slots1=None, towers=None, hand_order=None):
         if towers is not None and hasattr(self.lanes[index], "set_towers"):
             self.lanes[index].set_towers(0, towers[0], towers[1])
+        if hand_order is not None and hasattr(self.lanes[index], "set_hand_order"):
+            self.lanes[index].set_hand_order(0, hand_order[0], hand_order[1])
+        elif hasattr(self.lanes[index], "set_hand_order"):
+            self.lanes[index].set_hand_order(0, None, None)
         if deck0 is None:
             self.lanes[index].reset_env(0, seed)
         else:

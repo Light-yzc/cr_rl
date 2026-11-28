@@ -1569,9 +1569,9 @@ def main() -> None:
                         help="Sample learner Actor streams on both CUDA devices")
     parser.add_argument("--balanced-critic", action="store_true",
                         help="Use the Actor GPU for Critic data parallel after Actor updates")
-    parser.add_argument("--amp-dtype", choices=("auto", "fp32", "fp16"), default="auto")
-    parser.add_argument("--precision", choices=("fp32", "fp16"), default=None,
-                        help="v3 PPO autocast precision; V100 uses fp16")
+    parser.add_argument("--amp-dtype", choices=("auto", "fp32", "fp16", "bf16"), default="auto")
+    parser.add_argument("--precision", choices=("fp32", "fp16", "bf16"), default=None,
+                        help="v3 PPO autocast precision; V100 uses fp16, Blackwell/Ampere can use bf16")
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--frame-microbatch", type=int, default=32)
     parser.add_argument("--device", default="auto")
@@ -1640,6 +1640,8 @@ def main() -> None:
                         help="Batch deterministic validation across this many lanes (0 keeps the default evaluator)")
     parser.add_argument("--validation-decks", type=Path,
                         help="v3: fixed deck manifest for sparse validation")
+    parser.add_argument("--validation-history", type=Path, default=None,
+                        help="v3: fixed historical champion actor checkpoint for vs_history validation")
     parser.add_argument(
         "--tensorboard-dir", type=Path,
         help="Write v3 PPO scalars to TensorBoard event files in this directory",
@@ -1710,6 +1712,22 @@ def main() -> None:
         default=None,
         help='Optional weighted tower spawn group mixture, e.g. King_PrincessTowers:0.55,King_KnifeTowers:0.15,King_CannonTowers:0.15,King_ChefTowers:0.15',
     )
+    parser.add_argument(
+        '--replay-start-dataset',
+        type=Path,
+        default=None,
+        help='Frozen dual-seat human BC snapshot (crrl-bc-shards-v1) for prefix-warmup mid-game RL takeover',
+    )
+    parser.add_argument(
+        '--replay-start-prob',
+        type=float,
+        default=0.0,
+        help='Fraction of training episodes initialized from human replay prefixes (0 disables)',
+    )
+    parser.add_argument('--replay-start-min-steps', type=int, default=35)
+    parser.add_argument('--replay-start-max-steps', type=int, default=240)
+    parser.add_argument('--replay-start-counter-prob', type=float, default=0.60)
+    parser.add_argument('--replay-start-sparky-prob', type=float, default=0.60)
     args = parser.parse_args()
     if (args.critic_fp16_resume_scale_cap is not None and
             not (np.isfinite(args.critic_fp16_resume_scale_cap) and args.critic_fp16_resume_scale_cap>=1)):
@@ -1825,7 +1843,10 @@ def main() -> None:
     ):
         parser.error("Peer critic, opponent device offload, and v3 rollout options require --v3")
     if args.v3:
-        args.precision = args.precision or ("fp16" if args.amp_dtype in ("auto", "fp16") else "fp32")
+        args.precision = args.precision or (
+            args.amp_dtype if args.amp_dtype in ("fp16", "bf16")
+            else ("fp16" if args.amp_dtype == "auto" else "fp32")
+        )
         if args.decks is None:
             args.decks = Path("configs/decks_ppo46.yaml")
         if (

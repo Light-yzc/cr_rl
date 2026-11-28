@@ -269,7 +269,8 @@ class NativeArmyElixir:
                         field_code=int(item.field())
                     elif play.variant() is not None:
                         var=play.variant()
-                        name=str(var.spell().name())
+                        spell_obj=var.spell()
+                        name=str(spell_obj.name()) if hasattr(spell_obj, 'name') else str(spell_obj)
                         paid_cost=max(0, int(var.cost()))
                         field_code=2
                     else:

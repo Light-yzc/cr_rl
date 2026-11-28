@@ -14,7 +14,7 @@ def ppo_command(root, config, *, out=None, resume=None):
                                  else root/'prepared/input/ppo_latest.pt')),
         '--bc-anchor',str(root/'prepared/anchor_actor.pt'),'--out',str(output),
         '--device','cuda:0','--critic-device','cuda:0','--opponent-device','cuda:0',
-        '--precision','fp16','--decks',str(root/'prepared/source_league.yaml'),
+        '--precision',str(config.get('precision','fp16')),'--decks',str(root/'prepared/source_league.yaml'),
         '--pool-capacity',str(config.get('pool_capacity',4)),
         '--history-snapshot-interval',str(config.get('history_snapshot_interval',20000)),
         '--opponent-cache-size',str(config.get('opponent_cache_size',4)),
@@ -122,8 +122,18 @@ def ppo_command(root, config, *, out=None, resume=None):
         command += ['--expand-decks', str(config['expand_decks'])]
     if config.get('tower_troop_mixture') and '--tower-troop-mixture' not in command:
         command += ['--tower-troop-mixture', str(config['tower_troop_mixture'])]
+    if config.get('replay_start_dataset') and float(config.get('replay_start_prob', 0.0) or 0.0) > 0:
+        command += [
+            '--replay-start-dataset', str(config['replay_start_dataset']),
+            '--replay-start-prob', str(config['replay_start_prob']),
+        ]
+        for key in ('replay_start_min_steps', 'replay_start_max_steps', 'replay_start_counter_prob', 'replay_start_sparky_prob'):
+            if config.get(key) is not None:
+                command += ['--' + key.replace('_', '-'), str(config[key])]
     if config.get('validation_decks') and '--validation-decks' not in command:
         command += ['--validation-decks', str(config['validation_decks'])]
+    if config.get('validation_history') and '--validation-history' not in command:
+        command += ['--validation-history', str(config['validation_history'])]
     if not ppo_only and config.get('awbc',True):
         command+=['--awbc-sessions',str(root/'sessions'),'--awbc-interval',str(config.get('awbc_interval',50)),
             '--awbc-min-new-games','12','--awbc-batch-games','24','--awbc-max-reuse','2',

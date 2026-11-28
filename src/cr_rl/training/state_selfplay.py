@@ -137,6 +137,8 @@ def _make_scaler(
 def _amp_context(device: torch.device, precision: str):
     if device.type == "cuda" and precision == "fp16":
         return torch.autocast("cuda", dtype=torch.float16)
+    if device.type == "cuda" and precision == "bf16":
+        return torch.autocast("cuda", dtype=torch.bfloat16)
     return nullcontext()
 
 
@@ -252,8 +254,11 @@ def _prepare_frozen_opponent(
         model.eval()
         for p in model.parameters():
             p.requires_grad_(False)
-        if device.type == "cuda" and precision == "fp16":
-            model.half()
+        if device.type == "cuda" and precision in ("fp16", "bf16"):
+            if precision == "bf16":
+                model.bfloat16()
+            else:
+                model.half()
             # PlacementAdapter._validate requires its small (~11 MiB) decoder parameters to stay FP32.
             if hasattr(model, "learned_placement"):
                 model.learned_placement.float()
@@ -490,6 +495,11 @@ def _finalize_segment(seg: dict[str, Any]) -> dict[str, Any]:
         mask = np.ones(len(raw_obs), dtype=bool)
         mask[excluded] = False
         seg["policy_loss_mask"] = mask
+    critic_excluded = seg.pop("_critic_excluded", ())
+    if critic_excluded:
+        cmask = np.ones(len(raw_obs), dtype=bool)
+        cmask[critic_excluded] = False
+        seg["critic_loss_mask"] = cmask
     return {
         **seg,
         "raw_obs": raw_obs,
@@ -621,11 +631,12 @@ class PersistentStateSelfplay:
         (self.out / "checkpoints").mkdir(exist_ok=True)
         (self.out / "timings").mkdir(exist_ok=True)
 
+        amp_arg = getattr(args, "amp_dtype", "auto")
         self.precision = getattr(args, "precision", None) or (
-            "fp16" if getattr(args, "amp_dtype", "auto") in ("auto", "fp16") else "fp32"
+            amp_arg if amp_arg in ("fp16", "bf16") else ("fp16" if amp_arg == "auto" else "fp32")
         )
-        if self.precision == "fp16" and os.environ.get("CRRL_AMP_DTYPE") in (None, "auto"):
-            os.environ["CRRL_AMP_DTYPE"] = "fp16"
+        if self.precision in ("fp16", "bf16") and os.environ.get("CRRL_AMP_DTYPE") in (None, "auto"):
+            os.environ["CRRL_AMP_DTYPE"] = self.precision
 
         self.init_source = Path(args.resume or args.init_from_bc)
         self.device = _resolve_device(getattr(args, "device", "auto"), self.rank, self.world_size)
@@ -752,6 +763,7 @@ class PersistentStateSelfplay:
         # FP32 and FP16. Always use the same attention path in rollout and PPO.
         torch.backends.mha.set_fastpath_enabled(False)
         if os.environ.get("CRRL_ALLOW_TF32") == "1":
+            torch.set_float32_matmul_precision("high")
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
         checkpoint.pop("model", None)
@@ -1078,6 +1090,21 @@ class PersistentStateSelfplay:
         self.tower_troop_mixture = _parse_tower_troop_mixture(
             getattr(args, "tower_troop_mixture", None)
         )
+        self.replay_start_pool = None
+        self.replay_start_prob = float(getattr(args, "replay_start_prob", 0.0) or 0.0)
+        replay_ds = getattr(args, "replay_start_dataset", None)
+        if replay_ds and self.replay_start_prob > 0.0:
+            from cr_rl.training.replay_starts import ReplayStartPool
+            self.replay_start_pool = ReplayStartPool(
+                replay_ds,
+                schema=self.schema,
+                min_steps=int(getattr(args, "replay_start_min_steps", 35) or 35),
+                max_steps=int(getattr(args, "replay_start_max_steps", 240) or 240),
+                counter_prob=float(getattr(args, "replay_start_counter_prob", 0.60)),
+                sparky_prob=float(getattr(args, "replay_start_sparky_prob", 0.60)),
+            )
+        self._lane_replay_plan: list[Any] = [None] * args.envs
+        self._lane_replay_step = np.zeros(args.envs, dtype=np.int32)
         focal = [x.strip() for x in (getattr(args, "focal_decks", "") or "").split(",") if x.strip()]
         missing = set(focal) - set(self.deck_names)
         if missing:
@@ -1448,35 +1475,59 @@ class PersistentStateSelfplay:
 
     def _reset_match(self, env_idx: int) -> None:
         seed = int(self.rng.integers(2**31 - 1))
-        if getattr(self, "deck_probabilities", None) is None:
-            d0, d1 = (int(x) for x in self.rng.integers(len(self.decks), size=2))
-        else:
-            d0, d1 = (int(x) for x in self.rng.choice(
-                len(self.decks), size=2, p=self.deck_probabilities))
-        learner_seat = int(self.rng.integers(0, 2))
-        if getattr(self, "focal_deck_indices", None) and self.rng.random() < self.args.focal_deck_prob:
-            focal_idx = int(self.rng.choice(self.focal_deck_indices))
-            if learner_seat == 0:
-                d0 = focal_idx
-            else:
-                d1 = focal_idx
         self._refresh_historical_cohort()
-        towers_arg = None
-        if getattr(self, "tower_troop_mixture", None) is not None:
-            t_names, t_probs = self.tower_troop_mixture
-            t0 = str(self.rng.choice(t_names, p=t_probs))
-            t1 = str(self.rng.choice(t_names, p=t_probs))
-            towers_arg = (t0, t1)
-        if towers_arg is not None:
+        replay_pool = getattr(self, "replay_start_pool", None)
+        replay_prob = float(getattr(self, "replay_start_prob", 0.0) or 0.0)
+        use_replay = replay_pool is not None and replay_prob > 0.0 and float(self.rng.random()) < replay_prob
+        if use_replay:
+            plan = replay_pool.sample(self.rng)
+            learner_seat = int(plan.learner_seat)
             self.env.vector.reset_env(
-                env_idx, seed, self.decks[d0], self.decks[d1], self.forms[d0], self.forms[d1], towers=towers_arg
+                env_idx,
+                seed,
+                plan.deck0,
+                plan.deck1,
+                plan.slots0,
+                plan.slots1,
+                towers=plan.towers,
+                hand_order=(plan.hand_order0, plan.hand_order1),
             )
+            own_name = f"replay_{plan.cohort}"
+            opp_name = f"replay_{plan.cohort}_opp"
+            self._lane_replay_plan[env_idx] = plan
+            self._lane_replay_step[env_idx] = 0
         else:
-            self.env.vector.reset_env(
-                env_idx, seed, self.decks[d0], self.decks[d1], self.forms[d0], self.forms[d1]
-            )
-        own_name = self.deck_names[d0 if learner_seat == 0 else d1]
-        opp_name = self.deck_names[d1 if learner_seat == 0 else d0]
+            if hasattr(self, "_lane_replay_plan"):
+                self._lane_replay_plan[env_idx] = None
+                self._lane_replay_step[env_idx] = 0
+            if getattr(self, "deck_probabilities", None) is None:
+                d0, d1 = (int(x) for x in self.rng.integers(len(self.decks), size=2))
+            else:
+                d0, d1 = (int(x) for x in self.rng.choice(
+                    len(self.decks), size=2, p=self.deck_probabilities))
+            learner_seat = int(self.rng.integers(0, 2))
+            if getattr(self, "focal_deck_indices", None) and self.rng.random() < self.args.focal_deck_prob:
+                focal_idx = int(self.rng.choice(self.focal_deck_indices))
+                if learner_seat == 0:
+                    d0 = focal_idx
+                else:
+                    d1 = focal_idx
+            towers_arg = None
+            if getattr(self, "tower_troop_mixture", None) is not None:
+                t_names, t_probs = self.tower_troop_mixture
+                t0 = str(self.rng.choice(t_names, p=t_probs))
+                t1 = str(self.rng.choice(t_names, p=t_probs))
+                towers_arg = (t0, t1)
+            if towers_arg is not None:
+                self.env.vector.reset_env(
+                    env_idx, seed, self.decks[d0], self.decks[d1], self.forms[d0], self.forms[d1], towers=towers_arg
+                )
+            else:
+                self.env.vector.reset_env(
+                    env_idx, seed, self.decks[d0], self.decks[d1], self.forms[d0], self.forms[d1]
+                )
+            own_name = self.deck_names[d0 if learner_seat == 0 else d1]
+            opp_name = self.deck_names[d1 if learner_seat == 0 else d0]
         other_active = self._pinned_opponent_keys(exclude_env=env_idx)
         rollout_cap = max(1, int(getattr(self, "rollout_opponent_cache_size", 1)))
         sample_kwargs = (
@@ -2087,6 +2138,24 @@ class PersistentStateSelfplay:
         role_games = {"anchor": 0, "historical": 0, "current": 0}
         role_wins = {"anchor": 0, "historical": 0, "current": 0}
         role_score_sums = {"anchor": 0.0, "historical": 0.0, "current": 0.0}
+        replay_stats = None
+        if getattr(self, "replay_start_pool", None) is not None:
+            replay_stats = {
+                "episodes": 0,
+                "counter_cuts": 0,
+                "cut_step_sum": 0,
+                "prefix_steps": 0,
+                "prefix_plays": 0,
+                "prefix_legal_plays": 0,
+                "takeover_games": 0,
+                "takeover_wins": 0,
+            }
+            for e in range(envs):
+                plan = self._lane_replay_plan[e]
+                if plan is not None:
+                    replay_stats["episodes"] += 1
+                    replay_stats["counter_cuts"] += int(plan.is_counter_cut)
+                    replay_stats["cut_step_sum"] += int(plan.cut_step)
 
         full_episode = bool(getattr(args, "full_episode_bptt", False))
         active = np.ones(envs, dtype=bool)
@@ -2126,9 +2195,40 @@ class PersistentStateSelfplay:
                 **({"active_lanes": np.flatnonzero(active)} if full_episode else {}),
             )
             excluded = (
-                curriculum.record_choices(sparky_choices, actions, raw, sparky_stats)
-                if curriculum is not None else ()
+                set(curriculum.record_choices(sparky_choices, actions, raw, sparky_stats))
+                if curriculum is not None else set()
             )
+            prefix_excluded: set[tuple[int, int]] = set()
+            if replay_stats is not None:
+                for e in np.flatnonzero(active):
+                    ei = int(e)
+                    plan = self._lane_replay_plan[ei]
+                    if plan is None:
+                        continue
+                    r_step = int(self._lane_replay_step[ei])
+                    if r_step < plan.cut_step:
+                        a0 = int(plan.actions0[r_step])
+                        a1 = int(plan.actions1[r_step])
+                        if a0 > 0:
+                            replay_stats["prefix_plays"] += 1
+                            if masks[ei, 0, a0]:
+                                replay_stats["prefix_legal_plays"] += 1
+                            else:
+                                a0 = 0
+                        if a1 > 0:
+                            replay_stats["prefix_plays"] += 1
+                            if masks[ei, 1, a1]:
+                                replay_stats["prefix_legal_plays"] += 1
+                            else:
+                                a1 = 0
+                        actions[ei, 0] = a0
+                        actions[ei, 1] = a1
+                        prefix_excluded.add((ei, 0))
+                        prefix_excluded.add((ei, 1))
+                        excluded.add((ei, 0))
+                        excluded.add((ei, 1))
+                        self._lane_replay_step[ei] = r_step + 1
+                        replay_stats["prefix_steps"] += 1
             model_step_seconds += time.perf_counter() - model_step_began
             if step_stats is not None:
                 for k, v in step_stats.items():
@@ -2262,6 +2362,8 @@ class PersistentStateSelfplay:
                 for seat, seg in seat_segments:
                     if (e, seat) in excluded:
                         seg.setdefault("_actor_excluded", []).append(len(seg["_raw_obs"]))
+                    if (e, seat) in prefix_excluded:
+                        seg.setdefault("_critic_excluded", []).append(len(seg["_raw_obs"]))
                     seg["_raw_obs"].append(raw[e, seat].copy())
                     seg["_legal_masks"].append(masks[e, seat].copy())
                     seg["_actions"].append(int(actions[e, seat]))
@@ -2294,6 +2396,9 @@ class PersistentStateSelfplay:
                         if curriculum is not None:
                             curriculum.record_terminal(ei, r_term, sparky_stats)
                         terminal_wins += int(r_term > 0)
+                        if replay_stats is not None and self._lane_replay_plan[ei] is not None:
+                            replay_stats["takeover_games"] += 1
+                            replay_stats["takeover_wins"] += int(r_term > 0)
                         score_val = float(np.clip(round(r_term), -1, 1))
                         entry = self.opponents[ei]
                         opp_role = (
@@ -2449,6 +2554,28 @@ class PersistentStateSelfplay:
             "step_policy_stats": rollout_stat_accum,
             "army_elixir_diagnostics": army_diagnostics if getattr(self,'army_elixir',None) is not None else {},
             **({"sparky_curriculum": sparky_stats} if sparky_stats is not None else {}),
+            **(
+                {
+                    "replay_starts": {
+                        **replay_stats,
+                        "mean_cut_step": (
+                            replay_stats["cut_step_sum"] / max(1, replay_stats["episodes"])
+                        ),
+                        "prefix_legal_rate": (
+                            replay_stats["prefix_legal_plays"] / max(1, replay_stats["prefix_plays"])
+                            if replay_stats["prefix_plays"] > 0
+                            else 1.0
+                        ),
+                        "takeover_win_rate": (
+                            replay_stats["takeover_wins"] / max(1, replay_stats["takeover_games"])
+                            if replay_stats["takeover_games"] > 0
+                            else None
+                        ),
+                    }
+                }
+                if replay_stats is not None
+                else {}
+            ),
             "buffer_rows": buf_rows,
             "max_frozen_groups": self._rollout_max_frozen_groups,
             "secondary_samples": sum(len(s["raw_obs"]) for s in finished_segs)-primary_samples,
@@ -3232,6 +3359,7 @@ class PersistentStateSelfplay:
             "metrics": metrics,
             "decision_coverage": coverage,
             **({"sparky_curriculum": rollout_out["sparky_curriculum"]} if "sparky_curriculum" in rollout_out else {}),
+            **({"replay_starts": rollout_out["replay_starts"]} if "replay_starts" in rollout_out else {}),
             "actor_lr_schedule": opt_out["actor_lr_event"] or {"enabled": False},
             "sample_utilization": {
                 "actor_fraction": opt_out["actor_samples"] / max(1, valid_samples),
@@ -3716,9 +3844,18 @@ class PersistentStateSelfplay:
         release_host_memory()
         val_devices = self._validation_devices()
         opponents = [("bc", self.anchor_path)]
-        hist_entries = [e for e in self.pool.entries if e.role == "historical"]
-        if hist_entries:
-            opponents.append(("history", Path(hist_entries[-1].checkpoint)))
+        val_hist_arg = getattr(self.args, "validation_history", None)
+        if val_hist_arg is not None and Path(val_hist_arg).is_file():
+            opponents.append(("history", Path(val_hist_arg)))
+        else:
+            hist_entries = [
+                e for e in self.pool.entries
+                if e.role == "historical" and int(getattr(e, "generation", -1)) < self.update
+            ]
+            if not hist_entries:
+                hist_entries = [e for e in self.pool.entries if e.role == "historical"]
+            if hist_entries:
+                opponents.append(("history", Path(hist_entries[0].checkpoint)))
         big_vram = (val_devices[0].type == "cuda" and torch.cuda.get_device_properties(val_devices[0]).total_memory >= 45 * 1024**3)
         parallel = (len(val_devices) >= 2 or big_vram) and len(opponents) >= 2
 

@@ -140,10 +140,10 @@ class PolicyStream:
         self.decisions=0
 
     def autocast(self):
-        if self.precision=="fp16":
+        if self.precision in ("fp16", "bf16"):
             if self.device.type!="cuda":
-                raise ValueError("FP16 online evaluation requires CUDA; CPU mocks use fp32")
-            return torch.autocast("cuda",dtype=torch.float16)
+                raise ValueError(f"{self.precision.upper()} online evaluation requires CUDA; CPU mocks use fp32")
+            return torch.autocast("cuda",dtype=torch.bfloat16 if self.precision=="bf16" else torch.float16)
         return nullcontext()
 
     @torch.inference_mode()
@@ -232,7 +232,11 @@ class BatchedArgmaxStream:
         tensors = [torch.as_tensor(value, device=self.device) for value in self.adapter(raw)]
         hands = torch.as_tensor(raw[:, self.hand_indices], device=self.device)
         mask = torch.as_tensor(legal, device=self.device, dtype=torch.bool)
-        with torch.autocast(self.device.type, dtype=torch.float16, enabled=self.precision == "fp16"):
+        with torch.autocast(
+            self.device.type,
+            dtype=torch.bfloat16 if self.precision == "bf16" else torch.float16,
+            enabled=self.precision in ("fp16", "bf16"),
+        ):
             if self.state is None:
                 self.state = self.model.initial_state(len(lanes), device=self.device)
             logp, _, self.state = self.model.step(
@@ -338,8 +342,8 @@ def evaluate_games(model, opponent, infos, league, matchups, args, *, env_factor
             raise ValueError("Batched evaluation requires argmax selection")
         if not all(isinstance(policy, StateActorCritic) for policy in (model, opponent)):
             raise ValueError("Batched evaluation requires two architecture-v3 policies")
-        if args.precision == "fp16" and torch.device(args.device).type != "cuda":
-            raise ValueError("FP16 online evaluation requires CUDA; CPU mocks use fp32")
+        if args.precision in ("fp16", "bf16") and torch.device(args.device).type != "cuda":
+            raise ValueError(f"{args.precision.upper()} online evaluation requires CUDA; CPU mocks use fp32")
     if env_factory is None:
         # Lazy import keeps CPU/unit checks independent of JPype/JVM installation.
         from cr_rl.envs.crforge import CrForgeVector
@@ -494,7 +498,7 @@ def main():
     parser.add_argument("--envs",type=int,default=2,
                         help="Parallel games per wave (1, 2 or 4; up to 32 with --batch-argmax)")
     parser.add_argument("--device",default="cuda")
-    parser.add_argument("--precision",choices=("fp16","fp32"),default="fp16")
+    parser.add_argument("--precision",choices=("fp16","bf16","fp32"),default="fp16")
     parser.add_argument("--max-decisions",type=int,default=1500,
         help="Hard failure after 600 simulated seconds by default; unfinished games are invalid")
     parser.add_argument("--sampling-seed",type=int,default=20261110)

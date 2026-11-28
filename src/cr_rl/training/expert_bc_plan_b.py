@@ -290,7 +290,7 @@ class PlanBExpertBC(ExpertBC):
             if tile_params:
                 opt_groups.append({'params': tile_params, 'lr': lr * 0.2})
             optimizer = torch.optim.AdamW(opt_groups, weight_decay=0.)
-            scaler = torch.amp.GradScaler('cuda', enabled=torch.device(device).type == 'cuda', init_scale=128.)
+            scaler = torch.amp.GradScaler('cuda', enabled=torch.device(device).type == 'cuda' and precision == 'fp16', init_scale=128.)
             if torch.device(device).type == 'cuda':
                 torch.cuda.empty_cache()
             actor.eval()

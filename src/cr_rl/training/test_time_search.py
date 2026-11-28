@@ -1442,6 +1442,8 @@ class LookaheadPolicyStream:
         target = dev or self.device
         if self.precision == "fp16" and target.type == "cuda":
             return torch.autocast("cuda", dtype=torch.float16)
+        if self.precision == "bf16" and target.type == "cuda":
+            return torch.autocast("cuda", dtype=torch.bfloat16)
         return nullcontext()
 
     @torch.inference_mode()
@@ -2195,14 +2197,15 @@ def run_batched_lookahead(
                     lane_hold_full[c_lo:c_hi] = True
 
     lane_opp_seat = 1 - lane_seat
+    amp_dt = torch.bfloat16 if precision == "bf16" else torch.float16
     actor_ctx = (
-        torch.autocast("cuda", dtype=torch.float16)
-        if (precision == "fp16" and device.type == "cuda" and not getattr(actor, "ppo_actor_fp32", False))
+        torch.autocast("cuda", dtype=amp_dt)
+        if (precision in ("fp16", "bf16") and device.type == "cuda" and not getattr(actor, "ppo_actor_fp32", False))
         else nullcontext()
     )
     critic_ctx = (
-        torch.autocast("cuda", dtype=torch.float16)
-        if (precision == "fp16" and critic_device.type == "cuda")
+        torch.autocast("cuda", dtype=amp_dt)
+        if (precision in ("fp16", "bf16") and critic_device.type == "cuda")
         else nullcontext()
     )
 

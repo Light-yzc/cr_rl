@@ -76,6 +76,8 @@ def _amp_context(device: torch.device, precision: str):
         return torch.autocast(device_type=device.type, enabled=False)
     if precision == "fp16":
         return torch.autocast(device_type="cuda", dtype=torch.float16, enabled=True)
+    if precision == "bf16":
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True)
     return autocast_for(device)
 
 
@@ -535,6 +537,8 @@ def prepare_state_rollout_targets(
 
         seg_targets = returns[:, 0].numpy().astype(np.float32)
         critic_mask = eligible.copy()
+        if 'critic_loss_mask' in seg:
+            critic_mask &= np.asarray(seg['critic_loss_mask'], dtype=bool)
         if critic_warmup:
             truncated = np.asarray(seg.get("truncated", np.zeros(t_len, dtype=bool)), dtype=bool)
             # A complete fault-free episode starts with episode_start[0]=True (no missing prefix)

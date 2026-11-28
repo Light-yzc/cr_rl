@@ -62,7 +62,10 @@ def main():
              WANDB_PROJECT=config.get('wandb_project','crrl-ppo-live-20261117'))
     if config.get('sparse_placement'):
         env['CRRL_SPARSE_PLACEMENT'] = '1'
-    env.pop('CRRL_ALLOW_TF32', None)
+    if config.get('allow_tf32'):
+        env['CRRL_ALLOW_TF32'] = '1'
+    else:
+        env.pop('CRRL_ALLOW_TF32', None)
     if config.get('gradient_checkpointing') is False:
         env.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
     with (out/'console.log').open('a') as log:

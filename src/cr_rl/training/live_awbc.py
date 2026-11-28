@@ -42,7 +42,13 @@ def split_episodes(groups, seed=20261117, validation_fraction=.2, folds=3):
 
 
 def amp(device,precision):
-    return torch.autocast('cuda',dtype=torch.float16) if str(device).startswith('cuda') and precision=='fp16' else nullcontext()
+    if not str(device).startswith('cuda'):
+        return nullcontext()
+    if precision=='fp16':
+        return torch.autocast('cuda',dtype=torch.float16)
+    if precision=='bf16':
+        return torch.autocast('cuda',dtype=torch.bfloat16)
+    return nullcontext()
 
 
 def predict_head(head, features, device, chunk=256):

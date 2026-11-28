@@ -170,6 +170,8 @@ class StateInference:
             return torch.autocast(device_type=self.device.type, enabled=False)
         if self.precision == "fp16" and self.device.type == "cuda":
             return torch.autocast(device_type="cuda", dtype=torch.float16, enabled=True)
+        if self.precision == "bf16" and self.device.type == "cuda":
+            return torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True)
         return autocast_for(self.device)
 
     @torch.inference_mode()

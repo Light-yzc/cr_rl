@@ -215,9 +215,9 @@ class _GreedyMirrorStream:
         legal_b = np.asarray(legal, dtype=bool)
         mask_t = torch.as_tensor(legal_b[None], device=self.device)
         ctx = (
-            torch.autocast("cuda", dtype=torch.float16)
+            torch.autocast("cuda", dtype=torch.bfloat16 if self.precision == "bf16" else torch.float16)
             if (
-                self.precision == "fp16"
+                self.precision in ("fp16", "bf16")
                 and self.device.type == "cuda"
                 and not getattr(self.actor, "ppo_actor_fp32", False)
             )
@@ -604,18 +604,19 @@ class LookaheadDistiller:
             streams.append(st)
 
         orig_fp32 = getattr(actor, "ppo_actor_fp32", False)
-        if precision == "fp16" and dev.type == "cuda":
+        if precision in ("fp16", "bf16") and dev.type == "cuda":
             actor.ppo_actor_fp32 = False
 
         try:
+            amp_dt = torch.bfloat16 if precision == "bf16" else torch.float16
             actor_ctx = (
-                torch.autocast("cuda", dtype=torch.float16)
-                if (precision == "fp16" and dev.type == "cuda" and not getattr(actor, "ppo_actor_fp32", False))
+                torch.autocast("cuda", dtype=amp_dt)
+                if (precision in ("fp16", "bf16") and dev.type == "cuda" and not getattr(actor, "ppo_actor_fp32", False))
                 else nullcontext()
             )
             critic_ctx = (
-                torch.autocast("cuda", dtype=torch.float16)
-                if (precision == "fp16" and critic_device.type == "cuda")
+                torch.autocast("cuda", dtype=amp_dt)
+                if (precision in ("fp16", "bf16") and critic_device.type == "cuda")
                 else nullcontext()
             )
             mem_cap = max(128, int(max_game_steps) + 32)
@@ -1173,7 +1174,7 @@ class LookaheadDistiller:
                 # Top temporal blocks learn cross-step multi-card synergy & elixir counting at 0.15x LR
                 param_groups.append({"params": temporal_params, "lr": lr * 0.15})
             optimizer = torch.optim.AdamW(param_groups, weight_decay=0.0)
-            scaler = torch.amp.GradScaler("cuda", enabled=torch.device(device).type == "cuda", init_scale=128.0)
+            scaler = torch.amp.GradScaler("cuda", enabled=torch.device(device).type == "cuda" and precision == "fp16", init_scale=128.0)
             if torch.device(device).type == "cuda":
                 torch.cuda.empty_cache()
             actor.eval()
