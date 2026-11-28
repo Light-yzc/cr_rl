@@ -46,6 +46,7 @@ OVERLAY_SYNC_RELPATHS: tuple[str, ...] = (
     "src/cr_rl/training/army_elixir.py",
     "src/cr_rl/training/rewards.py",
     "scripts/train_selfplay.py",
+    "scripts/build_live_replay_starts.py",
     "scripts/evaluate_state_policy.py",
     "scripts/run_nulls_policy.py",
     "scripts/cr_train_pipeline.py",
@@ -266,7 +267,7 @@ for u in updates[-8:]:
     dc = d.get("decision_coverage") or {{}}
     ms_str = f"{{ms.get('accepted')}}(adm={{ms.get('admitted_this_phase')}}/{{ms.get('buffer_size')}},{{d.get('macro_search_seconds',0):.1f}}s)" if ms.get("ran") else "-"
     ld_str = f"{{ld.get('accepted')}}(adm={{ld.get('admitted_this_phase')}}/{{ld.get('buffer_size')}},ovr={{ld.get('total_overrides')}},{{d.get('lookahead_distill_seconds',0):.1f}}s)" if ld.get("ran") else "-"
-    rs_str = f"{{rs.get('episodes',0)}}(cut={{rs.get('mean_cut_step',0):.0f}},late={{(rs.get('late_cut_rate') or 0)*100:.0f}}%,leg={{rs.get('prefix_legal_rate',1)*100:.0f}}%,win={{(rs.get('takeover_win_rate') or 0)*100:.0f}}%)" if rs else "-"
+    rs_str = f"{{rs.get('episodes',0)}}(cut={{rs.get('mean_cut_step',0):.0f}},late={{(rs.get('late_cut_rate') or 0)*100:.0f}}%,live={{(rs.get('live_cut_rate') or 0)*100:.0f}}%,leg={{rs.get('prefix_legal_rate',1)*100:.0f}}%,win={{(rs.get('takeover_win_rate') or 0)*100:.0f}}%)" if rs else "-"
     cost_mean = dc.get("requested_card_cost_mean", 0.0)
     ge5 = (dc.get("at_least_five_cost_requests", 0) / max(1, dc.get("card_requests", 1))) * 100.0
     print(
@@ -470,6 +471,8 @@ if not base_code_src.is_file():
 rt_overlay_src = DRIVE / "preparation/sparky_value_bc_v2/runtime_overlay.zip"
 mcts_overlay_src = DRIVE / "preparation/sparky_value_bc_v2/g4_heavy_mcts_overlay.zip"
 plan_b_zips = sorted((DRIVE / "preparation/sparky_value_bc_v2").glob("sparky_plan_b_*.zip"))
+live_starts_drv = DRIVE / "preparation/sparky_value_bc_v2/live_replay_starts_v1.zip"
+LIVE_STARTS = Path("/content/crrl_live_starts")
 val_hist_u2080 = DRIVE / "preparation/validation_history_u2080.pt"
 val_hist_bv = DRIVE / "training" / RUN_NAME / "best_validation/actor_best_val.pt"
 val_hist_drv = (
@@ -488,6 +491,8 @@ if mcts_overlay_src.is_file():
     copy_jobs.append((mcts_overlay_src, Path("/content/crrl_mcts_overlay.zip")))
 if plan_b_zips and not (BC_PLAN_B / "dataset.manifest.json").is_file():
     copy_jobs.append((plan_b_zips[-1], Path("/content/crrl_sparky_plan_b.zip")))
+if live_starts_drv.is_file() and not (LIVE_STARTS / "dataset.manifest.json").is_file():
+    copy_jobs.append((live_starts_drv, Path("/content/crrl_live_starts.zip")))
 if val_hist_drv.is_file():
     copy_jobs.append((val_hist_drv, PREP / "validation_history.pt"))
 
@@ -542,6 +547,15 @@ if not (BC_PLAN_B / "dataset.manifest.json").is_file() and Path("/content/crrl_s
     with zipfile.ZipFile("/content/crrl_sparky_plan_b.zip") as zf:
         zf.extractall(tmp_bc)
     tmp_bc.rename(BC_PLAN_B)
+
+if not (LIVE_STARTS / "dataset.manifest.json").is_file() and Path("/content/crrl_live_starts.zip").is_file():
+    tmp_ls = Path("/content/crrl_live_starts.extracting")
+    if tmp_ls.exists():
+        shutil.rmtree(tmp_ls)
+    tmp_ls.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile("/content/crrl_live_starts.zip") as zf:
+        zf.extractall(tmp_ls)
+    tmp_ls.rename(LIVE_STARTS)
 
 if pip_proc is not None and pip_proc.wait() != 0:
     raise RuntimeError("pip install failed")
@@ -702,7 +716,11 @@ if vram_gib >= 70.0:
         adaptive_actor_lr_max=3e-6,
         expert_bc=True,
         expert_bc_interval=15,
-        replay_start_dataset=str(BC_PLAN_B),
+        replay_start_dataset=(
+            f"{{BC_PLAN_B}},{{LIVE_STARTS}}"
+            if (LIVE_STARTS / "dataset.manifest.json").is_file()
+            else str(BC_PLAN_B)
+        ),
         replay_start_prob=0.35,
         replay_start_min_steps=35,
         replay_start_max_steps=560,
@@ -710,6 +728,7 @@ if vram_gib >= 70.0:
         replay_start_sparky_prob=0.60,
         replay_start_late_prob=0.55,
         replay_start_late_min_steps=260,
+        replay_start_live_prob=0.35,
         macro_search=False,
         target_card_kl=0.008,
         target_tile_kl=0.010,

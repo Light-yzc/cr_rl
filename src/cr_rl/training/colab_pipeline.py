@@ -134,6 +134,7 @@ def ppo_command(root, config, *, out=None, resume=None):
             'replay_start_sparky_prob',
             'replay_start_late_prob',
             'replay_start_late_min_steps',
+            'replay_start_live_prob',
         ):
             if config.get(key) is not None:
                 command += ['--' + key.replace('_', '-'), str(config[key])]

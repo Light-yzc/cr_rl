@@ -1108,6 +1108,11 @@ class PersistentStateSelfplay:
                     else args.replay_start_late_prob
                 ),
                 late_min_steps=int(getattr(args, "replay_start_late_min_steps", 260) or 260),
+                live_prob=float(
+                    0.35
+                    if getattr(args, "replay_start_live_prob", None) is None
+                    else args.replay_start_live_prob
+                ),
             )
         self._lane_replay_plan: list[Any] = [None] * args.envs
         self._lane_replay_step = np.zeros(args.envs, dtype=np.int32)
@@ -2150,6 +2155,7 @@ class PersistentStateSelfplay:
                 "episodes": 0,
                 "counter_cuts": 0,
                 "late_cuts": 0,
+                "live_cuts": 0,
                 "cut_step_sum": 0,
                 "prefix_steps": 0,
                 "prefix_plays": 0,
@@ -2163,6 +2169,7 @@ class PersistentStateSelfplay:
                     replay_stats["episodes"] += 1
                     replay_stats["counter_cuts"] += int(plan.is_counter_cut)
                     replay_stats["late_cuts"] += int(getattr(plan, "is_late_cut", False))
+                    replay_stats["live_cuts"] += int(str(getattr(plan, "cohort", "")).startswith("live"))
                     replay_stats["cut_step_sum"] += int(plan.cut_step)
 
         full_episode = bool(getattr(args, "full_episode_bptt", False))
@@ -2571,6 +2578,9 @@ class PersistentStateSelfplay:
                         ),
                         "late_cut_rate": (
                             replay_stats["late_cuts"] / max(1, replay_stats["episodes"])
+                        ),
+                        "live_cut_rate": (
+                            replay_stats["live_cuts"] / max(1, replay_stats["episodes"])
                         ),
                         "prefix_legal_rate": (
                             replay_stats["prefix_legal_plays"] / max(1, replay_stats["prefix_plays"])

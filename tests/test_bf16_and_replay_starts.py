@@ -268,6 +268,48 @@ def test_replay_start_pool_late_game_weighted_sampling(tmp_path):
     assert max(pl.cut_step for pl in plans) <= 470  # T=500 - min_tail_steps=30
 
 
+def test_replay_start_pool_multi_dataset_and_live_loss_priority(tmp_path):
+    """Verify comma-separated multi-dataset loading and live_loss ('真机错题本') seat/cohort priority."""
+    ds_planb = tmp_path / "plan_b"
+    ds_live = tmp_path / "live_starts"
+    schema = _make_synthetic_bc_snapshot(ds_planb, num_train_sparky=2, num_train_general=2)
+    _make_synthetic_bc_snapshot(ds_live, num_train_sparky=2, num_train_general=1)
+
+    # Relabel ds_live cohorts to live_loss (own_seat=1) and live_win
+    man_p = ds_live / "dataset.manifest.json"
+    man = json.loads(man_p.read_text())
+    man["shards"][0]["cohort"] = "live_loss"
+    man["shards"][0]["selected_seats"] = [1]
+    man["shards"][1]["cohort"] = "live_loss"
+    man["shards"][1]["selected_seats"] = [1]
+    man["shards"][2]["cohort"] = "live_win"
+    man["shards"][2]["selected_seats"] = [0, 1]
+    man_p.write_text(json.dumps(man))
+
+    pool = ReplayStartPool(
+        f"{ds_planb},{ds_live}",
+        schema=schema,
+        min_steps=35,
+        max_steps=95,
+        min_tail_steps=20,
+        live_prob=0.40,
+        train_only=True,
+    )
+    s = pool.summary()
+    assert s["episodes"] == 7
+    assert s["live_episodes"] == 3
+    assert s["cohorts"]["live_loss"] == 2 and s["cohorts"]["live_win"] == 1
+
+    rng = np.random.default_rng(7)
+    plans = [pool.sample(rng) for _ in range(300)]
+    live_plans = [p for p in plans if p.cohort.startswith("live_")]
+    loss_plans = [p for p in live_plans if p.cohort == "live_loss"]
+    assert 0.30 <= len(live_plans) / len(plans) <= 0.50
+    assert len(loss_plans) / max(1, len(live_plans)) >= 0.65
+    # 90% of live_loss plans should assign learner to losing seat=1
+    assert sum(1 for p in loss_plans if p.learner_seat == 1) / max(1, len(loss_plans)) >= 0.82
+
+
 def test_crforge_set_hand_order_exact_opening():
     tdir = Path.home() / ".crforge/tables/16.635.3"
     if not tdir.is_dir():

@@ -1730,6 +1730,7 @@ def main() -> None:
     parser.add_argument('--replay-start-sparky-prob', type=float, default=0.60)
     parser.add_argument('--replay-start-late-prob', type=float, default=0.55)
     parser.add_argument('--replay-start-late-min-steps', type=int, default=260)
+    parser.add_argument('--replay-start-live-prob', type=float, default=0.35)
     args = parser.parse_args()
     if (args.critic_fp16_resume_scale_cap is not None and
             not (np.isfinite(args.critic_fp16_resume_scale_cap) and args.critic_fp16_resume_scale_cap>=1)):
