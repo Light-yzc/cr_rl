@@ -135,6 +135,33 @@ decks:
   - ElectroSpirit
   - Skeletons
   - Log
+  meta_logbait_void_princess_icespirit_ev1:
+  - GoblinBarrel
+  - Princess
+  - IceSpirits
+  - Knight
+  - InfernoTower
+  - DarkMagic
+  - Log
+  - GoblinGang
+  meta_spirit_empress_giant_beatdown:
+  - MergeMaiden
+  - Giant
+  - Wizard
+  - MiniPekka
+  - DarkPrince
+  - Zap
+  - Rage
+  - Bats
+  meta_mirror_bait_rocket_cycle:
+  - Mirror
+  - GoblinBarrel
+  - Princess
+  - DartBarrell
+  - SkeletonArmy
+  - Valkyrie
+  - Log
+  - Rocket
 slots:
   meta_goblin_giant_machine_witch:
   - 1
@@ -271,4 +298,31 @@ slots:
   - 0
   - 0
   - 0
-split: expansion_full_meta_14
+  meta_logbait_void_princess_icespirit_ev1:
+  - 0
+  - 1
+  - 1
+  - 2
+  - 0
+  - 0
+  - 0
+  - 0
+  meta_spirit_empress_giant_beatdown:
+  - 0
+  - 2
+  - 1
+  - 0
+  - 0
+  - 1
+  - 0
+  - 0
+  meta_mirror_bait_rocket_cycle:
+  - 0
+  - 1
+  - 1
+  - 0
+  - 0
+  - 2
+  - 0
+  - 0
+split: expansion_full_meta_18

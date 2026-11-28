@@ -395,6 +395,13 @@ def _build_local_overlay_b64() -> str:
             for fp in base_d.rglob(pat):
                 if "__pycache__" not in fp.parts and fp.is_file():
                     rels.add(fp.relative_to(repo_root).as_posix())
+    # Include patched CrForge simulator JAR and Python vector wrapper (tower troops support)
+    for sim_rel in (
+        ".cache/vendor/crforge/env/build/install/env/lib/env-1.0-SNAPSHOT.jar",
+        ".cache/vendor/crforge/python/crforge_env/vector.py",
+    ):
+        if (repo_root / sim_rel).is_file():
+            rels.add(sim_rel)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -630,6 +637,7 @@ if (PREP / "validation_history.pt").is_file():
 # Shared conserved elixir-trade unit-preservation reward + full-roster meta deck expansion + anti-stall MCTS
 cfg.update(
     expand_decks=str(ROOT / "configs/decks_expansion_full_meta.yaml"),
+    tower_troop_mixture="King_PrincessTowers:0.55,King_KnifeTowers:0.15,King_CannonTowers:0.15,King_ChefTowers:0.15",
     validation_pairs=24,
     trainer_max_restarts=20,
     army_reward_mode="elixir_potential",

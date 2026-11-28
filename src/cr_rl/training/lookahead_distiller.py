@@ -582,7 +582,10 @@ class LookaheadDistiller:
             d_pair[seat] = int(sp["own_deck_idx"])
             d0, d1 = decks[d_pair[0]], decks[d_pair[1]]
             s0, s1 = forms[d_pair[0]], forms[d_pair[1]]
-            play_env.vector.reset_env(g_idx, int(sp["seed"]), d0, d1, s0, s1)
+            if sp.get("towers") is not None:
+                play_env.vector.reset_env(g_idx, int(sp["seed"]), d0, d1, s0, s1, towers=sp["towers"])
+            else:
+                play_env.vector.reset_env(g_idx, int(sp["seed"]), d0, d1, s0, s1)
             st = LookaheadPolicyStream(
                 actor,
                 adapter,
@@ -950,6 +953,7 @@ class LookaheadDistiller:
         include_placement: bool = True,
         include_last_temporal: bool = True,
         temporal_blocks: int | None = None,
+        tower_troop_mixture=None,
     ) -> dict:
         if not probes or not any(np.any(ep["actor_keep"]) for ep in probes):
             return dict(ran=False, reason="no_ppo_choice_probes")
@@ -1034,6 +1038,13 @@ class LookaheadDistiller:
             )
             opp_idx = int(self.rng.choice(n_decks, p=opp_probs))
             opp_temp = 0.50 if ((self.games_played + g_idx) % 2 == 1) else 0.0
+            towers_pair = None
+            if tower_troop_mixture is not None:
+                t_names, t_probs = tower_troop_mixture
+                towers_pair = (
+                    str(self.rng.choice(t_names, p=t_probs)),
+                    str(self.rng.choice(t_names, p=t_probs)),
+                )
             all_specs.append(
                 dict(
                     seed=seed,
@@ -1043,6 +1054,7 @@ class LookaheadDistiller:
                     seat=seat,
                     own_deck_idx=own_idx,
                     opp_deck_idx=opp_idx,
+                    towers=towers_pair,
                 )
             )
 

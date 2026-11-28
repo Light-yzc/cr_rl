@@ -1704,6 +1704,12 @@ def main() -> None:
         default=True,
         help='Unfreeze spatial placement head during lookahead distillation (disable to lock tile precision)',
     )
+    parser.add_argument(
+        '--tower-troop-mixture',
+        type=str,
+        default=None,
+        help='Optional weighted tower spawn group mixture, e.g. King_PrincessTowers:0.55,King_KnifeTowers:0.15,King_CannonTowers:0.15,King_ChefTowers:0.15',
+    )
     args = parser.parse_args()
     if (args.critic_fp16_resume_scale_cap is not None and
             not (np.isfinite(args.critic_fp16_resume_scale_cap) and args.critic_fp16_resume_scale_cap>=1)):

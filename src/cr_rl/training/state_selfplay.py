@@ -277,6 +277,33 @@ def _league_to_tuples(league: dict, source: Any = "") -> tuple[dict, list[str], 
     return league, names, cards, slots
 
 
+def _parse_tower_troop_mixture(spec: str | None) -> tuple[list[str], np.ndarray] | None:
+    """Parse weighted tower spawn groups like 'King_PrincessTowers:0.55,King_KnifeTowers:0.15,...'."""
+    if not spec or not str(spec).strip():
+        return None
+    names: list[str] = []
+    weights: list[float] = []
+    for raw in str(spec).split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        if ":" in item:
+            name, w_str = item.split(":", 1)
+            w = float(w_str.strip())
+        else:
+            name, w = item, 1.0
+        name = name.strip()
+        if not name or not np.isfinite(w) or w <= 0:
+            raise ValueError(f"Invalid tower-troop-mixture item: {item!r}")
+        names.append(name)
+        weights.append(w)
+    if not names:
+        return None
+    probs = np.asarray(weights, dtype=np.float64)
+    probs = probs / probs.sum()
+    return names, probs
+
+
 def _merge_expansion_decks(base_league: dict, expand_path: Path, tables_dir: Path) -> dict:
     """Append new deck families (and form variants when `family_balanced`) without altering prior decks."""
     from cr_rl.client.schema_v4 import SPELL_TABLES, load_table_rows
@@ -1048,6 +1075,9 @@ class PersistentStateSelfplay:
             base_league = _merge_expansion_decks(base_league, Path(expand_path), self.env.paths.tables)
         self.league, self.deck_names, self.decks, self.forms = _league_to_tuples(base_league, deck_path)
         self.deck_probabilities = deck_probabilities(self.league, self.deck_names)
+        self.tower_troop_mixture = _parse_tower_troop_mixture(
+            getattr(args, "tower_troop_mixture", None)
+        )
         focal = [x.strip() for x in (getattr(args, "focal_decks", "") or "").split(",") if x.strip()]
         missing = set(focal) - set(self.deck_names)
         if missing:
@@ -1431,9 +1461,20 @@ class PersistentStateSelfplay:
             else:
                 d1 = focal_idx
         self._refresh_historical_cohort()
-        self.env.vector.reset_env(
-            env_idx, seed, self.decks[d0], self.decks[d1], self.forms[d0], self.forms[d1]
-        )
+        towers_arg = None
+        if getattr(self, "tower_troop_mixture", None) is not None:
+            t_names, t_probs = self.tower_troop_mixture
+            t0 = str(self.rng.choice(t_names, p=t_probs))
+            t1 = str(self.rng.choice(t_names, p=t_probs))
+            towers_arg = (t0, t1)
+        if towers_arg is not None:
+            self.env.vector.reset_env(
+                env_idx, seed, self.decks[d0], self.decks[d1], self.forms[d0], self.forms[d1], towers=towers_arg
+            )
+        else:
+            self.env.vector.reset_env(
+                env_idx, seed, self.decks[d0], self.decks[d1], self.forms[d0], self.forms[d1]
+            )
         own_name = self.deck_names[d0 if learner_seat == 0 else d1]
         opp_name = self.deck_names[d1 if learner_seat == 0 else d0]
         other_active = self._pinned_opponent_keys(exclude_env=env_idx)
@@ -2852,6 +2893,7 @@ class PersistentStateSelfplay:
                 if getattr(self, 'focal_deck_indices', None) and getattr(self.args, 'focal_deck_prob', 0.0) > 0
                 else None
             ),
+            tower_troop_mixture=getattr(self, 'tower_troop_mixture', None),
         )
         if result.get('memory_invalidated'):
             for name, param in self.actor.named_parameters():

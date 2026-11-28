@@ -120,6 +120,8 @@ def ppo_command(root, config, *, out=None, resume=None):
         command += ['--focal-decks', str(config['focal_decks']), '--focal-deck-prob', str(config.get('focal_deck_prob', 1.0))]
     if config.get('expand_decks') and '--expand-decks' not in command:
         command += ['--expand-decks', str(config['expand_decks'])]
+    if config.get('tower_troop_mixture') and '--tower-troop-mixture' not in command:
+        command += ['--tower-troop-mixture', str(config['tower_troop_mixture'])]
     if config.get('validation_decks') and '--validation-decks' not in command:
         command += ['--validation-decks', str(config['validation_decks'])]
     if not ppo_only and config.get('awbc',True):
