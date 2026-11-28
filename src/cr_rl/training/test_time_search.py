@@ -1076,7 +1076,7 @@ def select_macro_candidates(
         if act not in candidates:
             candidates.append(act)
 
-    # Pass 1.5: add multi-step BANK_FOR_SLOT only for genuinely unaffordable >=5-cost cards (never HOLD_TO_FULL on playable hands!)
+    # Pass 1.5: add multi-step BANK_FOR_SLOT (unaffordable >=5-cost) and calm-board HOLD_TO_FULL macros
     if include_bank_macros and len(candidates) < max_candidates:
         bank_slots = _unaffordable_bank_slots(
             raw_obs,
@@ -1089,6 +1089,18 @@ def select_macro_candidates(
             if len(candidates) >= max_candidates:
                 break
             macro_act = encode_bank_candidate(slot)
+            if macro_act not in candidates:
+                candidates.append(macro_act)
+        hold_slots = _hold_to_full_slots(
+            raw_obs,
+            legal,
+            schema,
+            min_card_cost=bank_min_card_cost,
+        )
+        for slot in hold_slots[:2]:
+            if len(candidates) >= max_candidates:
+                break
+            macro_act = encode_hold_full_candidate(slot)
             if macro_act not in candidates:
                 candidates.append(macro_act)
 

@@ -35,6 +35,8 @@ SEED_SOURCE_RUN_NAME = "longrun_sparky_u1740_deepmcts"
 
 OVERLAY_SYNC_RELPATHS: tuple[str, ...] = (
     "src/cr_rl/client/action_selection.py",
+    "src/cr_rl/training/ppo.py",
+    "src/cr_rl/training/expert_bc_plan_b.py",
     "src/cr_rl/training/test_time_search.py",
     "src/cr_rl/training/lookahead_distiller.py",
     "src/cr_rl/training/colab_pipeline.py",
@@ -660,7 +662,7 @@ cfg.update(
     reserve_to_wait=True,
     focal_deck_prob=0.50,
     anchor_kl_coef=0.004,
-    card_entropy_coef=0.0005,
+    card_entropy_coef=0.0003,
     tile_entropy_coef=0.0002,
     lookahead_distill=True,
     lookahead_distill_placement=True,

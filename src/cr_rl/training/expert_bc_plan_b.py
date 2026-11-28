@@ -30,9 +30,14 @@ def frame_weights(episode, schema, sparky_id):
     scale = int(schema.scales['elixir_scale'])
     if scale <= 0:
         raise ValueError('Plan B requires a positive elixir scale')
-    zone = ((hand == sparky_id).any(axis=-1) & (elixir >= 0) & (reserved >= 0)
+    has_heavy = (hand == sparky_id).any(axis=-1)
+    if 'hand_cost' in schema.header:
+        hand_costs = raw[:, schema.header['hand_cost']].astype(np.int64)
+        cost_thresh = 6 * scale if np.any(hand_costs > 20) else 6
+        has_heavy = has_heavy | (hand_costs >= cost_thresh).any(axis=-1)
+    zone = (has_heavy & (elixir >= 0) & (reserved >= 0)
             & (10 * available >= 48 * scale) & (available < 6 * scale))
-    weights = np.where(actions > 0, 1., np.where(zone, .5, .06))
+    weights = np.where(actions > 0, 1., np.where(zone, .6, .30))
     deploy_rows = np.flatnonzero((actions > 0) & (actions < PLACEMENT_END))
     deploy_slots = (actions[deploy_rows] - 1) // TILE_COUNT
     weights[deploy_rows[hand[deploy_rows, deploy_slots] == sparky_id]] = 1.5

@@ -382,9 +382,9 @@ def test_hold_to_full_pump_at_6_elixir_and_urgent_balloon_wizard_bank():
     cands_quiet = select_macro_candidates(
         logp, legal, raw, schema, max_candidates=7, include_bank_macros=True, rage_card_ids=(99,)
     )
-    #HOLD_TO_FULL is intentionally disabled on playable hands so MCTS never teaches stalling 6->9.4 elixir!
-    assert encode_hold_full_candidate(1) not in cands_quiet
-    assert encode_hold_full_candidate(2) not in cands_quiet
+    # Calm board at 6.13 elixir MUST offer HOLD_TO_FULL for >=5-cost cores (ZapMachine/Pump) alongside immediate plays!
+    assert encode_hold_full_candidate(1) in cands_quiet
+    assert encode_hold_full_candidate(2) in cands_quiet
     assert (1 + 1 * 576 + 18) in cands_quiet and (1 + 2 * 576 + 10) in cands_quiet
     assert decode_hold_full_candidate(encode_hold_full_candidate(2)) == 2
     assert decode_bank_candidate(encode_hold_full_candidate(2)) is None

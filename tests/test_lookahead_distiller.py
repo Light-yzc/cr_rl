@@ -43,25 +43,26 @@ def test_lookahead_frame_weights_and_pipeline_flags(tmp_path: Path):
     overridden = np.array([False, False, False, False, True, True], dtype=bool)
 
     w = lookahead_frame_weights(actions, keep, searched, overridden)
-    np.testing.assert_allclose(w, np.array([0.0, 0.45, 0.12, 0.60, 0.80, 2.60], dtype=np.float32))
+    np.testing.assert_allclose(w, np.array([0.0, 0.45, 0.32, 0.50, 2.10, 1.85], dtype=np.float32))
 
     bank_mask = np.array([False, False, True, False, True, False], dtype=bool)
     w_bank = lookahead_frame_weights(actions, keep, searched, overridden, override_boost=1.5, bank_wait_mask=bank_mask)
-    np.testing.assert_allclose(w_bank, np.array([0.0, 0.45, 1.125, 0.60, 1.125, 3.90], dtype=np.float32))
+    np.testing.assert_allclose(w_bank, np.array([0.0, 0.45, 3.15, 0.50, 3.15, 2.775], dtype=np.float32))
 
     adv_mask = np.array([False, False, False, False, True, True], dtype=bool)
     w_adv_only = lookahead_frame_weights(
         actions, keep, searched, overridden, override_boost=1.5, adverse_mask=adv_mask, override_only=True
     )
-    np.testing.assert_allclose(w_adv_only, np.array([0.0, 0.0, 0.0, 0.0, 1.20 * 1.6, 3.90 * 1.6], dtype=np.float32))
+    np.testing.assert_allclose(w_adv_only, np.array([0.0, 0.0, 0.0, 0.0, 3.15 * 1.6, 2.775 * 1.6], dtype=np.float32))
 
     gains = np.array([0.0, 0.0, 0.0, 0.0, 0.05, 0.10], dtype=np.float32)
     w_pure = lookahead_frame_weights(
         actions, keep, searched, overridden, override_boost=1.5, pure_override=True, score_gains=gains
     )
     assert w_pure[1] == 0.0  # Unsearched non-override play gets strictly ZERO weight!
-    np.testing.assert_allclose(w_pure[2:4], np.array([0.10, 0.55], dtype=np.float32))
-    assert w_pure[5] > 3.90 * 1.7
+    np.testing.assert_allclose(w_pure[2:4], np.array([0.30, 0.45], dtype=np.float32))
+    assert w_pure[4] > 3.15 * 1.35
+    assert w_pure[5] > 2.775 * 1.7
 
     # Verify colab_pipeline ppo_command & conserved elixir reward migration integration
     (tmp_path / "prepared/input").mkdir(parents=True)

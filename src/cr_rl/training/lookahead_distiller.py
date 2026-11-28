@@ -152,24 +152,24 @@ def lookahead_frame_weights(
     if override_only:
         w = np.zeros(len(acts), dtype=np.float64)
     elif pure_override:
-        # Keep passive WAIT weight small so distillation actively lowers chronic stalling!
-        w = np.where(acts == 0, 0.08, 0.0)
-        w = np.where(searched & ~overridden & (acts > 0), 0.55, w)
-        w = np.where(searched & ~overridden & (acts == 0), 0.10, w)
+        # Balanced WAIT baseline so distillation preserves elixir banking & planning
+        w = np.where(acts == 0, 0.28, 0.0)
+        w = np.where(searched & ~overridden & (acts > 0), 0.45, w)
+        w = np.where(searched & ~overridden & (acts == 0), 0.30, w)
     else:
         # Balanced non-override baseline
-        w = np.where(acts > 0, 0.45, 0.10)
-        w = np.where(searched & ~overridden & (acts > 0), 0.60, w)
-        w = np.where(searched & ~overridden & (acts == 0), 0.12, w)
+        w = np.where(acts > 0, 0.45, 0.28)
+        w = np.where(searched & ~overridden & (acts > 0), 0.50, w)
+        w = np.where(searched & ~overridden & (acts == 0), 0.32, w)
 
-    w = np.where(overridden & (acts == 0), 0.80 * boost, w)
+    w = np.where(overridden & (acts == 0), 2.10 * boost, w)
     if bank_wait_mask is not None:
         bank_w = np.asarray(bank_wait_mask, dtype=bool)
         if override_only:
-            w = np.where(bank_w & overridden & (acts == 0), 0.75 * boost, w)
+            w = np.where(bank_w & overridden & (acts == 0), 2.10 * boost, w)
         else:
-            w = np.where(bank_w & (acts == 0), 0.75 * boost, w)
-    w = np.where(overridden & (acts > 0), 2.60 * boost, w)
+            w = np.where(bank_w & (acts == 0), 2.10 * boost, w)
+    w = np.where(overridden & (acts > 0), 1.85 * boost, w)
     if tactical_boost_mask is not None:
         tac_b = np.asarray(tactical_boost_mask, dtype=bool)
         w = np.where(overridden & tac_b, w * 1.65, w)

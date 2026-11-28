@@ -25,7 +25,19 @@ def test_frame_weights_use_actual_slot_and_reserved_elixir():
     ep['raw_obs'][3, 0] = 1
     ep['raw_obs'][8, 5] = -1
     np.testing.assert_allclose(plan.frame_weights(ep, SCHEMA, 0),
-                               [.5, .06, .06, .06, 1.5, 1., 1., 0., .06])
+                               [.6, .30, .30, .30, 1.5, 1., 1., 0., .30])
+
+    # Also verify >=6-cost non-Sparky cards (e.g. Elixir Collector) receive banking-zone WAIT weight when hand_cost is present
+    schema_with_cost = SimpleNamespace(
+        header={'hand_card': (0, 1, 2, 3), 'elixir': (4,), 'elixir_reserved': (5,), 'hand_cost': (6, 7, 8, 9)},
+        scales={'elixir_scale': 10000},
+    )
+    ep_heavy = dict(
+        raw_obs=np.array([[1, 2, 3, 4, 52000, 0, 6, 3, 4, 2], [1, 2, 3, 4, 52000, 0, 4, 3, 4, 2]]),
+        actions=np.array([0, 0]),
+        actor_keep=np.array([True, True]),
+    )
+    np.testing.assert_allclose(plan.frame_weights(ep_heavy, schema_with_cost, 0), [.6, .30])
 
 
 class ToyActor(torch.nn.Module):

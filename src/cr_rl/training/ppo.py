@@ -6,21 +6,41 @@ import torch
 
 
 def factorized_entropy(log_probs):
-    """Card entropy and conditional tile entropy without a card-mass gradient.
+    """Card entropy and conditional tile entropy without a play-mass bias.
 
-    The tile term has the joint entropy's numerical weighting, but its mixture
-    weights are detached: spreading placements must not directly reward playing.
-    Shared encoder gradients still train the placement representation.
+    Both conditional mixture weights are detached while preserving the exact
+    joint entropy sum `card_entropy + tile_entropy`:
+    - Conditional card-choice entropy H(card | PLAY) is weighted by
+      p(PLAY).detach() so having 4 legal cards vs 1 WAIT slot does not bias
+      p(WAIT) down toward 20%.
+    - Conditional tile entropy H(tile | slot) is weighted by p(slot).detach()
+      so spreading placements does not directly reward playing.
     """
     if log_probs.shape[-1] != 2307:
         raise ValueError("Factorized entropy requires the 2307-action codec")
     joint = torch.log_softmax(log_probs.float(), dim=-1)
     tiles = joint[..., 1:2305].reshape(*joint.shape[:-1], 4, 576)
     slot = tiles.logsumexp(-1)
-    card = torch.cat((joint[..., :1], slot, joint[..., 2305:2307]), -1)
-    card_entropy = -(card.exp() * card).sum(-1)
-    conditional = tiles - slot[..., None]
-    tile_entropy = -(conditional.exp() * conditional).sum(-1)
+
+    wait_lp = joint[..., :1]
+    play_lps = torch.cat((slot, joint[..., 2305:2307]), -1)
+    play_lp = play_lps.logsumexp(-1, keepdim=True)
+    binary = torch.cat((wait_lp, play_lp), -1)
+    binary_p = binary.exp()
+    safe_binary = torch.where(binary > -1e30, binary, torch.zeros_like(binary))
+    wait_entropy = -(binary_p * safe_binary).sum(-1)
+
+    play_p = play_lp.exp().squeeze(-1)
+    safe_play_lp = torch.where(play_lp > -1e30, play_lp, torch.zeros_like(play_lp))
+    cond_play_lp = torch.where(play_lps > -1e30, play_lps - safe_play_lp, torch.zeros_like(play_lps))
+    cond_play_p = torch.where(play_lps > -1e30, cond_play_lp.exp(), torch.zeros_like(play_lps))
+    cond_play_entropy = -(cond_play_p * cond_play_lp).sum(-1)
+    card_entropy = wait_entropy + play_p.detach() * cond_play_entropy
+
+    safe_slot = torch.where(slot > -1e30, slot, torch.zeros_like(slot))
+    conditional = torch.where(tiles > -1e30, tiles - safe_slot[..., None], torch.zeros_like(tiles))
+    cond_tile_p = torch.where(tiles > -1e30, conditional.exp(), torch.zeros_like(tiles))
+    tile_entropy = -(cond_tile_p * conditional).sum(-1)
     return card_entropy, (slot.exp().detach() * tile_entropy).sum(-1)
 
 
